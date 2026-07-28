@@ -198,19 +198,25 @@ jobs:
               '| --- | --- |',
               ...rows.map(([gate, outcome]) => `| ${gate} | **${outcome}** |`)
             ];
-            function appendSanitized(title, path, filter) {
-              if (!fs.existsSync(path)) return;
-              const lines = fs.readFileSync(path, 'utf8').split('\n').filter(filter).slice(0, 40);
-              bodyLines.push('', `### ${title}`, '', '```text', lines.join('\n') || 'No matching diagnostic line captured.', '```');
+            function appendBlock(title, lines) {
+              bodyLines.push('', `### ${title}`, '', '```text', (lines && lines.length ? lines.join('\n') : 'No matching diagnostic line captured.'), '```');
+            }
+            function readLines(path) {
+              if (!fs.existsSync(path)) return [];
+              return fs.readFileSync(path, 'utf8').split('\n');
             }
             if ('${{ steps.lint.outcome }}' === 'failure') {
-              appendSanitized('Lint diagnostics', '/tmp/lint.log', (line) => /error|✖|problems?/.test(line));
+              const lines = readLines('/tmp/lint.log').filter((line) => /error|✖|problems?|\.ts:/.test(line)).slice(0, 40);
+              appendBlock('Lint diagnostics', lines);
             }
             if ('${{ steps.typecheck.outcome }}' === 'failure') {
-              appendSanitized('TypeScript diagnostics', '/tmp/typecheck.log', (line) => /error TS\d+:/.test(line));
+              const lines = readLines('/tmp/typecheck.log').filter((line) => /error TS\d+:/.test(line)).slice(0, 40);
+              appendBlock('TypeScript diagnostics', lines);
             }
             if ('${{ steps.tests.outcome }}' === 'failure') {
-              appendSanitized('Test failures', '/tmp/tests.log', (line) => /FAIL |AssertionError|Error:|× |x /.test(line));
+              const all = readLines('/tmp/tests.log');
+              const matched = all.filter((line) => /FAIL |AssertionError|Error:|× |✓ |Test Files|Tests /.test(line)).slice(0, 60);
+              appendBlock('Test failures', matched.length ? matched : all.slice(-60));
             }
             bodyLines.push('', 'Only sanitized compiler/test diagnostics are copied; no runtime secrets.');
             bodyLines.push('', 'Rule: red required gate => no merge, no deploy, no DONE status.');

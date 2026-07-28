@@ -1,4 +1,8 @@
-import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
+import Fastify, {
+  type FastifyBaseLogger,
+  type FastifyReply,
+  type FastifyRequest
+} from 'fastify';
 import { randomUUID } from 'node:crypto';
 import type { Config } from '../config.js';
 import {
@@ -44,12 +48,6 @@ const LOOPBACK_PEERS = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 const CLIENT_IP_PATTERN = /^[0-9a-fA-F:.]{3,45}$/;
 const DEFAULT_MAX_TOKENS = 1024;
 
-/**
- * All public traffic reaches the gateway through cloudflared on loopback, so
- * `req.ip` collapses every caller into one bucket. The forwarded header is
- * trusted only when the operator enabled it and the socket peer is the local
- * tunnel, otherwise a caller could spoof the header and bypass the limiter.
- */
 export function clientIdentity(req: FastifyRequest, config: Config): string {
   if (!config.TRUST_PROXY) return req.ip;
   const peer = req.socket.remoteAddress ?? req.ip;
@@ -66,8 +64,12 @@ function textLength(value: unknown): number {
 }
 
 export function buildApp(deps: AppDeps) {
+  // Fastify consumes the documented base logger contract. Pino's concrete
+  // Logger is structurally compatible, but exposing its wider generic here
+  // makes plugin registration invariant and rejects otherwise valid plugins.
+  const loggerInstance: FastifyBaseLogger = deps.logger;
   const app = Fastify({
-    loggerInstance: deps.logger,
+    loggerInstance,
     requestIdHeader: 'x-request-id',
     genReqId: () => randomUUID(),
     bodyLimit: 1024 * 1024,
@@ -77,19 +79,16 @@ export function buildApp(deps: AppDeps) {
     disableRequestLogging: true
   });
 
-  // Source limiter protects the process before authentication work happens.
   const sourceLimiter = new TokenBucketLimiter(
     deps.config.RATE_LIMIT_RPM * 2,
     deps.config.RATE_LIMIT_BURST * 2,
     deps.config.RATE_LIMIT_MAX_ENTRIES
   );
-  // Credential limiter enforces the per-key contract after authentication.
   const credentialLimiter = new TokenBucketLimiter(
     deps.config.RATE_LIMIT_RPM,
     deps.config.RATE_LIMIT_BURST,
     deps.config.RATE_LIMIT_MAX_ENTRIES
   );
-  // Tenant registries make provisioned limits real instead of advisory.
   const tenantLimiter = new TenantRateLimiterRegistry(
     deps.config.TENANT_LIMIT_MAX_ENTRIES,
     deps.config.RATE_LIMIT_BURST
@@ -98,7 +97,6 @@ export function buildApp(deps: AppDeps) {
 
   const accounts = new AccountStore(deps.db.db, deps.config.API_KEY_PEPPER);
   const billing = new BillingService(deps.db.db);
-
   const execute = createUpstreamExecutor({
     config: deps.config,
     db: deps.db,
@@ -120,9 +118,6 @@ export function buildApp(deps: AppDeps) {
           : null,
       logger: deps.logger
     });
-
-    // Expired login codes, OAuth states, and sessions are security debt, so
-    // they are swept on the same cadence as the rest of the retention work.
     const sweep = setInterval(() => {
       try {
         accounts.maintain();
@@ -142,10 +137,7 @@ export function buildApp(deps: AppDeps) {
     }
     reply.header('x-request-id', req.id).header('cache-control', 'no-store');
     if (route === 'health.live' || route === 'health.ready') return;
-    // Console assets are immutable and fingerprinted; the route handler sets
-    // its own cache policy and must not be forced to no-store.
     if (route === 'console.asset') reply.removeHeader('cache-control');
-
     const decision = sourceLimiter.consume(clientIdentity(req, deps.config));
     if (!decision.allowed) {
       reply.header('retry-after', String(decision.retryAfterSeconds));
@@ -175,11 +167,6 @@ export function buildApp(deps: AppDeps) {
     return record;
   }
 
-  /**
-   * Only tenants that belong to a console account are billed. Tenants created
-   * by the operator CLI keep working exactly as before, so introducing billing
-   * cannot take the existing integration offline.
-   */
   function assertFunded(tenantId: string): void {
     if (!deps.config.CONSOLE_ENABLED) return;
     const account = accounts.findByTenant(tenantId);
@@ -193,7 +180,6 @@ export function buildApp(deps: AppDeps) {
     }
   }
 
-  /** Shared entitlement gate: capability match first, tenant policy second. */
   function resolveModel(
     publicId: string,
     required: readonly Capability[],
@@ -218,8 +204,6 @@ export function buildApp(deps: AppDeps) {
     } catch {
       return sendProtocolError(reply, 'openai', 503, 'not_ready', 'Dependency unavailable', req.id, true);
     }
-    // Readiness drives deploy verification and rollback, so it must observe the
-    // upstream the gateway is useless without.
     try {
       const probe = await deps.upstream.request(
         '/api/monitoring/health',
@@ -242,12 +226,12 @@ export function buildApp(deps: AppDeps) {
       return {
         object: 'list',
         data: listModels()
-          .filter((m) => deps.db.modelEnabled(key.tenantId, m.publicId))
-          .map((m) => ({
-            id: m.publicId,
+          .filter((model) => deps.db.modelEnabled(key.tenantId, model.publicId))
+          .map((model) => ({
+            id: model.publicId,
             object: 'model',
             owned_by: 'leuwongrr',
-            capabilities: [...m.capabilities]
+            capabilities: [...model.capabilities]
           }))
       };
     } catch (error) {
@@ -262,30 +246,19 @@ export function buildApp(deps: AppDeps) {
     } catch (error) {
       return handleError(error, reply, req.id, 'openai');
     }
-
     const parsed = chatRequestSchema.safeParse(req.body);
     if (!parsed.success) {
-      return sendProtocolError(
-        reply,
-        'openai',
-        400,
-        'invalid_request',
-        'Request body failed schema validation',
-        req.id
-      );
+      return sendProtocolError(reply, 'openai', 400, 'invalid_request', 'Request body failed schema validation', req.id);
     }
-
     const required: Capability[] = ['text'];
     if (parsed.data.tools?.length) required.push('tools');
     if (parsed.data.stream) required.push('stream');
-
     let model: ModelPolicy;
     try {
       model = resolveModel(parsed.data.model, required, key.tenantId);
     } catch (error) {
       return handleError(error, reply, req.id, 'openai');
     }
-
     const maxTokens = Math.min(
       parsed.data.max_tokens ?? parsed.data.max_completion_tokens ?? DEFAULT_MAX_TOKENS,
       model.maxOutputTokens
@@ -298,7 +271,6 @@ export function buildApp(deps: AppDeps) {
         model: model.upstreamModel,
         max_tokens: maxTokens,
         max_completion_tokens: undefined,
-        // Usage must be reported for streaming settlement to be real.
         stream_options: parsed.data.stream
           ? { ...parsed.data.stream_options, include_usage: true }
           : parsed.data.stream_options
@@ -318,34 +290,20 @@ export function buildApp(deps: AppDeps) {
     } catch (error) {
       return handleError(error, reply, req.id, 'openai');
     }
-
     const parsed = responsesRequestSchema.safeParse(req.body);
     if (!parsed.success) {
-      return sendProtocolError(
-        reply,
-        'openai',
-        400,
-        'invalid_request',
-        'Request body failed schema validation',
-        req.id
-      );
+      return sendProtocolError(reply, 'openai', 400, 'invalid_request', 'Request body failed schema validation', req.id);
     }
-
     const required: Capability[] = ['text'];
     if (parsed.data.tools?.length) required.push('tools');
     if (parsed.data.stream) required.push('stream');
-
     let model: ModelPolicy;
     try {
       model = resolveModel(parsed.data.model, required, key.tenantId);
     } catch (error) {
       return handleError(error, reply, req.id, 'openai');
     }
-
-    const maxTokens = Math.min(
-      parsed.data.max_output_tokens ?? DEFAULT_MAX_TOKENS,
-      model.maxOutputTokens
-    );
+    const maxTokens = Math.min(parsed.data.max_output_tokens ?? DEFAULT_MAX_TOKENS, model.maxOutputTokens);
     return execute(req, reply, key, {
       dialect: 'openai',
       upstreamPath: '/v1/responses',
@@ -367,30 +325,19 @@ export function buildApp(deps: AppDeps) {
     } catch (error) {
       return handleError(error, reply, req.id, 'anthropic');
     }
-
     const parsed = messagesRequestSchema.safeParse(req.body);
     if (!parsed.success) {
-      return sendProtocolError(
-        reply,
-        'anthropic',
-        400,
-        'invalid_request',
-        'Request body failed schema validation',
-        req.id
-      );
+      return sendProtocolError(reply, 'anthropic', 400, 'invalid_request', 'Request body failed schema validation', req.id);
     }
-
     const required: Capability[] = ['text'];
     if (parsed.data.tools?.length) required.push('tools');
     if (parsed.data.stream) required.push('stream');
-
     let model: ModelPolicy;
     try {
       model = resolveModel(parsed.data.model, required, key.tenantId);
     } catch (error) {
       return handleError(error, reply, req.id, 'anthropic');
     }
-
     const maxTokens = Math.min(parsed.data.max_tokens, model.maxOutputTokens);
     return execute(req, reply, key, {
       dialect: 'anthropic',
@@ -399,8 +346,7 @@ export function buildApp(deps: AppDeps) {
       stream: parsed.data.stream,
       model: parsed.data.model,
       estimateUnits: Math.ceil(
-        maxTokens +
-          (JSON.stringify(parsed.data.messages).length + textLength(parsed.data.system)) / 4
+        maxTokens + (JSON.stringify(parsed.data.messages).length + textLength(parsed.data.system)) / 4
       ),
       auditEvent: 'llm.messages.request',
       auditStreamEvent: 'llm.messages.stream.completed'
@@ -414,28 +360,16 @@ export function buildApp(deps: AppDeps) {
     } catch (error) {
       return handleError(error, reply, req.id, 'anthropic');
     }
-
     const parsed = countTokensRequestSchema.safeParse(req.body);
     if (!parsed.success) {
-      return sendProtocolError(
-        reply,
-        'anthropic',
-        400,
-        'invalid_request',
-        'Request body failed schema validation',
-        req.id
-      );
+      return sendProtocolError(reply, 'anthropic', 400, 'invalid_request', 'Request body failed schema validation', req.id);
     }
-
     let model: ModelPolicy;
     try {
       model = resolveModel(parsed.data.model, ['text'], key.tenantId);
     } catch (error) {
       return handleError(error, reply, req.id, 'anthropic');
     }
-
-    // Counting is cheap but still upstream work, so it stays inside the same
-    // budget, tenant concurrency, and audit envelope.
     return execute(req, reply, key, {
       dialect: 'anthropic',
       upstreamPath: '/v1/messages/count_tokens',
@@ -467,15 +401,7 @@ function handleError(
   }
   if (error instanceof OverloadError) {
     reply.header('retry-after', '1');
-    return sendProtocolError(
-      reply,
-      dialect,
-      503,
-      'overloaded',
-      'Concurrency limit reached',
-      traceId,
-      true
-    );
+    return sendProtocolError(reply, dialect, 503, 'overloaded', 'Concurrency limit reached', traceId, true);
   }
   return sendProtocolError(
     reply,

@@ -50,14 +50,22 @@ The VPS receives only the artifact and checksum. Do not copy the repository, `.g
 
 ## Activation
 
-On the VPS, invoke the deploy script already present in the active release:
+First syntax-check the deploy entrypoint in the active release:
+
+```bash
+sudo bash -n /opt/leuwongrr-gateway/current/scripts/deploy.sh
+```
+
+When that succeeds, use the normal path:
 
 ```bash
 sudo bash /opt/leuwongrr-gateway/current/scripts/deploy.sh \
   <full-git-sha> /tmp/<full-git-sha>.tar.gz
 ```
 
-Never retry a failed deployment with the same SHA after an immutable release directory was created. Resolve the failure in source, create a new commit, rerun the workstation gate, and deploy the new SHA.
+If the active entrypoint itself fails syntax validation, do not edit it on the host and do not retry an already-attempted SHA. Create and authorize a new merged SHA, then follow `docs/runbooks/artifact-deploy-bootstrap.md` to verify and execute the deploy entrypoint contained in that new immutable artifact.
+
+Never retry a failed deployment with the same SHA after an invocation fails or an immutable release directory is created. Resolve the failure in source, create a new commit, rerun the workstation gate, and deploy the new SHA.
 
 ## Required evidence
 

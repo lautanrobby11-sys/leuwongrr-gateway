@@ -38,6 +38,8 @@ export const testConfig: Config = {
   READY_UPSTREAM_TIMEOUT_MS: 2000,
   TENANT_MAX_CONCURRENT: 2,
   TENANT_LIMIT_MAX_ENTRIES: 256,
+  /** ADR-011: observability is opt-in, so the default fixture keeps it shut. */
+  METRICS_ENABLED: false,
   CONSOLE_ENABLED: false,
   PUBLIC_BASE_URL: 'http://127.0.0.1:2080',
   WEB_DIST_PATH: './dist/public',

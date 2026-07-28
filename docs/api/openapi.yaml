@@ -1,20 +1,411 @@
 openapi: 3.1.0
-info: { title: LeuwongRR LLM Gateway, version: 0.1.0 }
-servers: [{ url: https://api.leuwongrr.cloud }]
+info:
+  title: LeuwongRR LLM Gateway
+  version: 1.0.0
+  description: >-
+    Product surface in front of OmniRoute. Every path below is exact-matched
+    against the route allowlist in src/policy/allowlist.ts; there is no
+    catch-all passthrough, so an undocumented path is refused with 404 before
+    authentication runs. tests/openapi-contract.test.ts fails the build if this
+    document and the allowlist disagree.
+servers:
+  - url: https://api.leuwongrr.cloud
+components:
+  securitySchemes:
+    apiKey:
+      type: http
+      scheme: bearer
+      description: Tenant API key issued by the console.
+    internalReadyToken:
+      type: apiKey
+      in: header
+      name: x-internal-ready-token
+    internalMetricsToken:
+      type: apiKey
+      in: header
+      name: x-internal-metrics-token
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: lwrr_session
+    accessAssertion:
+      type: apiKey
+      in: header
+      name: cf-access-jwt-assertion
 paths:
   /health/live:
     get:
-      responses: { '200': { description: Minimal liveness } }
+      summary: Liveness probe
+      description: Unauthenticated and exempt from rate limiting.
+      responses:
+        '200':
+          description: The process is running.
+  /health/ready:
+    get:
+      summary: Readiness probe
+      description: >-
+        Requires the internal readiness token and checks both the local
+        database and the OmniRoute health surface. Answers 404 without the
+        token so the probe is not discoverable.
+      security:
+        - internalReadyToken: []
+      responses:
+        '200':
+          description: Dependencies are reachable.
+        '404':
+          description: Token absent or incorrect.
+        '503':
+          description: A dependency is unavailable.
+  /metrics:
+    get:
+      summary: Prometheus exposition
+      description: >-
+        Requires METRICS_ENABLED and the internal metrics token. Series carry
+        only the route identifier and a status class, never tenant or key
+        identity. Answers 404 when disabled or unauthenticated.
+      security:
+        - internalMetricsToken: []
+      responses:
+        '200':
+          description: Text exposition, version 0.0.4.
+        '404':
+          description: Disabled, or token absent or incorrect.
   /v1/models:
     get:
-      security: [{ bearerAuth: [] }]
-      responses: { '200': { description: Capability-filtered models }, '401': { description: Invalid API key } }
+      summary: List models the calling tenant is entitled to
+      security:
+        - apiKey: []
+      responses:
+        '200':
+          description: Entitled models only; an unentitled tenant receives an empty list.
+        '401':
+          description: Missing or invalid API key.
+        '403':
+          description: Key lacks the models:read scope.
   /v1/chat/completions:
     post:
-      security: [{ bearerAuth: [] }]
-      parameters:
-        - { name: Idempotency-Key, in: header, required: false, schema: { type: string, minLength: 8, maxLength: 128 } }
-      responses: { '200': { description: Completion or SSE stream }, '400': { description: Invalid request or capability }, '401': { description: Invalid key }, '403': { description: Scope denied }, '402': { description: Budget exhausted }, '503': { description: Overloaded } }
-components:
-  securitySchemes:
-    bearerAuth: { type: http, scheme: bearer }
+      summary: OpenAI chat completions
+      security:
+        - apiKey: []
+      responses:
+        '200':
+          description: Completion, or an SSE stream when stream is true.
+        '400':
+          description: Body failed schema validation.
+        '403':
+          description: Scope, entitlement, or funding refused the request.
+        '429':
+          description: Rate limited.
+  /v1/responses:
+    post:
+      summary: OpenAI responses
+      security:
+        - apiKey: []
+      responses:
+        '200':
+          description: Response, or an SSE stream when stream is true.
+        '400':
+          description: Body failed schema validation.
+        '403':
+          description: Scope, entitlement, or funding refused the request.
+  /v1/messages:
+    post:
+      summary: Anthropic messages
+      security:
+        - apiKey: []
+      responses:
+        '200':
+          description: Message, or an SSE stream when stream is true.
+        '400':
+          description: Body failed schema validation.
+        '404':
+          description: Unknown model, in the Anthropic error envelope.
+  /v1/messages/count_tokens:
+    post:
+      summary: Anthropic token count
+      security:
+        - apiKey: []
+      responses:
+        '200':
+          description: Input token count.
+        '400':
+          description: Body failed schema validation.
+  /admin:
+    get:
+      summary: Admin console page
+      description: Additionally protected by Cloudflare Access at the edge.
+      responses:
+        '200':
+          description: HTML document.
+  /member:
+    get:
+      summary: Member console page
+      responses:
+        '200':
+          description: HTML document.
+  /chat:
+    get:
+      summary: Chat console page
+      responses:
+        '200':
+          description: HTML document.
+  /login:
+    get:
+      summary: Console sign-in page
+      responses:
+        '200':
+          description: HTML document.
+  /console/assets/{file}:
+    get:
+      summary: Console static asset
+      responses:
+        '200':
+          description: Bundled asset.
+        '404':
+          description: No such asset.
+  /console/api/session:
+    get:
+      summary: Current console session
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Session description, or an anonymous result.
+  /console/api/auth/request-code:
+    post:
+      summary: Request a one-time sign-in code
+      description: Requires an allowed Origin.
+      responses:
+        '200':
+          description: Code dispatched through the configured delivery.
+        '403':
+          description: Origin is not allowed.
+        '429':
+          description: Resend interval not yet elapsed.
+  /console/api/auth/verify-code:
+    post:
+      summary: Exchange a one-time code for a session
+      description: Requires an allowed Origin.
+      responses:
+        '200':
+          description: Session cookie issued.
+        '403':
+          description: Origin is not allowed.
+  /console/api/auth/logout:
+    post:
+      summary: End the console session
+      description: Requires an allowed Origin.
+      responses:
+        '200':
+          description: Session cookie cleared.
+        '403':
+          description: Origin is not allowed.
+  /console/api/auth/start/{provider}:
+    get:
+      summary: Begin an OAuth sign-in
+      responses:
+        '302':
+          description: Redirect to the provider.
+  /callbacks/{provider}:
+    get:
+      summary: OAuth provider callback
+      description: >-
+        Arrives cross-site by design and is authenticated by the one-time state
+        value, so it is exempt from origin enforcement.
+      responses:
+        '302':
+          description: Redirect into the console.
+  /callbacks/telegram:
+    post:
+      summary: Telegram login callback
+      description: Authenticated by the bot token signature rather than by origin.
+      responses:
+        '200':
+          description: Callback accepted.
+  /console/api/member/overview:
+    get:
+      summary: Member account overview
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Balance, plan, and status.
+  /console/api/member/usage:
+    get:
+      summary: Member usage history
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Usage aggregated for the calling account only.
+  /console/api/member/keys:
+    get:
+      summary: List the member's API keys
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Key metadata; plaintext is never returned after issue.
+    post:
+      summary: Issue an API key
+      description: Requires an allowed Origin.
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Key issued; plaintext returned exactly once.
+        '403':
+          description: Origin is not allowed.
+  /console/api/member/payments:
+    get:
+      summary: Member payment history
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Payments belonging to the calling account only.
+  /console/api/member/plans:
+    get:
+      summary: Plans available to the member
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Purchasable plans.
+  /console/api/member/keys/revoke:
+    post:
+      summary: Revoke an API key
+      description: Requires an allowed Origin.
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Key revoked.
+        '403':
+          description: Origin is not allowed, or the key belongs to another account.
+  /console/api/member/topup:
+    post:
+      summary: Open a credit top-up invoice
+      description: Requires an allowed Origin.
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Invoice created.
+        '403':
+          description: Origin is not allowed.
+  /console/api/member/subscribe:
+    post:
+      summary: Subscribe to a plan
+      description: Requires an allowed Origin.
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Subscription invoice created.
+        '403':
+          description: Origin is not allowed.
+  /console/api/admin/overview:
+    get:
+      summary: Administrative overview
+      security:
+        - accessAssertion: []
+      responses:
+        '200':
+          description: Workspace totals.
+  /console/api/admin/plans:
+    get:
+      summary: List plans
+      security:
+        - accessAssertion: []
+      responses:
+        '200':
+          description: All plans.
+    post:
+      summary: Create or amend a plan
+      description: Requires an allowed Origin.
+      security:
+        - accessAssertion: []
+      responses:
+        '200':
+          description: Plan written.
+        '403':
+          description: Origin is not allowed, or the Access assertion failed.
+  /console/api/admin/models:
+    get:
+      summary: List model entitlements
+      security:
+        - accessAssertion: []
+      responses:
+        '200':
+          description: Entitlements per tenant.
+    post:
+      summary: Change a model entitlement
+      description: Requires an allowed Origin.
+      security:
+        - accessAssertion: []
+      responses:
+        '200':
+          description: Entitlement written.
+        '403':
+          description: Origin is not allowed, or the Access assertion failed.
+  /console/api/admin/accounts:
+    get:
+      summary: List accounts
+      security:
+        - accessAssertion: []
+      responses:
+        '200':
+          description: Accounts with status and balance.
+  /console/api/admin/payments:
+    get:
+      summary: List payments
+      security:
+        - accessAssertion: []
+      responses:
+        '200':
+          description: Payments across all accounts.
+  /console/api/admin/accounts/limits:
+    post:
+      summary: Set an account's rate and concurrency limits
+      description: Requires an allowed Origin.
+      security:
+        - accessAssertion: []
+      responses:
+        '200':
+          description: Limits written.
+        '403':
+          description: Origin is not allowed, or the Access assertion failed.
+  /console/api/admin/accounts/credit:
+    post:
+      summary: Adjust an account's credit
+      description: Requires an allowed Origin. Recorded in the audit log.
+      security:
+        - accessAssertion: []
+      responses:
+        '200':
+          description: Credit adjusted.
+        '403':
+          description: Origin is not allowed, or the Access assertion failed.
+  /console/api/admin/accounts/status:
+    post:
+      summary: Suspend or reinstate an account
+      description: Requires an allowed Origin. Recorded in the audit log.
+      security:
+        - accessAssertion: []
+      responses:
+        '200':
+          description: Status written.
+        '403':
+          description: Origin is not allowed, or the Access assertion failed.
+  /webhooks/cryptomus:
+    post:
+      summary: Cryptomus payment callback
+      description: >-
+        Authenticated by the Cryptomus request signature. Exempt from origin
+        enforcement because it arrives from the provider, not a browser.
+      responses:
+        '200':
+          description: Callback accepted.
+        '400':
+          description: Signature verification failed.

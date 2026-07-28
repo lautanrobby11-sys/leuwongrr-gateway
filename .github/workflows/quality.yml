@@ -8,7 +8,7 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
@@ -19,14 +19,18 @@ jobs:
       - run: npm run build
       - name: Validate operational scripts
         run: bash -n scripts/*.sh
-      - name: Verify clean generated state
+      - name: Build immutable production artifact
+        run: scripts/build-release.sh "$GITHUB_SHA"
+      - name: Verify artifact checksum
+        run: cd .release && sha256sum -c "$GITHUB_SHA.tar.gz.sha256"
+      - name: Verify tracked tree remains clean
         run: git diff --exit-code
       - uses: actions/upload-artifact@v4
         with:
           name: gateway-${{ github.sha }}
           path: |
-            dist/
-            package.json
+            .release/${{ github.sha }}.tar.gz
+            .release/${{ github.sha }}.tar.gz.sha256
           if-no-files-found: error
   secrets:
     runs-on: ubuntu-24.04

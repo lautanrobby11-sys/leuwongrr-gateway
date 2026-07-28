@@ -7,9 +7,9 @@
 - Baseline CPU/RSS/disk/FD/OmniRoute latency and SSH responsiveness are recorded before choosing final systemd limits.
 
 ## Validate and release
-1. Clean checkout: `git status --short`, `npm install`, `npm run validate`, `npm run build`.
-2. Review diff and secret scan. Build tar from committed SHA only; create SHA-256 sidecar.
-3. `sudo scripts/deploy.sh <40-char-sha> <artifact.tar.gz>`.
+1. Clean checkout: `git status --short`, `npm install`, `npm run validate`.
+2. Review diff and secret scan. Run `scripts/build-release.sh <40-char-sha>` from the exact commit. It emits `.release/<sha>.tar.gz`, checksum, production dependencies, and SPDX SBOM.
+3. Transfer only the artifact and checksum, then run `sudo scripts/deploy.sh <40-char-sha> <artifact.tar.gz>`.
 4. Record SHA, changed canonical files, migration `0001_gateway_core`, validation result, health, resource snapshot, and prior release SHA.
 
 ## Post-deploy negative checks

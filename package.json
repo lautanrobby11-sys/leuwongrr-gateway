@@ -16,7 +16,7 @@
     "check:conventions": "node scripts/check-conventions.mjs",
     "scan:secrets": "node scripts/scan-secrets.mjs",
     "validate": "npm run check:conventions && npm run scan:secrets && npm run lint && npm run typecheck && npm test",
-    "ci:local": "npm run validate && npm run build:all && bash -n scripts/*.sh && bash scripts/build-release.sh $(git rev-parse HEAD)",
+    "ci:local": "npm run validate && npm run build:all && node scripts/ci-shell-gates.mjs",
     "keys": "node dist/cli/keys.js",
     "keys:dev": "tsx src/cli/keys.ts"
   },

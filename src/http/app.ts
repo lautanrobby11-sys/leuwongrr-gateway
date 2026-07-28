@@ -19,13 +19,18 @@ import {
   type Capability,
   type ModelPolicy
 } from '../policy/capabilities.js';
-import { resolveRoute } from '../policy/allowlist.js';
+import { isConsoleRoute, resolveRoute } from '../policy/allowlist.js';
 import { OverloadError } from '../policy/semaphore.js';
 import { TokenBucketLimiter, RateLimitError } from '../policy/rate-limit.js';
 import { TenantConcurrencyRegistry, TenantRateLimiterRegistry } from '../policy/tenant-limits.js';
 import type { GatewayDatabase } from '../persistence/database.js';
 import type { OmniRouteClient } from '../upstream.js';
 import { createUpstreamExecutor } from './pipeline.js';
+import { registerConsole } from './console.js';
+import { AccountStore } from '../accounts/store.js';
+import { AccessVerifier } from '../accounts/access.js';
+import { BillingError, BillingService } from '../billing/service.js';
+import { CryptomusClient } from '../payments/cryptomus.js';
 import type { Logger } from 'pino';
 
 export interface AppDeps {
@@ -91,6 +96,9 @@ export function buildApp(deps: AppDeps) {
   );
   const tenantConcurrency = new TenantConcurrencyRegistry(deps.config.TENANT_LIMIT_MAX_ENTRIES);
 
+  const accounts = new AccountStore(deps.db.db, deps.config.API_KEY_PEPPER);
+  const billing = new BillingService(deps.db.db);
+
   const execute = createUpstreamExecutor({
     config: deps.config,
     db: deps.db,
@@ -98,6 +106,33 @@ export function buildApp(deps: AppDeps) {
     tenantConcurrency,
     onError: handleError
   });
+
+  if (deps.config.CONSOLE_ENABLED) {
+    registerConsole(app, {
+      config: deps.config,
+      db: deps.db,
+      accounts,
+      billing,
+      payments: new CryptomusClient(deps.config),
+      access:
+        deps.config.ACCESS_TEAM_DOMAIN && deps.config.ACCESS_AUD
+          ? new AccessVerifier(deps.config.ACCESS_TEAM_DOMAIN, deps.config.ACCESS_AUD)
+          : null,
+      logger: deps.logger
+    });
+
+    // Expired login codes, OAuth states, and sessions are security debt, so
+    // they are swept on the same cadence as the rest of the retention work.
+    const sweep = setInterval(() => {
+      try {
+        accounts.maintain();
+      } catch (error) {
+        deps.logger.error({ err: error }, 'console_maintenance_failed');
+      }
+    }, deps.config.MAINTENANCE_INTERVAL_MS);
+    sweep.unref();
+    app.addHook('onClose', async () => clearInterval(sweep));
+  }
 
   app.addHook('onRequest', async (req, reply) => {
     const path = req.url.split('?')[0] ?? req.url;
@@ -107,10 +142,18 @@ export function buildApp(deps: AppDeps) {
     }
     reply.header('x-request-id', req.id).header('cache-control', 'no-store');
     if (route === 'health.live' || route === 'health.ready') return;
+    // Console assets are immutable and fingerprinted; the route handler sets
+    // its own cache policy and must not be forced to no-store.
+    if (route === 'console.asset') reply.removeHeader('cache-control');
 
     const decision = sourceLimiter.consume(clientIdentity(req, deps.config));
     if (!decision.allowed) {
       reply.header('retry-after', String(decision.retryAfterSeconds));
+      if (isConsoleRoute(route)) {
+        return reply
+          .code(429)
+          .send({ error: { code: 'rate_limited', message: 'Too many requests', trace_id: req.id } });
+      }
       return sendProtocolError(reply, 'openai', 429, 'rate_limited', 'Too many requests', req.id, true);
     }
   });
@@ -128,7 +171,26 @@ export function buildApp(deps: AppDeps) {
       limits?.rateLimitRpm ?? deps.config.RATE_LIMIT_RPM
     );
     if (!tenantDecision.allowed) throw new RateLimitError(tenantDecision.retryAfterSeconds);
+    assertFunded(record.tenantId);
     return record;
+  }
+
+  /**
+   * Only tenants that belong to a console account are billed. Tenants created
+   * by the operator CLI keep working exactly as before, so introducing billing
+   * cannot take the existing integration offline.
+   */
+  function assertFunded(tenantId: string): void {
+    if (!deps.config.CONSOLE_ENABLED) return;
+    const account = accounts.findByTenant(tenantId);
+    if (!account) return;
+    if (account.status !== 'active') throw new PolicyError('account_suspended', 403);
+    try {
+      billing.assertFunded(account.id, tenantId);
+    } catch (error) {
+      if (error instanceof BillingError) throw new PolicyError(error.code, error.statusCode);
+      throw error;
+    }
   }
 
   /** Shared entitlement gate: capability match first, tenant policy second. */

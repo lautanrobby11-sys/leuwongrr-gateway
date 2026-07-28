@@ -21,8 +21,9 @@ export class GatewayDatabase {
     const hash = hashApiKey(plaintext, this.pepper);
     const row = this.db.prepare('SELECT id,tenant_id,key_hash,prefix,last4,scopes_json,revoked_at FROM api_keys WHERE key_hash=?').get(hash) as Record<string,string|null>|undefined;
     if (!row || !safeHashEqual(hash, String(row.key_hash))) return null;
-    return { id:String(row.id), tenantId:String(row.tenant_id), keyHash:String(row.key_hash), prefix:String(row.prefix), last4:String(row.last4), scopes:new Set(JSON.parse(String(row.scopes_json)) as Scope[]), revokedAt:row.revoked_at };
+    return { id:String(row.id), tenantId:String(row.tenant_id), keyHash:String(row.key_hash), prefix:String(row.prefix), last4:String(row.last4), scopes:new Set(JSON.parse(String(row.scopes_json)) as Scope[]), revokedAt:row.revoked_at??null };
   }
+  modelEnabled(tenantId:string,modelId:string):boolean { return Boolean(this.db.prepare('SELECT 1 FROM model_policies WHERE tenant_id=? AND model_id=? AND enabled=1').get(tenantId,modelId)); }
   reserveBudget(tenantId:string, requestId:string, units:number, dailyLimit:number): string {
     const day = new Date().toISOString().slice(0,10); const id = randomUUID();
     this.db.transaction(() => {

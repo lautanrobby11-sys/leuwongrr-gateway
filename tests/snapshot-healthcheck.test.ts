@@ -4,7 +4,23 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 
-const script = path.resolve('scripts/ping-snapshot-healthcheck.sh');
+/** Convert a native path into the form understood by Git Bash and POSIX Bash. */
+function bashPath(value: string): string {
+  const normalized = value.replaceAll('\\', '/');
+  const drive = /^([A-Za-z]):\/(.*)$/.exec(normalized);
+  return drive ? `/${drive[1]?.toLowerCase()}/${drive[2]}` : normalized;
+}
+
+/** Preserve the inherited search path while using Bash's colon delimiter. */
+function bashPathList(value: string | undefined): string {
+  return (value ?? '')
+    .split(path.delimiter)
+    .filter(Boolean)
+    .map(bashPath)
+    .join(':');
+}
+
+const script = bashPath(path.resolve('scripts/ping-snapshot-healthcheck.sh'));
 
 function withoutHealthcheckUrl(): NodeJS.ProcessEnv {
   const environment = { ...process.env };
@@ -55,8 +71,8 @@ describe('snapshot dead-man notification', () => {
         encoding: 'utf8',
         env: {
           ...process.env,
-          PATH: `${bin}:${process.env.PATH ?? ''}`,
-          CAPTURE_FILE: capture,
+          PATH: `${bashPath(bin)}:${bashPathList(process.env.PATH)}`,
+          CAPTURE_FILE: bashPath(capture),
           SNAPSHOT_HEALTHCHECK_URL: url
         }
       });
@@ -97,8 +113,8 @@ describe('snapshot dead-man notification', () => {
         encoding: 'utf8',
         env: {
           ...process.env,
-          PATH: `${bin}:${process.env.PATH ?? ''}`,
-          COUNTER_FILE: counter,
+          PATH: `${bashPath(bin)}:${bashPathList(process.env.PATH)}`,
+          COUNTER_FILE: bashPath(counter),
           SNAPSHOT_HEALTHCHECK_URL: 'https://monitor.example.invalid/ping-id'
         }
       });

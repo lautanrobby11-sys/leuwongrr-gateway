@@ -16,16 +16,27 @@ command -v curl >/dev/null 2>&1 || {
   exit 1
 }
 
-# The URL is a bearer capability and must never be printed. A dead-man service
-# alerts externally when this success ping does not arrive within its period.
-curl --fail --silent --show-error \
-  --proto '=https' \
-  --tlsv1.2 \
-  --max-redirs 0 \
-  --connect-timeout 5 \
-  --max-time 15 \
-  --retry 2 \
-  --retry-all-errors \
-  "$URL" >/dev/null
+# The URL is a bearer capability and must never be printed. Use an explicit
+# retry loop instead of version-specific curl retry flags so the same bounded
+# behavior works across supported VPS images. Three attempts take at most 48s.
+attempt=1
+while true; do
+  if curl --fail --silent --show-error \
+    --proto '=https' \
+    --tlsv1.2 \
+    --max-redirs 0 \
+    --connect-timeout 5 \
+    --max-time 15 \
+    "$URL" >/dev/null; then
+    break
+  fi
+
+  if (( attempt >= 3 )); then
+    echo 'snapshot healthcheck notification failed after 3 attempts' >&2
+    exit 1
+  fi
+  sleep "$attempt"
+  ((attempt += 1))
+done
 
 echo 'snapshot healthcheck notified'

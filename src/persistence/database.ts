@@ -26,6 +26,14 @@ export interface MaintenanceResult {
   expiredAuditLogs: number;
 }
 
+export interface AuditEvent {
+  tenantId: string | null;
+  actorType: 'api_key' | 'account' | 'admin' | 'system';
+  event: string;
+  traceId: string;
+  metadata?: Record<string, unknown>;
+}
+
 interface ApiKeyRow {
   id: string;
   tenant_id: string;
@@ -54,11 +62,8 @@ export class GatewayDatabase {
     this.db.pragma('foreign_keys = ON');
     this.db.pragma('busy_timeout = 5000');
     this.db.pragma('synchronous = NORMAL');
-    // Negative cache_size is interpreted by SQLite as a KiB ceiling.
     this.db.pragma(`cache_size = -${options.cacheKib ?? 4096}`);
-    // Avoid mapping the database into the process address space on a small host.
     this.db.pragma('mmap_size = 0');
-    // Bound WAL growth so disk and page cache stay predictable.
     this.db.pragma('wal_autocheckpoint = 512');
     this.db.exec(
       'CREATE TABLE IF NOT EXISTS schema_migrations (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL)'
@@ -89,7 +94,6 @@ export class GatewayDatabase {
     if (!row || !safeHashEqual(hash, row.key_hash)) return null;
 
     const nowIso = new Date().toISOString();
-    // An expired credential is indistinguishable from an unknown one.
     if (row.expires_at && row.expires_at <= nowIso) return null;
     this.tenants.touch(row.id, nowIso, row.last_used_at);
 
@@ -103,8 +107,6 @@ export class GatewayDatabase {
       prefix: row.prefix,
       last4: row.last4,
       scopes: new Set(scopes),
-      // A future revocation timestamp is a rotation grace window, not a
-      // revoked key, so the credential stays usable until it elapses.
       revokedAt: row.revoked_at && row.revoked_at <= nowIso ? row.revoked_at : null,
       expiresAt: row.expires_at,
       lastUsedAt: row.last_used_at
@@ -122,8 +124,6 @@ export class GatewayDatabase {
   reserveBudget(tenantId: string, requestId: string, units: number, dailyLimit: number): string {
     const day = new Date().toISOString().slice(0, 10);
     const id = randomUUID();
-    // A tenant-specific ceiling always wins so one tenant cannot consume the
-    // shared default budget of the whole deployment.
     const tenantLimit = this.tenants.limits(tenantId)?.dailyBudgetUnits ?? dailyLimit;
     const effectiveLimit = Math.min(dailyLimit, tenantLimit);
     this.db.transaction(() => {
@@ -158,32 +158,44 @@ export class GatewayDatabase {
       .run(id, tenantId);
   }
 
+  audit(event: AuditEvent): void;
   audit(
     tenantId: string | null,
     event: string,
     traceId: string,
+    metadata?: Record<string, unknown>
+  ): void;
+  audit(
+    input: AuditEvent | string | null,
+    event?: string,
+    traceId?: string,
     metadata: Record<string, unknown> = {}
   ): void {
+    const record: AuditEvent =
+      typeof input === 'object' && input !== null
+        ? input
+        : {
+            tenantId: input,
+            actorType: 'api_key',
+            event: event ?? 'unknown',
+            traceId: traceId ?? 'unknown',
+            metadata
+          };
     this.db
       .prepare(
         'INSERT INTO audit_logs(id,tenant_id,actor_type,event,trace_id,metadata_json,created_at) VALUES(?,?,?,?,?,?,?)'
       )
       .run(
         randomUUID(),
-        tenantId,
-        'api_key',
-        event,
-        traceId,
-        JSON.stringify(metadata),
+        record.tenantId,
+        record.actorType,
+        record.event,
+        record.traceId,
+        JSON.stringify(record.metadata ?? {}),
         new Date().toISOString()
       );
   }
 
-  /**
-   * Removes expired idempotency claims and history older than the retention
-   * window, then truncates the WAL. Unbounded growth is the main long-run
-   * stability risk for a single-node SQLite deployment.
-   */
   maintain(retentionDays: number): MaintenanceResult {
     const now = Date.now();
     const nowIso = new Date(now).toISOString();

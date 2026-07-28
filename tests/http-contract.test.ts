@@ -1,15 +1,54 @@
-import { afterEach,beforeEach,describe,expect,it,vi } from 'vitest';
-import { mkdtempSync,rmSync } from 'node:fs';import { tmpdir } from 'node:os';import { join } from 'node:path';
-import { buildApp } from '../src/http/app.js';import { GatewayDatabase } from '../src/persistence/database.js';import { OmniRouteClient } from '../src/upstream.js';import { createLogger } from '../src/observability.js';import { issueApiKey } from '../src/auth/api-keys.js';import type { Config } from '../src/config.js';
-const config:Config={GATEWAY_HOST:'127.0.0.1',GATEWAY_PORT:2080,OMNIROUTE_URL:'http://127.0.0.1:20128',DATABASE_PATH:'unused',API_KEY_PEPPER:'p'.repeat(32),INTERNAL_READY_TOKEN:'r'.repeat(32),LOG_LEVEL:'silent',UPSTREAM_CONCURRENCY:2,REQUEST_TIMEOUT_MS:1000,DAILY_BUDGET_UNITS:10000};
-let root:string;let db:GatewayDatabase;let token:string;let fetcher:ReturnType<typeof vi.fn>;let app:ReturnType<typeof buildApp>;
-beforeEach(()=>{root=mkdtempSync(join(tmpdir(),'lwrr-http-'));db=new GatewayDatabase(join(root,'gateway.db'),config.API_KEY_PEPPER);const issued=issueApiKey(config.API_KEY_PEPPER);token=issued.plaintext;db.db.prepare('INSERT INTO tenants(id,name,created_at) VALUES(?,?,?)').run('tenant-a','A',new Date().toISOString());db.db.prepare('INSERT INTO api_keys(id,tenant_id,key_hash,prefix,last4,scopes_json,created_at) VALUES(?,?,?,?,?,?,?)').run('key-a','tenant-a',issued.hash,issued.prefix,issued.last4,JSON.stringify(['models:read','chat:write']),new Date().toISOString());db.db.prepare('INSERT INTO model_policies(tenant_id,model_id,enabled) VALUES(?,?,1)').run('tenant-a','lwrr-text');fetcher=vi.fn(async()=>new Response(JSON.stringify({id:'chatcmpl_mock',choices:[]}),{status:200,headers:{'content-type':'application/json'}}));app=buildApp({config,db,upstream:new OmniRouteClient(config.OMNIROUTE_URL,2,1000,fetcher as typeof fetch),logger:createLogger('silent')});});
-afterEach(async()=>{await app.close();db.close();rmSync(root,{recursive:true,force:true});});
+import { afterEach, describe, expect, it } from 'vitest';
+import { createHarness, jsonResponse, testConfig, type Harness } from './support/harness.js';
+
+let harness: Harness|null=null;
+function start(): Harness { harness=createHarness(jsonResponse); return harness; }
+afterEach(async()=>{ if(harness){await harness.cleanup();harness=null;} });
+
 describe('HTTP contract',()=>{
-  it('keeps liveness minimal and readiness hidden',async()=>{expect((await app.inject({method:'GET',url:'/health/live'})).json()).toEqual({status:'ok'});expect((await app.inject({method:'GET',url:'/health/ready'})).statusCode).toBe(404);expect((await app.inject({method:'GET',url:'/health/ready',headers:{'x-internal-ready-token':config.INTERNAL_READY_TOKEN}})).statusCode).toBe(200);});
-  it('rejects non-allowlisted endpoints without upstream contact',async()=>{expect((await app.inject({method:'POST',url:'/v1/files',payload:{}})).statusCode).toBe(404);expect(fetcher).not.toHaveBeenCalled();});
-  it('requires API key and tenant model entitlement',async()=>{expect((await app.inject({method:'GET',url:'/v1/models'})).statusCode).toBe(401);const ok=await app.inject({method:'GET',url:'/v1/models',headers:{authorization:`Bearer ${token}`}});expect(ok.statusCode).toBe(200);expect(ok.json().data).toHaveLength(1);db.db.prepare('UPDATE model_policies SET enabled=0 WHERE tenant_id=?').run('tenant-a');expect((await app.inject({method:'GET',url:'/v1/models',headers:{authorization:`Bearer ${token}`}})).json().data).toHaveLength(0);});
-  it('rejects capability mismatch before upstream cost',async()=>{const res=await app.inject({method:'POST',url:'/v1/chat/completions',headers:{authorization:`Bearer ${token}`},payload:{model:'lwrr-text',messages:[{role:'user',content:'x'}],tools:[{}]}});expect(res.statusCode).toBe(400);expect(fetcher).not.toHaveBeenCalled();});
-  it('forwards once and returns atomic idempotent replay',async()=>{const request={method:'POST' as const,url:'/v1/chat/completions',headers:{authorization:`Bearer ${token}`,'idempotency-key':'request-001'},payload:{model:'lwrr-text',messages:[{role:'user',content:'hello'}]}};const first=await app.inject(request);const second=await app.inject(request);expect(first.statusCode).toBe(200);expect(second.json()).toEqual(first.json());expect(fetcher).toHaveBeenCalledTimes(1);});
-  it('rejects idempotency key reuse with different input',async()=>{const headers={authorization:`Bearer ${token}`,'idempotency-key':'request-002'};await app.inject({method:'POST',url:'/v1/chat/completions',headers,payload:{model:'lwrr-text',messages:[{role:'user',content:'one'}]}});const conflict=await app.inject({method:'POST',url:'/v1/chat/completions',headers,payload:{model:'lwrr-text',messages:[{role:'user',content:'two'}]}});expect(conflict.statusCode).toBe(409);expect(fetcher).toHaveBeenCalledTimes(1);});
+  it('keeps liveness minimal and readiness hidden',async()=>{
+    const { app }=start();
+    expect((await app.inject({method:'GET',url:'/health/live'})).json()).toEqual({status:'ok'});
+    expect((await app.inject({method:'GET',url:'/health/ready'})).statusCode).toBe(404);
+    expect((await app.inject({method:'GET',url:'/health/ready',headers:{'x-internal-ready-token':testConfig.INTERNAL_READY_TOKEN}})).statusCode).toBe(200);
+  });
+  it('rejects endpoints outside the allowlist without contacting upstream',async()=>{
+    const { app, upstreamCalls }=start();
+    expect((await app.inject({method:'POST',url:'/v1/files',payload:{}})).statusCode).toBe(404);
+    expect((await app.inject({method:'GET',url:'/admin'})).statusCode).toBe(404);
+    expect(upstreamCalls()).toBe(0);
+  });
+  it('requires an API key and tenant entitlement',async()=>{
+    const { app, db, token }=start();
+    expect((await app.inject({method:'GET',url:'/v1/models'})).statusCode).toBe(401);
+    const allowed=await app.inject({method:'GET',url:'/v1/models',headers:{authorization:`Bearer ${token}`}});
+    expect(allowed.statusCode).toBe(200);
+    expect(allowed.json().data).toHaveLength(1);
+    db.db.prepare('UPDATE model_policies SET enabled=0 WHERE tenant_id=?').run('tenant-a');
+    const revoked=await app.inject({method:'GET',url:'/v1/models',headers:{authorization:`Bearer ${token}`}});
+    expect(revoked.json().data).toHaveLength(0);
+  });
+  it('rejects capability mismatch before upstream cost',async()=>{
+    const { app, token, upstreamCalls }=start();
+    const response=await app.inject({method:'POST',url:'/v1/chat/completions',headers:{authorization:`Bearer ${token}`},payload:{model:'lwrr-text',messages:[{role:'user',content:'x'}],tools:[{}]}});
+    expect(response.statusCode).toBe(400);
+    expect(upstreamCalls()).toBe(0);
+  });
+  it('replays an idempotent response without a second upstream call',async()=>{
+    const { app, token, upstreamCalls }=start();
+    const request={method:'POST' as const,url:'/v1/chat/completions',headers:{authorization:`Bearer ${token}`,'idempotency-key':'request-001'},payload:{model:'lwrr-text',messages:[{role:'user',content:'hello'}]}};
+    const first=await app.inject(request);
+    const second=await app.inject(request);
+    expect(first.statusCode).toBe(200);
+    expect(second.json()).toEqual(first.json());
+    expect(upstreamCalls()).toBe(1);
+  });
+  it('rejects idempotency key reuse with a different payload',async()=>{
+    const { app, token, upstreamCalls }=start();
+    const headers={authorization:`Bearer ${token}`,'idempotency-key':'request-002'};
+    await app.inject({method:'POST',url:'/v1/chat/completions',headers,payload:{model:'lwrr-text',messages:[{role:'user',content:'one'}]}});
+    const conflict=await app.inject({method:'POST',url:'/v1/chat/completions',headers,payload:{model:'lwrr-text',messages:[{role:'user',content:'two'}]}});
+    expect(conflict.statusCode).toBe(409);
+    expect(upstreamCalls()).toBe(1);
+  });
 });

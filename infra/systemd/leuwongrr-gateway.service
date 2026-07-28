@@ -2,20 +2,23 @@
 Description=LeuwongRR LLM Gateway
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
 User=leuwongrr-gateway
 Group=leuwongrr-gateway
 WorkingDirectory=/opt/leuwongrr-gateway/current
+Environment=NODE_ENV=production
 EnvironmentFile=/opt/leuwongrr-gateway/config/gateway.env
 ExecStart=/usr/bin/node /opt/leuwongrr-gateway/current/dist/main.js
 Restart=on-failure
 RestartSec=10s
-StartLimitIntervalSec=300
-StartLimitBurst=5
+TimeoutStartSec=30
 TimeoutStopSec=20
 KillSignal=SIGTERM
+OOMPolicy=stop
 NoNewPrivileges=true
 PrivateTmp=true
 PrivateDevices=true
@@ -26,19 +29,26 @@ ProtectKernelModules=true
 ProtectKernelLogs=true
 ProtectControlGroups=true
 ProtectClock=true
+ProtectProc=invisible
+ProcSubset=pid
 RestrictSUIDSGID=true
 RestrictRealtime=true
+RestrictNamespaces=true
 LockPersonality=true
 MemoryDenyWriteExecute=true
+CapabilityBoundingSet=
+AmbientCapabilities=
 SystemCallArchitectures=native
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 ReadWritePaths=/opt/leuwongrr-gateway/data /opt/leuwongrr-gateway/logs /opt/leuwongrr-gateway/runtime
 UMask=0077
 LimitNOFILE=8192
-TasksMax=128
-MemoryHigh=384M
-MemoryMax=512M
+TasksMax=96
+MemoryHigh=256M
+MemoryMax=384M
 CPUQuota=75%
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target

@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# First-time host layout for LeuwongRR Gateway. Does not write secrets.
 set -Eeuo pipefail
 umask 022
 
@@ -28,23 +27,24 @@ DATABASE_PATH=/opt/leuwongrr-gateway/data/gateway.db
 API_KEY_PEPPER=replace-with-openssl-rand-hex-32
 INTERNAL_READY_TOKEN=replace-with-openssl-rand-hex-32
 LOG_LEVEL=info
-UPSTREAM_CONCURRENCY=8
+UPSTREAM_CONCURRENCY=4
 REQUEST_TIMEOUT_MS=120000
 DAILY_BUDGET_UNITS=100000
 EOF
-  echo "created $ROOT/config/gateway.env (mode 600) — replace placeholder secrets before deploy" >&2
+  echo "created $ROOT/config/gateway.env (mode 600); replace placeholder secrets before deploy" >&2
 fi
 
 [[ $(stat -c %a "$ROOT/config/gateway.env") == 600 ]] || chmod 600 "$ROOT/config/gateway.env"
+chown root:root "$ROOT/config/gateway.env"
 
 if [[ -f $UNIT_SRC ]]; then
   install -o root -g root -m 0644 "$UNIT_SRC" /etc/systemd/system/leuwongrr-gateway.service
   systemctl daemon-reload
   systemctl enable leuwongrr-gateway.service
-  echo "installed systemd unit; service not started until first successful deploy" >&2
+  echo 'installed systemd unit; service not started until first successful deploy' >&2
 else
-  echo "unit file not found at $UNIT_SRC — skip systemd install" >&2
+  echo "unit file not found at $UNIT_SRC; skip systemd install" >&2
 fi
 
 echo "bootstrap complete: $ROOT"
-echo "next: fill gateway.env secrets, build-release, deploy.sh, then seed-tenant"
+echo 'next: fill gateway.env secrets, build release, deploy, then seed tenant'

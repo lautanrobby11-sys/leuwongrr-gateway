@@ -11,7 +11,7 @@ This runbook is the canonical authorization gate when GitHub is a private source
 
 ## Workstation release gate
 
-Run from the repository checkout on the operator workstation, never from `/home/ubuntu` or `/opt/leuwongrr-gateway/current`:
+Use a fresh disposable clone for each production release, especially on Windows. This guarantees that `.gitattributes` applies LF endings before release-critical Linux files are tested. Run from the repository checkout on the operator workstation, never from `/home/ubuntu` or `/opt/leuwongrr-gateway/current`:
 
 ```bash
 git fetch origin
@@ -31,6 +31,7 @@ Acceptance:
 - `SHA` is a full 40-character commit present in the private mirror.
 - Both lockfiles are present and `npm ci` is used; no floating install is accepted.
 - `npm run ci:local` succeeds: conventions, secret scan, lint, typecheck, tests, backend and console build, shell syntax, immutable package, manifest verification.
+- Release-critical shell scripts and systemd units contain LF only; the build normalizes its staged copy and verifies the finished artifact again.
 - The artifact and checksum names exactly match the commit SHA.
 
 Do not put `.env`, API keys, backup identities, cookies, provider credentials, or Cloudflare credentials in the checkout, artifact, GitHub, screenshots, or release evidence.

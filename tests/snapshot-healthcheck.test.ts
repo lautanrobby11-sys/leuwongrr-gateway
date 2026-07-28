@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -44,7 +44,7 @@ describe('snapshot dead-man notification', () => {
     const url = 'https://monitor.example.invalid/ping-id';
 
     try {
-      await import('node:fs/promises').then(({ mkdir }) => mkdir(bin));
+      await mkdir(bin);
       await writeFile(
         curl,
         '#!/usr/bin/env bash\nset -Eeuo pipefail\nprintf "%s\\n" "$@" > "$CAPTURE_FILE"\n'
@@ -70,6 +70,42 @@ describe('snapshot dead-man notification', () => {
       expect(argumentsPassed).toContain('--max-redirs');
       expect(argumentsPassed).toContain('0');
       expect(argumentsPassed).toContain(url);
+      expect(argumentsPassed).not.toContain('--retry-all-errors');
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('retries portably and succeeds on the third attempt', async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'snapshot-healthcheck-retry-'));
+    const bin = path.join(directory, 'bin');
+    const curl = path.join(bin, 'curl');
+    const sleep = path.join(bin, 'sleep');
+    const counter = path.join(directory, 'attempts');
+
+    try {
+      await mkdir(bin);
+      await writeFile(
+        curl,
+        '#!/usr/bin/env bash\nset -Eeuo pipefail\ncount=0\n[[ ! -f $COUNTER_FILE ]] || count=$(cat "$COUNTER_FILE")\ncount=$((count + 1))\nprintf "%s" "$count" > "$COUNTER_FILE"\n(( count >= 3 ))\n'
+      );
+      await writeFile(sleep, '#!/usr/bin/env bash\nexit 0\n');
+      await chmod(curl, 0o755);
+      await chmod(sleep, 0o755);
+
+      const result = spawnSync('bash', [script], {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          PATH: `${bin}:${process.env.PATH ?? ''}`,
+          COUNTER_FILE: counter,
+          SNAPSHOT_HEALTHCHECK_URL: 'https://monitor.example.invalid/ping-id'
+        }
+      });
+
+      expect(result.status).toBe(0);
+      expect(await readFile(counter, 'utf8')).toBe('3');
+      expect(result.stdout).toContain('snapshot healthcheck notified');
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

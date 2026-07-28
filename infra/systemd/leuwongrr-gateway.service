@@ -1,7 +1,11 @@
 [Unit]
 Description=LeuwongRR LLM Gateway
-After=network-online.target
-Wants=network-online.target
+# OmniRoute runs as a Docker container on this host, so the container runtime
+# must be up before the gateway starts. Without this ordering the gateway can
+# win the race after a reboot and stay up but never ready, because its upstream
+# is unreachable. Wants= keeps this soft: a host without Docker still starts.
+After=network-online.target docker.service
+Wants=network-online.target docker.service
 StartLimitIntervalSec=300
 StartLimitBurst=5
 
@@ -36,7 +40,12 @@ RestrictSUIDSGID=true
 RestrictRealtime=true
 RestrictNamespaces=true
 LockPersonality=true
-MemoryDenyWriteExecute=true
+# Must stay false. V8 compiles JavaScript to machine code at runtime and has to
+# mark freshly written pages executable; MemoryDenyWriteExecute makes that
+# mprotect fail with EPERM. V8 only tolerates ENOMEM there, so any other errno
+# trips a fatal CHECK and the process core-dumps shortly after start. Setting
+# this to true will crash-loop the gateway, not harden it.
+MemoryDenyWriteExecute=false
 CapabilityBoundingSet=
 AmbientCapabilities=
 SystemCallArchitectures=native

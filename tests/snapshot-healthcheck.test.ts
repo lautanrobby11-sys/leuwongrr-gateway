@@ -1,7 +1,8 @@
+import { existsSync } from 'node:fs';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 
 /** Convert a native path into the form understood by Git Bash and POSIX Bash. */
@@ -11,15 +12,21 @@ function bashPath(value: string): string {
   return drive ? `/${drive[1]?.toLowerCase()}/${drive[2]}` : normalized;
 }
 
-/** Preserve the inherited search path while using Bash's colon delimiter. */
-function bashPathList(value: string | undefined): string {
-  return (value ?? '')
-    .split(path.delimiter)
-    .filter(Boolean)
-    .map(bashPath)
-    .join(':');
+/**
+ * Windows may expose the WSL launcher as `bash` before Git Bash. Resolve the
+ * Bash shipped with the same Git installation used by the release checkout.
+ */
+function resolveBashExecutable(): string {
+  if (process.platform !== 'win32') return 'bash';
+  const gitExecPath = execFileSync('git', ['--exec-path'], { encoding: 'utf8' }).trim();
+  const candidate = path.resolve(gitExecPath, '..', '..', '..', 'bin', 'bash.exe');
+  if (!existsSync(candidate)) {
+    throw new Error(`Git Bash executable not found beside git exec path: ${candidate}`);
+  }
+  return candidate;
 }
 
+const bash = resolveBashExecutable();
 const script = bashPath(path.resolve('scripts/ping-snapshot-healthcheck.sh'));
 
 function withoutHealthcheckUrl(): NodeJS.ProcessEnv {
@@ -30,17 +37,18 @@ function withoutHealthcheckUrl(): NodeJS.ProcessEnv {
 
 describe('snapshot dead-man notification', () => {
   it('does nothing safely when monitoring is not configured', () => {
-    const result = spawnSync('bash', [script], {
+    const result = spawnSync(bash, [script], {
       encoding: 'utf8',
       env: withoutHealthcheckUrl()
     });
 
+    expect(result.error).toBeUndefined();
     expect(result.status).toBe(0);
     expect(result.stderr).toContain('snapshot monitoring disabled');
   });
 
   it('rejects a non-HTTPS endpoint before invoking curl', () => {
-    const result = spawnSync('bash', [script], {
+    const result = spawnSync(bash, [script], {
       encoding: 'utf8',
       env: {
         ...process.env,
@@ -48,6 +56,7 @@ describe('snapshot dead-man notification', () => {
       }
     });
 
+    expect(result.error).toBeUndefined();
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('must use https');
   });
@@ -67,16 +76,19 @@ describe('snapshot dead-man notification', () => {
       );
       await chmod(curl, 0o755);
 
-      const result = spawnSync('bash', [script], {
+      const result = spawnSync(bash, [script], {
         encoding: 'utf8',
         env: {
           ...process.env,
-          PATH: `${bashPath(bin)}:${bashPathList(process.env.PATH)}`,
+          // Keep the native delimiter here: Windows must locate the absolute
+          // executable first, then Git Bash converts PATH to POSIX form.
+          PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`,
           CAPTURE_FILE: bashPath(capture),
           SNAPSHOT_HEALTHCHECK_URL: url
         }
       });
 
+      expect(result.error).toBeUndefined();
       expect(result.status).toBe(0);
       expect(result.stdout).toContain('snapshot healthcheck notified');
       expect(`${result.stdout}${result.stderr}`).not.toContain(url);
@@ -109,16 +121,17 @@ describe('snapshot dead-man notification', () => {
       await chmod(curl, 0o755);
       await chmod(sleep, 0o755);
 
-      const result = spawnSync('bash', [script], {
+      const result = spawnSync(bash, [script], {
         encoding: 'utf8',
         env: {
           ...process.env,
-          PATH: `${bashPath(bin)}:${bashPathList(process.env.PATH)}`,
+          PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`,
           COUNTER_FILE: bashPath(counter),
           SNAPSHOT_HEALTHCHECK_URL: 'https://monitor.example.invalid/ping-id'
         }
       });
 
+      expect(result.error).toBeUndefined();
       expect(result.status).toBe(0);
       expect(await readFile(counter, 'utf8')).toBe('3');
       expect(result.stdout).toContain('snapshot healthcheck notified');

@@ -46,4 +46,9 @@ if [[ $KEEP =~ ^[0-9]+$ ]] && (( KEEP > 0 )); then
   done < <(ls -1t "$ROOT"/data/backups/*.tar.gz.age 2>/dev/null | tail -n +$((KEEP + 1)) || true)
 fi
 
+# Notify only after archive, checksum, permissions, and retention complete. If
+# the external ping fails, systemd marks the snapshot unit failed even though
+# the new archive remains valid; the missed dead-man ping then raises the alert.
+bash "$ROOT/current/scripts/ping-snapshot-healthcheck.sh"
+
 echo "$STAMP"

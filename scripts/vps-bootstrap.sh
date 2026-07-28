@@ -8,12 +8,10 @@ ROOT=/opt/leuwongrr-gateway
 SERVICE_USER=leuwongrr-gateway
 UNIT_SRC=${1:-infra/systemd/leuwongrr-gateway.service}
 
-# Host prerequisites for scripts/backup.sh and scripts/restore-drill.sh.
+# Host prerequisites for backup, restore, and the external dead-man ping.
 # The gateway itself embeds SQLite through better-sqlite3 and never shells out
-# to the sqlite3 CLI, so a host can run the service perfectly while being unable
-# to take a single backup. Bootstrap is the only place that can close that gap
-# before the operator discovers it during an incident.
-HOST_TOOLS=(sqlite3 age rsync)
+# to these tools, so runtime health alone cannot prove operations are ready.
+HOST_TOOLS=(sqlite3 age rsync curl)
 MISSING_TOOLS=()
 for tool in "${HOST_TOOLS[@]}"; do
   command -v "$tool" >/dev/null 2>&1 || MISSING_TOOLS+=("$tool")
@@ -53,7 +51,7 @@ UPSTREAM_CONCURRENCY=4
 REQUEST_TIMEOUT_MS=120000
 DAILY_BUDGET_UNITS=100000
 EOF
-  echo "created $ROOT/config/gateway.env (mode 600); replace placeholder secrets before deploy" >&2
+  echo "$ROOT/config/gateway.env created with mode 600; replace placeholder secrets before deploy" >&2
 fi
 
 [[ $(stat -c %a "$ROOT/config/gateway.env") == 600 ]] || chmod 600 "$ROOT/config/gateway.env"
@@ -65,7 +63,7 @@ if [[ -f $UNIT_SRC ]]; then
   systemctl enable leuwongrr-gateway.service
   echo 'installed systemd unit; service not started until first successful deploy' >&2
 else
-  echo "unit file not found at $UNIT_SRC; skip systemd install" >&2
+  echo "$UNIT_SRC not found; skip systemd install" >&2
 fi
 
 echo "bootstrap complete: $ROOT"

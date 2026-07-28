@@ -29,7 +29,8 @@ fi
 if [[ -f web/package-lock.json ]]; then
   cp web/package-lock.json "$STAGE/web/package-lock.json"
 fi
-cp scripts/deploy.sh scripts/rollback.sh scripts/backup.sh scripts/restore-drill.sh "$STAGE/scripts/"
+cp scripts/deploy.sh scripts/rollback.sh scripts/backup.sh scripts/restore-drill.sh \
+  scripts/ping-snapshot-healthcheck.sh "$STAGE/scripts/"
 # Every unit the runbook tells the operator to install must ship in the
 # artifact. The snapshot timer is installed from current/infra/systemd, so a
 # release that omits it turns the documented command into "No such file or

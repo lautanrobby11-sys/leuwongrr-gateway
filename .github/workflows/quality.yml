@@ -20,7 +20,7 @@ jobs:
   validate:
     name: validate
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 25
     env:
       NODE_ENV: test
       npm_config_audit: "false"
@@ -28,13 +28,13 @@ jobs:
     steps:
       - name: Checkout
         id: checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
       - name: Setup Node 22
         id: node
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@v4
         with:
           node-version: "22"
           check-latest: false
@@ -61,16 +61,34 @@ jobs:
             npm install --no-audit --no-fund --no-package-lock
           fi
 
+      - name: Install console dependencies
+        id: install_console
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [[ -f web/package-lock.json ]]; then
+            npm --prefix web ci --no-audit --no-fund
+          else
+            echo '::warning title=console lockfile absent::web/package-lock.json is missing, so the console builds from a floating dependency graph.'
+            npm --prefix web install --no-audit --no-fund --no-package-lock
+          fi
+
       - name: Release readiness
         id: release_readiness
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         shell: bash
         run: |
           set -Eeuo pipefail
+          missing=0
           if [[ ! -f package-lock.json ]]; then
             echo 'package-lock.json is required on main before a release artifact can be trusted' >&2
-            exit 1
+            missing=1
           fi
+          if [[ ! -f web/package-lock.json ]]; then
+            echo 'web/package-lock.json is required on main so the console bundle is reproducible' >&2
+            missing=1
+          fi
+          exit "$missing"
 
       - name: Convention gate
         id: conventions
@@ -95,9 +113,22 @@ jobs:
         id: tests
         run: npm test -- --reporter=verbose
 
-      - name: Build
+      - name: Build gateway and console
         id: build
-        run: npm run build
+        run: npm run build:all
+
+      - name: Verify console bundle
+        id: console
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for entry in admin member chat login; do
+            test -f "dist/public/$entry.html" || {
+              echo "dist/public/$entry.html is missing; the console would answer 503 console_not_built in production" >&2
+              exit 1
+            }
+          done
+          test -d dist/public/assets
 
       - name: Shell syntax
         id: shell
@@ -121,7 +152,7 @@ jobs:
 
       - name: Publish gate diagnostics
         if: always() && github.event_name == 'pull_request'
-        uses: actions/github-script@v9
+        uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
@@ -131,6 +162,7 @@ jobs:
               ['node', '${{ steps.node.outcome }}'],
               ['toolchain', '${{ steps.toolchain.outcome }}'],
               ['install', '${{ steps.install.outcome }}'],
+              ['install_console', '${{ steps.install_console.outcome }}'],
               ['release_readiness', '${{ steps.release_readiness.outcome }}'],
               ['conventions', '${{ steps.conventions.outcome }}'],
               ['secrets', '${{ steps.secrets.outcome }}'],
@@ -138,6 +170,7 @@ jobs:
               ['typecheck', '${{ steps.typecheck.outcome }}'],
               ['tests', '${{ steps.tests.outcome }}'],
               ['build', '${{ steps.build.outcome }}'],
+              ['console', '${{ steps.console.outcome }}'],
               ['shell', '${{ steps.shell.outcome }}'],
               ['package', '${{ steps.package.outcome }}'],
               ['checksum', '${{ steps.checksum.outcome }}'],
@@ -198,7 +231,8 @@ jobs:
             echo "- sha: \`$GITHUB_SHA\`"
             echo "- result: **${{ job.status }}**"
             echo "- node: $(node --version 2>/dev/null || echo unavailable)"
-            echo "- lockfile: $([[ -f package-lock.json ]] && echo present || echo absent)"
+            echo "- root lockfile: $([[ -f package-lock.json ]] && echo present || echo absent)"
+            echo "- console lockfile: $([[ -f web/package-lock.json ]] && echo present || echo absent)"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload immutable artifact

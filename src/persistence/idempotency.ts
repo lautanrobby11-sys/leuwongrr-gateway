@@ -1,8 +1,8 @@
 import type { GatewayDatabase } from './database.js';
 
-export type Claim = {state:'owner'}|{state:'cached';statusCode:number;body:unknown}|{state:'conflict'}|{state:'in_progress'};
+export type Claim={state:'owner'}|{state:'cached';statusCode:number;body:unknown}|{state:'conflict'}|{state:'in_progress'};
 export function claim(db:GatewayDatabase,tenantId:string,key:string,requestHash:string):Claim {
-  return db.db.transaction(()=>{
+  return db.db.transaction(():Claim=>{
     db.db.prepare('DELETE FROM idempotency_keys WHERE tenant_id=? AND key=? AND expires_at<=?').run(tenantId,key,new Date().toISOString());
     const expiresAt=new Date(Date.now()+24*60*60*1000).toISOString();
     const inserted=db.db.prepare('INSERT OR IGNORE INTO idempotency_keys(tenant_id,key,request_hash,status_code,response_json,expires_at) VALUES(?,?,?,NULL,NULL,?)').run(tenantId,key,requestHash,expiresAt);

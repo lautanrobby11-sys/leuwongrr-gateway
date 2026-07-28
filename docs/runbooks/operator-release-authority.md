@@ -9,6 +9,19 @@ This runbook is the canonical authorization gate when GitHub is a private source
 - **VPS:** runtime, data, secrets, backup, deploy, health, rollback. Never a development workstation.
 - **Cloudflare:** public HTTPS, Tunnel, WAF, and Access boundary. Never a source or secret store.
 
+## Hard stop: red means no merge and no deploy
+
+These rules are absolute. They override convenience, chat pressure, and “it worked on my machine” claims.
+
+1. **Do not merge** a pull request while quality is red, cancelled, incomplete, or unknown.
+2. **Do not squash-merge** when any required PR gate failed: `conventions`, `secrets`, `lint`, `typecheck`, `tests`, `build`, `console`, `shell`, `package`, `checksum`, or `clean`. (`release_readiness` is skipped on PRs by design.)
+3. **Do not deploy** a SHA unless workstation `npm run ci:local` passed on a clean checkout of that exact full SHA.
+4. **Do not treat** GitHub Actions green alone as production authorization.
+5. **Do not retry deploy** of a SHA that already failed health/preflight/activation. Fix source → new SHA → new gate → new deploy.
+6. **Do not mark** Notion/status DONE while merge or deploy gates are red or missing evidence.
+
+If quality is red: fix the failing gate, push a normal commit on the same branch, wait for a full green diagnostics comment, then reconsider merge. Never bypass with force-merge, deploy scripts on dirty trees, or host-side source edits.
+
 ## Workstation release gate
 
 Use a fresh disposable clone for each production release, especially on Windows. This guarantees that `.gitattributes` applies LF endings before release-critical Linux files are tested. Run from the repository checkout on the operator workstation, never from `/home/ubuntu` or `/opt/leuwongrr-gateway/current`:
@@ -33,6 +46,7 @@ Acceptance:
 - `npm run ci:local` succeeds: conventions, secret scan, lint, typecheck, tests, backend and console build, shell syntax, immutable package, manifest verification.
 - Release-critical shell scripts and systemd units contain LF only; the build normalizes its staged copy and verifies the finished artifact again.
 - The artifact and checksum names exactly match the commit SHA.
+- Matching PR quality diagnostics (if the SHA came from a PR) show required gates `success`.
 
 Do not put `.env`, API keys, backup identities, cookies, provider credentials, or Cloudflare credentials in the checkout, artifact, GitHub, screenshots, or release evidence.
 
@@ -80,7 +94,8 @@ Record only sanitized facts:
 - liveness and token-protected readiness results;
 - negative auth checks relevant to the release;
 - backup age and latest verified restore evidence;
-- rollback target.
+- rollback target;
+- explicit confirmation that quality was green before merge and `ci:local` was green before deploy.
 
 Do not mark the release authorized if any item is missing. GitHub Actions green, by itself, is not production authorization.
 

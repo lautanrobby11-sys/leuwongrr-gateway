@@ -3,14 +3,17 @@ import { randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
 import { mkdirSync } from 'node:fs';
 import { MIGRATIONS } from './migrations.js';
+import { TenantStore } from './tenant-store.js';
+import type { SqliteHandle } from './sqlite.js';
 import {
   hashApiKey,
+  parseKeyMode,
   parseScopes,
   safeHashEqual,
   type ApiKeyRecord
 } from '../auth/api-keys.js';
 
-export type SqliteHandle = InstanceType<typeof Database>;
+export type { SqliteHandle } from './sqlite.js';
 
 export interface DatabaseOptions {
   /** Page cache ceiling in KiB. Keeps SQLite predictable on a small VPS. */
@@ -26,15 +29,21 @@ export interface MaintenanceResult {
 interface ApiKeyRow {
   id: string;
   tenant_id: string;
+  name: string;
+  mode: string;
   key_hash: string;
   prefix: string;
   last4: string;
   scopes_json: string;
   revoked_at: string | null;
+  expires_at: string | null;
+  last_used_at: string | null;
 }
 
 export class GatewayDatabase {
   readonly db: SqliteHandle;
+  /** Canonical entry point for tenant and API key lifecycle operations. */
+  readonly tenants: TenantStore;
   private readonly pepper: string;
 
   constructor(path: string, pepper: string, options: DatabaseOptions = {}) {
@@ -63,6 +72,7 @@ export class GatewayDatabase {
         record.run(migration.id, new Date().toISOString());
       })();
     }
+    this.tenants = new TenantStore(this.db, pepper);
   }
 
   close(): void {
@@ -73,19 +83,31 @@ export class GatewayDatabase {
     const hash = hashApiKey(plaintext, this.pepper);
     const row = this.db
       .prepare(
-        'SELECT id,tenant_id,key_hash,prefix,last4,scopes_json,revoked_at FROM api_keys WHERE key_hash=?'
+        'SELECT id,tenant_id,name,mode,key_hash,prefix,last4,scopes_json,revoked_at,expires_at,last_used_at FROM api_keys WHERE key_hash=?'
       )
       .get(hash) as ApiKeyRow | undefined;
     if (!row || !safeHashEqual(hash, row.key_hash)) return null;
+
+    const nowIso = new Date().toISOString();
+    // An expired credential is indistinguishable from an unknown one.
+    if (row.expires_at && row.expires_at <= nowIso) return null;
+    this.tenants.touch(row.id, nowIso, row.last_used_at);
+
     const scopes = parseScopes(JSON.parse(row.scopes_json) as unknown);
     return {
       id: row.id,
       tenantId: row.tenant_id,
+      name: row.name,
+      mode: parseKeyMode(row.mode),
       keyHash: row.key_hash,
       prefix: row.prefix,
       last4: row.last4,
       scopes: new Set(scopes),
-      revokedAt: row.revoked_at
+      // A future revocation timestamp is a rotation grace window, not a
+      // revoked key, so the credential stays usable until it elapses.
+      revokedAt: row.revoked_at && row.revoked_at <= nowIso ? row.revoked_at : null,
+      expiresAt: row.expires_at,
+      lastUsedAt: row.last_used_at
     };
   }
 
@@ -100,13 +122,17 @@ export class GatewayDatabase {
   reserveBudget(tenantId: string, requestId: string, units: number, dailyLimit: number): string {
     const day = new Date().toISOString().slice(0, 10);
     const id = randomUUID();
+    // A tenant-specific ceiling always wins so one tenant cannot consume the
+    // shared default budget of the whole deployment.
+    const tenantLimit = this.tenants.limits(tenantId)?.dailyBudgetUnits ?? dailyLimit;
+    const effectiveLimit = Math.min(dailyLimit, tenantLimit);
     this.db.transaction(() => {
       const used = this.db
         .prepare(
           "SELECT COALESCE(SUM(units),0) AS total FROM usage_events WHERE tenant_id=? AND day=? AND state IN ('reserved','settled')"
         )
         .get(tenantId, day) as { total: number };
-      if (used.total + units > dailyLimit) throw new Error('daily_budget_exceeded');
+      if (used.total + units > effectiveLimit) throw new Error('daily_budget_exceeded');
       this.db
         .prepare(
           "INSERT INTO usage_events(id,tenant_id,request_id,units,state,day,created_at) VALUES(?,?,?,?,'reserved',?,?)"

@@ -31,7 +31,18 @@ export const testConfig: Config = {
   TRUSTED_CLIENT_IP_HEADER: 'cf-connecting-ip',
   READY_UPSTREAM_TIMEOUT_MS: 2000,
   TENANT_MAX_CONCURRENT: 2,
-  TENANT_LIMIT_MAX_ENTRIES: 256
+  TENANT_LIMIT_MAX_ENTRIES: 256,
+  CONSOLE_ENABLED: false,
+  PUBLIC_BASE_URL: 'http://127.0.0.1:2080',
+  WEB_DIST_PATH: './dist/public',
+  SESSION_COOKIE_NAME: 'lwrr_test_session',
+  SESSION_TTL_HOURS: 1,
+  OTP_TTL_MINUTES: 10,
+  OTP_MAX_ATTEMPTS: 5,
+  OTP_RESEND_SECONDS: 60,
+  OTP_DELIVERY: 'log',
+  CRYPTOMUS_API_URL: 'https://api.cryptomus.com',
+  CRYPTOMUS_TIMEOUT_MS: 15000
 };
 
 export interface Harness {

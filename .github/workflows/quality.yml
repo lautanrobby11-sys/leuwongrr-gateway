@@ -57,7 +57,19 @@ jobs:
           if [[ -f package-lock.json ]]; then
             npm ci --no-audit --no-fund
           else
+            echo '::warning title=lockfile absent::package-lock.json is missing, so this run installs a floating dependency graph. scripts/deploy.sh will refuse to release until the lockfile workflow lands it.'
             npm install --no-audit --no-fund --no-package-lock
+          fi
+
+      - name: Release readiness
+        id: release_readiness
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [[ ! -f package-lock.json ]]; then
+            echo 'package-lock.json is required on main before a release artifact can be trusted' >&2
+            exit 1
           fi
 
       - name: Convention gate
@@ -119,6 +131,7 @@ jobs:
               ['node', '${{ steps.node.outcome }}'],
               ['toolchain', '${{ steps.toolchain.outcome }}'],
               ['install', '${{ steps.install.outcome }}'],
+              ['release_readiness', '${{ steps.release_readiness.outcome }}'],
               ['conventions', '${{ steps.conventions.outcome }}'],
               ['secrets', '${{ steps.secrets.outcome }}'],
               ['lint', '${{ steps.lint.outcome }}'],

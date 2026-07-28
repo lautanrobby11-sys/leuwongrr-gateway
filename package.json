@@ -1,0 +1,37 @@
+{
+  "name": "@leuwongrr/gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.0.0" },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/main.js",
+    "dev": "tsx watch src/main.ts",
+    "lint": "eslint src tests scripts eslint.config.js --max-warnings=0",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check:conventions": "node scripts/check-conventions.mjs",
+    "scan:secrets": "node scripts/scan-secrets.mjs",
+    "validate": "npm run check:conventions && npm run scan:secrets && npm run lint && npm run typecheck && npm test",
+    "ci:local": "npm run validate && npm run build && bash -n scripts/*.sh && scripts/build-release.sh $(git rev-parse HEAD)",
+    "seed:tenant": "node scripts/seed-tenant.mjs"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.2.0",
+    "fastify": "^5.4.0",
+    "pino": "^9.7.0",
+    "zod": "^3.25.67"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.30.0",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.15.33",
+    "eslint": "^9.30.0",
+    "globals": "^16.2.0",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.35.0",
+    "vitest": "^3.2.4"
+  }
+}

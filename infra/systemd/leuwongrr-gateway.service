@@ -1,0 +1,44 @@
+[Unit]
+Description=LeuwongRR LLM Gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=leuwongrr-gateway
+Group=leuwongrr-gateway
+WorkingDirectory=/opt/leuwongrr-gateway/current
+EnvironmentFile=/opt/leuwongrr-gateway/config/gateway.env
+ExecStart=/usr/bin/node /opt/leuwongrr-gateway/current/dist/main.js
+Restart=on-failure
+RestartSec=10s
+StartLimitIntervalSec=300
+StartLimitBurst=5
+TimeoutStopSec=20
+KillSignal=SIGTERM
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/opt/leuwongrr-gateway/data /opt/leuwongrr-gateway/logs /opt/leuwongrr-gateway/runtime
+UMask=0077
+LimitNOFILE=8192
+TasksMax=128
+MemoryHigh=384M
+MemoryMax=512M
+CPUQuota=75%
+
+[Install]
+WantedBy=multi-user.target

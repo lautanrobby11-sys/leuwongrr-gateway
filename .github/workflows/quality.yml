@@ -1,0 +1,188 @@
+name: quality
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      NODE_ENV: test
+      npm_config_audit: "false"
+      npm_config_fund: "false"
+    steps:
+      - name: Checkout
+        id: checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Setup Node 22
+        id: node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          check-latest: false
+
+      - name: Verify runner toolchain
+        id: toolchain
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node --version
+          npm --version
+          python3 --version
+          g++ --version | head -1
+
+      - name: Install dependencies
+        id: install
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [[ -f package-lock.json ]]; then
+            npm ci --no-audit --no-fund
+          else
+            npm install --no-audit --no-fund --no-package-lock
+          fi
+
+      - name: Convention gate
+        id: conventions
+        run: npm run check:conventions
+
+      - name: Secret scan
+        id: secrets
+        run: npm run scan:secrets
+
+      - name: Lint
+        id: lint
+        run: npm run lint
+
+      - name: Typecheck
+        id: typecheck
+        run: npm run typecheck
+
+      - name: Tests
+        id: tests
+        run: npm test -- --reporter=verbose
+
+      - name: Build
+        id: build
+        run: npm run build
+
+      - name: Shell syntax
+        id: shell
+        run: bash -n scripts/*.sh
+
+      - name: Package immutable release
+        id: package
+        run: scripts/build-release.sh "$GITHUB_SHA"
+
+      - name: Verify artifact checksum
+        id: checksum
+        run: cd .release && sha256sum -c "$GITHUB_SHA.tar.gz.sha256"
+
+      - name: Verify tracked tree is clean
+        id: clean
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git status --porcelain --untracked-files=no
+          git diff --exit-code
+
+      - name: Publish gate diagnostics
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const marker = '<!-- leuwongrr-quality-diagnostics -->';
+            const rows = [
+              ['checkout', '${{ steps.checkout.outcome }}'],
+              ['node', '${{ steps.node.outcome }}'],
+              ['toolchain', '${{ steps.toolchain.outcome }}'],
+              ['install', '${{ steps.install.outcome }}'],
+              ['conventions', '${{ steps.conventions.outcome }}'],
+              ['secrets', '${{ steps.secrets.outcome }}'],
+              ['lint', '${{ steps.lint.outcome }}'],
+              ['typecheck', '${{ steps.typecheck.outcome }}'],
+              ['tests', '${{ steps.tests.outcome }}'],
+              ['build', '${{ steps.build.outcome }}'],
+              ['shell', '${{ steps.shell.outcome }}'],
+              ['package', '${{ steps.package.outcome }}'],
+              ['checksum', '${{ steps.checksum.outcome }}'],
+              ['clean', '${{ steps.clean.outcome }}']
+            ];
+            const body = [
+              marker,
+              '## quality diagnostics',
+              '',
+              `SHA: \`${context.sha}\``,
+              '',
+              '| Gate | Outcome |',
+              '| --- | --- |',
+              ...rows.map(([gate, outcome]) => `| ${gate} | **${outcome}** |`),
+              '',
+              'This comment contains outcomes only; logs and secrets are never copied.'
+            ].join('\n');
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              per_page: 100
+            });
+            const existing = comments.find((comment) =>
+              comment.user?.type === 'Bot' && comment.body?.includes(marker)
+            );
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body
+              });
+            }
+
+      - name: Report job summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## quality"
+            echo
+            echo "- sha: \`$GITHUB_SHA\`"
+            echo "- result: **${{ job.status }}**"
+            echo "- node: $(node --version 2>/dev/null || echo unavailable)"
+            echo "- lockfile: $([[ -f package-lock.json ]] && echo present || echo absent)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload immutable artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gateway-${{ github.sha }}
+          path: |
+            .release/${{ github.sha }}.tar.gz
+            .release/${{ github.sha }}.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 14

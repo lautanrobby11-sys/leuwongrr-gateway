@@ -15,7 +15,8 @@ Baca file ini, `README.md`, dan ADR terkait sebelum mengubah repository.
 3. Perubahan schema wajib migration forward-only baru.
 4. Tambah test perilaku dan jalankan `npm run validate`.
 5. Tinjau diff, secret, ownership ganda, dan file terlarang.
-6. Deploy hanya commit bersih ke `releases/<git-sha>`; jangan edit `current`.
+6. Untuk release, ikuti `docs/runbooks/operator-release-authority.md`: clean checkout pada workstation operator, kedua lockfile, `npm run ci:local`, artefak full Git SHA, dan checksum. GitHub adalah mirror source; status branch tidak menggantikan bukti lokal.
+7. Deploy hanya commit bersih ke `releases/<git-sha>`; jangan edit `current`, jangan build source di VPS, dan jangan memberi VPS credential GitHub.
 
 ## Larangan
 Dilarang membuat source/config dengan suffix `-new`, `-final`, `-final2`, `-fix`, `-fixed`, `-hotfix`, `-patch`, `-override`, `-backup`, `-old`, `-temp`, atau `docker-compose.override.yml`. Backup runtime hanya melalui `scripts/backup.sh`.
@@ -29,6 +30,7 @@ Dilarang membuat source/config dengan suffix `-new`, `-final`, `-final2`, `-fix`
 | Database | `src/persistence/` |
 | OmniRoute client | `src/upstream.ts` |
 | Deploy/rollback | `scripts/`, `infra/` |
+| Release authority tanpa branch protection | `docs/adr/ADR-012-local-release-authority.md`, `docs/runbooks/operator-release-authority.md` |
 
 ## Security invariants
 - Bind non-loopback ditolak saat startup.

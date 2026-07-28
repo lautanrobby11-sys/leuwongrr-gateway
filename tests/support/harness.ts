@@ -19,7 +19,14 @@ export const testConfig: Config = {
   LOG_LEVEL: 'silent',
   UPSTREAM_CONCURRENCY: 2,
   REQUEST_TIMEOUT_MS: 1000,
-  DAILY_BUDGET_UNITS: 10000
+  DAILY_BUDGET_UNITS: 10000,
+  RATE_LIMIT_RPM: 120,
+  RATE_LIMIT_BURST: 30,
+  RATE_LIMIT_MAX_ENTRIES: 256,
+  STREAM_IDLE_TIMEOUT_MS: 5000,
+  SQLITE_CACHE_KIB: 1024,
+  RETENTION_DAYS: 90,
+  MAINTENANCE_INTERVAL_MS: 3_600_000
 };
 
 export interface Harness {
@@ -32,7 +39,9 @@ export interface Harness {
 
 export function createTempDatabase(): { db: GatewayDatabase; dispose: () => void } {
   const root = mkdtempSync(join(tmpdir(), 'lwrr-'));
-  const db = new GatewayDatabase(join(root, 'gateway.db'), testConfig.API_KEY_PEPPER);
+  const db = new GatewayDatabase(join(root, 'gateway.db'), testConfig.API_KEY_PEPPER, {
+    cacheKib: testConfig.SQLITE_CACHE_KIB
+  });
   return {
     db,
     dispose: () => {
@@ -52,20 +61,26 @@ export function seedTenant(db: GatewayDatabase, tenantId: string, scopes: Scope[
   return issued.plaintext;
 }
 
-export function createHarness(respond: () => Response): Harness {
+export function createHarness(
+  respond: () => Response,
+  overrides: Partial<Config> = {}
+): Harness {
+  const config: Config = { ...testConfig, ...overrides };
   const root = mkdtempSync(join(tmpdir(), 'lwrr-http-'));
-  const db = new GatewayDatabase(join(root, 'gateway.db'), testConfig.API_KEY_PEPPER);
+  const db = new GatewayDatabase(join(root, 'gateway.db'), config.API_KEY_PEPPER, {
+    cacheKib: config.SQLITE_CACHE_KIB
+  });
   const token = seedTenant(db, 'tenant-a', ['models:read', 'chat:write']);
   db.db.prepare('INSERT INTO model_policies(tenant_id,model_id,enabled) VALUES(?,?,1)').run('tenant-a', 'lwrr-text');
   const fetcher = vi.fn(async () => respond());
   const upstream = new OmniRouteClient(
-    testConfig.OMNIROUTE_URL,
-    2,
-    1000,
+    config.OMNIROUTE_URL,
+    config.UPSTREAM_CONCURRENCY,
+    config.REQUEST_TIMEOUT_MS,
     fetcher as unknown as typeof fetch
   );
   const app = buildApp({
-    config: testConfig,
+    config,
     db,
     upstream,
     logger: createLogger('silent')

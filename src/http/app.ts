@@ -14,6 +14,7 @@ import { sendError } from '../contracts/errors.js';
 import { listModels, requireModel, PolicyError } from '../policy/capabilities.js';
 import { resolveRoute } from '../policy/allowlist.js';
 import { OverloadError } from '../policy/semaphore.js';
+import { TokenBucketLimiter, RateLimitError } from '../policy/rate-limit.js';
 import type { GatewayDatabase } from '../persistence/database.js';
 import { claim, complete, abandon } from '../persistence/idempotency.js';
 import type { OmniRouteClient } from '../upstream.js';
@@ -38,12 +39,33 @@ export function buildApp(deps: AppDeps) {
     disableRequestLogging: true
   });
 
+  // Source limiter protects the process before authentication work happens.
+  const sourceLimiter = new TokenBucketLimiter(
+    deps.config.RATE_LIMIT_RPM * 2,
+    deps.config.RATE_LIMIT_BURST * 2,
+    deps.config.RATE_LIMIT_MAX_ENTRIES
+  );
+  // Credential limiter enforces the per-key contract after authentication.
+  const credentialLimiter = new TokenBucketLimiter(
+    deps.config.RATE_LIMIT_RPM,
+    deps.config.RATE_LIMIT_BURST,
+    deps.config.RATE_LIMIT_MAX_ENTRIES
+  );
+
   app.addHook('onRequest', async (req, reply) => {
     const path = req.url.split('?')[0] ?? req.url;
-    if (!resolveRoute(req.method, path)) {
+    const route = resolveRoute(req.method, path);
+    if (!route) {
       return sendError(reply, 404, 'route_not_found', 'Route is not available', req.id);
     }
     reply.header('x-request-id', req.id).header('cache-control', 'no-store');
+    if (route === 'health.live' || route === 'health.ready') return;
+
+    const decision = sourceLimiter.consume(req.ip);
+    if (!decision.allowed) {
+      reply.header('retry-after', String(decision.retryAfterSeconds));
+      return sendError(reply, 429, 'rate_limited', 'Too many requests', req.id, true);
+    }
   });
 
   async function authenticate(req: FastifyRequest, scope: Scope): Promise<ApiKeyRecord> {
@@ -51,6 +73,8 @@ export function buildApp(deps: AppDeps) {
     const record = token ? deps.db.authenticate(token) : null;
     if (!record) throw new AuthError('invalid_api_key', 401);
     requireScope(record, scope);
+    const decision = credentialLimiter.consume(record.keyHash);
+    if (!decision.allowed) throw new RateLimitError(decision.retryAfterSeconds);
     return record;
   }
 
@@ -194,15 +218,41 @@ export function buildApp(deps: AppDeps) {
           'x-accel-buffering': 'no'
         });
         const stream = Readable.fromWeb(upstream.body as never);
+
+        // A stalled upstream must not hold a connection, permit, and budget
+        // reservation open indefinitely on a small host.
+        let idleTimer: NodeJS.Timeout | null = null;
+        const clearIdle = () => {
+          if (idleTimer) {
+            clearTimeout(idleTimer);
+            idleTimer = null;
+          }
+        };
+        const armIdle = () => {
+          clearIdle();
+          idleTimer = setTimeout(() => {
+            aborter.abort();
+            stream.destroy(new Error('stream_idle_timeout'));
+          }, deps.config.STREAM_IDLE_TIMEOUT_MS);
+          idleTimer.unref();
+        };
+
         const onDisconnect = () => {
           if (!reply.raw.writableEnded) stream.destroy(new Error('client_disconnected'));
         };
         reply.raw.once('close', onDisconnect);
+        stream.on('data', armIdle);
         stream.once('end', () => {
+          clearIdle();
           deps.db.settleBudget(reservation, key.tenantId, estimate);
           deps.db.audit(key.tenantId, 'llm.stream.completed', req.id, { model: parsed.data.model });
         });
-        stream.once('error', () => deps.db.releaseBudget(reservation, key.tenantId));
+        stream.once('error', () => {
+          clearIdle();
+          deps.db.releaseBudget(reservation, key.tenantId);
+          if (!reply.raw.writableEnded) reply.raw.end();
+        });
+        armIdle();
         stream.pipe(reply.raw);
         return reply;
       }
@@ -241,6 +291,10 @@ export function buildApp(deps: AppDeps) {
 }
 
 function handleError(error: unknown, reply: Parameters<typeof sendError>[0], traceId: string) {
+  if (error instanceof RateLimitError) {
+    reply.header('retry-after', String(error.retryAfterSeconds));
+    return sendError(reply, 429, 'rate_limited', 'Too many requests', traceId, true);
+  }
   if (error instanceof AuthError || error instanceof PolicyError) {
     return sendError(reply, error.statusCode, error.code, error.message, traceId);
   }

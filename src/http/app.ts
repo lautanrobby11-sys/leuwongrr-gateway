@@ -1,6 +1,5 @@
-import Fastify, { type FastifyRequest } from 'fastify';
-import { createHash, randomUUID } from 'node:crypto';
-import { Readable } from 'node:stream';
+import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
+import { randomUUID } from 'node:crypto';
 import type { Config } from '../config.js';
 import {
   bearerToken,
@@ -10,15 +9,23 @@ import {
   type Scope
 } from '../auth/api-keys.js';
 import { chatRequestSchema } from '../contracts/chat.js';
-import { sendError } from '../contracts/errors.js';
-import { listModels, requireModel, PolicyError } from '../policy/capabilities.js';
+import { responsesRequestSchema } from '../contracts/responses.js';
+import { countTokensRequestSchema, messagesRequestSchema } from '../contracts/messages.js';
+import { sendProtocolError, type Dialect } from '../contracts/errors.js';
+import {
+  listModels,
+  requireModel,
+  PolicyError,
+  type Capability,
+  type ModelPolicy
+} from '../policy/capabilities.js';
 import { resolveRoute } from '../policy/allowlist.js';
 import { OverloadError } from '../policy/semaphore.js';
 import { TokenBucketLimiter, RateLimitError } from '../policy/rate-limit.js';
 import { TenantConcurrencyRegistry, TenantRateLimiterRegistry } from '../policy/tenant-limits.js';
 import type { GatewayDatabase } from '../persistence/database.js';
-import { claim, complete, abandon } from '../persistence/idempotency.js';
 import type { OmniRouteClient } from '../upstream.js';
+import { createUpstreamExecutor } from './pipeline.js';
 import type { Logger } from 'pino';
 
 export interface AppDeps {
@@ -30,6 +37,7 @@ export interface AppDeps {
 
 const LOOPBACK_PEERS = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 const CLIENT_IP_PATTERN = /^[0-9a-fA-F:.]{3,45}$/;
+const DEFAULT_MAX_TOKENS = 1024;
 
 /**
  * All public traffic reaches the gateway through cloudflared on loopback, so
@@ -46,6 +54,10 @@ export function clientIdentity(req: FastifyRequest, config: Config): string {
   if (typeof value !== 'string') return req.ip;
   const candidate = value.split(',')[0]?.trim() ?? '';
   return CLIENT_IP_PATTERN.test(candidate) ? candidate : req.ip;
+}
+
+function textLength(value: unknown): number {
+  return typeof value === 'string' ? value.length : JSON.stringify(value ?? '').length;
 }
 
 export function buildApp(deps: AppDeps) {
@@ -79,11 +91,19 @@ export function buildApp(deps: AppDeps) {
   );
   const tenantConcurrency = new TenantConcurrencyRegistry(deps.config.TENANT_LIMIT_MAX_ENTRIES);
 
+  const execute = createUpstreamExecutor({
+    config: deps.config,
+    db: deps.db,
+    upstream: deps.upstream,
+    tenantConcurrency,
+    onError: handleError
+  });
+
   app.addHook('onRequest', async (req, reply) => {
     const path = req.url.split('?')[0] ?? req.url;
     const route = resolveRoute(req.method, path);
     if (!route) {
-      return sendError(reply, 404, 'route_not_found', 'Route is not available', req.id);
+      return sendProtocolError(reply, 'openai', 404, 'route_not_found', 'Route is not available', req.id);
     }
     reply.header('x-request-id', req.id).header('cache-control', 'no-store');
     if (route === 'health.live' || route === 'health.ready') return;
@@ -91,7 +111,7 @@ export function buildApp(deps: AppDeps) {
     const decision = sourceLimiter.consume(clientIdentity(req, deps.config));
     if (!decision.allowed) {
       reply.header('retry-after', String(decision.retryAfterSeconds));
-      return sendError(reply, 429, 'rate_limited', 'Too many requests', req.id, true);
+      return sendProtocolError(reply, 'openai', 429, 'rate_limited', 'Too many requests', req.id, true);
     }
   });
 
@@ -111,17 +131,30 @@ export function buildApp(deps: AppDeps) {
     return record;
   }
 
+  /** Shared entitlement gate: capability match first, tenant policy second. */
+  function resolveModel(
+    publicId: string,
+    required: readonly Capability[],
+    tenantId: string
+  ): ModelPolicy {
+    const model = requireModel(publicId, required);
+    if (!deps.db.modelEnabled(tenantId, model.publicId)) {
+      throw new PolicyError('model_not_entitled', 403);
+    }
+    return model;
+  }
+
   app.get('/health/live', async () => ({ status: 'ok' }));
 
   app.get('/health/ready', async (req, reply) => {
     const token = req.headers['x-internal-ready-token'];
     if (typeof token !== 'string' || token !== deps.config.INTERNAL_READY_TOKEN) {
-      return sendError(reply, 404, 'route_not_found', 'Route is not available', req.id);
+      return sendProtocolError(reply, 'openai', 404, 'route_not_found', 'Route is not available', req.id);
     }
     try {
       deps.db.db.prepare('SELECT 1').get();
     } catch {
-      return sendError(reply, 503, 'not_ready', 'Dependency unavailable', req.id, true);
+      return sendProtocolError(reply, 'openai', 503, 'not_ready', 'Dependency unavailable', req.id, true);
     }
     // Readiness drives deploy verification and rollback, so it must observe the
     // upstream the gateway is useless without.
@@ -133,10 +166,10 @@ export function buildApp(deps: AppDeps) {
       );
       await probe.body?.cancel();
       if (!probe.ok) {
-        return sendError(reply, 503, 'not_ready', 'Upstream unavailable', req.id, true);
+        return sendProtocolError(reply, 'openai', 503, 'not_ready', 'Upstream unavailable', req.id, true);
       }
     } catch {
-      return sendError(reply, 503, 'not_ready', 'Upstream unavailable', req.id, true);
+      return sendProtocolError(reply, 'openai', 503, 'not_ready', 'Upstream unavailable', req.id, true);
     }
     return { status: 'ready' };
   });
@@ -156,7 +189,7 @@ export function buildApp(deps: AppDeps) {
           }))
       };
     } catch (error) {
-      return handleError(error, reply, req.id);
+      return handleError(error, reply, req.id, 'openai');
     }
   });
 
@@ -165,217 +198,230 @@ export function buildApp(deps: AppDeps) {
     try {
       key = await authenticate(req, 'chat:write');
     } catch (error) {
-      return handleError(error, reply, req.id);
+      return handleError(error, reply, req.id, 'openai');
     }
 
     const parsed = chatRequestSchema.safeParse(req.body);
     if (!parsed.success) {
-      return sendError(reply, 400, 'invalid_request', 'Request body failed schema validation', req.id);
-    }
-
-    const required = parsed.data.tools?.length ? (['text', 'tools'] as const) : (['text'] as const);
-    let model;
-    try {
-      model = requireModel(parsed.data.model, required);
-    } catch (error) {
-      return handleError(error, reply, req.id);
-    }
-
-    if (!deps.db.modelEnabled(key.tenantId, model.publicId)) {
-      return sendError(reply, 403, 'model_not_entitled', 'Model is not enabled for tenant', req.id);
-    }
-
-    const maxTokens = Math.min(parsed.data.max_tokens ?? 1024, model.maxOutputTokens);
-    const upstreamBody = { ...parsed.data, model: model.upstreamModel, max_tokens: maxTokens };
-    const requestHash = createHash('sha256').update(JSON.stringify(upstreamBody)).digest('hex');
-    const idem =
-      typeof req.headers['idempotency-key'] === 'string' ? req.headers['idempotency-key'] : null;
-
-    if (idem && !/^[A-Za-z0-9._:-]{8,128}$/.test(idem)) {
-      return sendError(reply, 400, 'invalid_idempotency_key', 'Invalid Idempotency-Key', req.id);
-    }
-    if (idem && parsed.data.stream) {
-      return sendError(
+      return sendProtocolError(
         reply,
+        'openai',
         400,
-        'stream_idempotency_unsupported',
-        'Idempotency-Key is for non-streaming requests',
+        'invalid_request',
+        'Request body failed schema validation',
         req.id
       );
     }
 
-    if (idem) {
-      const state = claim(deps.db, key.tenantId, idem, requestHash);
-      if (state.state === 'cached') return reply.code(state.statusCode).send(state.body);
-      if (state.state === 'conflict') {
-        return sendError(reply, 409, 'idempotency_conflict', 'Key reused with different request', req.id);
-      }
-      if (state.state === 'in_progress') {
-        return reply.header('retry-after', '1').code(409).send({
-          error: {
-            code: 'idempotency_in_progress',
-            message: 'Matching request is still running',
-            trace_id: req.id,
-            retryable: true
-          }
-        });
-      }
-    }
+    const required: Capability[] = ['text'];
+    if (parsed.data.tools?.length) required.push('tools');
+    if (parsed.data.stream) required.push('stream');
 
-    const estimate = Math.ceil(maxTokens + JSON.stringify(parsed.data.messages).length / 4);
-    let reservation: string;
+    let model: ModelPolicy;
     try {
-      reservation = deps.db.reserveBudget(
-        key.tenantId,
-        req.id,
-        estimate,
-        deps.config.DAILY_BUDGET_UNITS
-      );
-    } catch {
-      if (idem) abandon(deps.db, key.tenantId, idem, requestHash);
-      return sendError(reply, 402, 'budget_exceeded', 'Daily budget exhausted', req.id);
-    }
-
-    // One tenant must not be able to occupy every upstream permit on the host.
-    const tenantLimits = deps.db.tenants.limits(key.tenantId);
-    const releaseTenantSlot = tenantConcurrency.tryAcquire(
-      key.tenantId,
-      tenantLimits?.maxConcurrent ?? deps.config.TENANT_MAX_CONCURRENT
-    );
-    if (!releaseTenantSlot) {
-      deps.db.releaseBudget(reservation, key.tenantId);
-      if (idem) abandon(deps.db, key.tenantId, idem, requestHash);
-      reply.header('retry-after', '1');
-      return sendError(
-        reply,
-        503,
-        'tenant_overloaded',
-        'Tenant concurrency limit reached',
-        req.id,
-        true
-      );
-    }
-    let slotHandedToStream = false;
-
-    const aborter = new AbortController();
-    req.raw.once('aborted', () => aborter.abort());
-    reply.raw.once('close', () => {
-      if (!reply.raw.writableEnded) aborter.abort();
-    });
-
-    try {
-      const upstream = await deps.upstream.request(
-        '/v1/chat/completions',
-        {
-          method: 'POST',
-          headers: { 'content-type': 'application/json', 'x-request-id': req.id },
-          body: JSON.stringify(upstreamBody)
-        },
-        aborter.signal
-      );
-
-      if (parsed.data.stream) {
-        if (!upstream.ok || !upstream.body) {
-          deps.db.releaseBudget(reservation, key.tenantId);
-          return sendError(reply, 502, 'upstream_error', 'Upstream rejected request', req.id, true);
-        }
-        reply.hijack();
-        reply.raw.writeHead(200, {
-          'content-type': 'text/event-stream',
-          'cache-control': 'no-store',
-          'x-request-id': req.id,
-          'x-accel-buffering': 'no'
-        });
-        const stream = Readable.fromWeb(upstream.body as never);
-
-        // A stalled upstream must not hold a connection, permit, and budget
-        // reservation open indefinitely on a small host.
-        let idleTimer: NodeJS.Timeout | null = null;
-        const clearIdle = () => {
-          if (idleTimer) {
-            clearTimeout(idleTimer);
-            idleTimer = null;
-          }
-        };
-        const armIdle = () => {
-          clearIdle();
-          idleTimer = setTimeout(() => {
-            aborter.abort();
-            stream.destroy(new Error('stream_idle_timeout'));
-          }, deps.config.STREAM_IDLE_TIMEOUT_MS);
-          idleTimer.unref();
-        };
-
-        const onDisconnect = () => {
-          if (!reply.raw.writableEnded) stream.destroy(new Error('client_disconnected'));
-        };
-        reply.raw.once('close', onDisconnect);
-        stream.on('data', armIdle);
-        stream.once('end', () => {
-          clearIdle();
-          releaseTenantSlot();
-          deps.db.settleBudget(reservation, key.tenantId, estimate);
-          deps.db.audit(key.tenantId, 'llm.stream.completed', req.id, { model: parsed.data.model });
-        });
-        stream.once('error', () => {
-          clearIdle();
-          releaseTenantSlot();
-          deps.db.releaseBudget(reservation, key.tenantId);
-          if (!reply.raw.writableEnded) reply.raw.end();
-        });
-        armIdle();
-        // The slot now belongs to the stream lifecycle, not to this handler.
-        slotHandedToStream = true;
-        stream.pipe(reply.raw);
-        return reply;
-      }
-
-      const body = (await upstream.json()) as unknown;
-      if (!upstream.ok) {
-        deps.db.releaseBudget(reservation, key.tenantId);
-        if (idem) abandon(deps.db, key.tenantId, idem, requestHash);
-        return sendError(
-          reply,
-          502,
-          'upstream_error',
-          'Upstream rejected request',
-          req.id,
-          upstream.status >= 500
-        );
-      }
-
-      deps.db.settleBudget(reservation, key.tenantId, estimate);
-      deps.db.audit(key.tenantId, 'llm.request', req.id, {
-        model: parsed.data.model,
-        stream: false,
-        status: upstream.status
-      });
-      if (idem) complete(deps.db, key.tenantId, idem, requestHash, upstream.status, body);
-      return reply.code(upstream.status).send(body);
+      model = resolveModel(parsed.data.model, required, key.tenantId);
     } catch (error) {
-      deps.db.releaseBudget(reservation, key.tenantId);
-      if (idem) abandon(deps.db, key.tenantId, idem, requestHash);
-      return handleError(error, reply, req.id);
-    } finally {
-      if (!slotHandedToStream) releaseTenantSlot();
+      return handleError(error, reply, req.id, 'openai');
     }
+
+    const maxTokens = Math.min(
+      parsed.data.max_tokens ?? parsed.data.max_completion_tokens ?? DEFAULT_MAX_TOKENS,
+      model.maxOutputTokens
+    );
+    return execute(req, reply, key, {
+      dialect: 'openai',
+      upstreamPath: '/v1/chat/completions',
+      body: {
+        ...parsed.data,
+        model: model.upstreamModel,
+        max_tokens: maxTokens,
+        max_completion_tokens: undefined,
+        // Usage must be reported for streaming settlement to be real.
+        stream_options: parsed.data.stream
+          ? { ...parsed.data.stream_options, include_usage: true }
+          : parsed.data.stream_options
+      },
+      stream: parsed.data.stream,
+      model: parsed.data.model,
+      estimateUnits: Math.ceil(maxTokens + JSON.stringify(parsed.data.messages).length / 4),
+      auditEvent: 'llm.request',
+      auditStreamEvent: 'llm.stream.completed'
+    });
   });
 
-  app.setErrorHandler((error, req, reply) => handleError(error, reply, req.id));
+  app.post('/v1/responses', async (req, reply) => {
+    let key: ApiKeyRecord;
+    try {
+      key = await authenticate(req, 'responses:write');
+    } catch (error) {
+      return handleError(error, reply, req.id, 'openai');
+    }
+
+    const parsed = responsesRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return sendProtocolError(
+        reply,
+        'openai',
+        400,
+        'invalid_request',
+        'Request body failed schema validation',
+        req.id
+      );
+    }
+
+    const required: Capability[] = ['text'];
+    if (parsed.data.tools?.length) required.push('tools');
+    if (parsed.data.stream) required.push('stream');
+
+    let model: ModelPolicy;
+    try {
+      model = resolveModel(parsed.data.model, required, key.tenantId);
+    } catch (error) {
+      return handleError(error, reply, req.id, 'openai');
+    }
+
+    const maxTokens = Math.min(
+      parsed.data.max_output_tokens ?? DEFAULT_MAX_TOKENS,
+      model.maxOutputTokens
+    );
+    return execute(req, reply, key, {
+      dialect: 'openai',
+      upstreamPath: '/v1/responses',
+      body: { ...parsed.data, model: model.upstreamModel, max_output_tokens: maxTokens },
+      stream: parsed.data.stream,
+      model: parsed.data.model,
+      estimateUnits: Math.ceil(
+        maxTokens + (textLength(parsed.data.input) + textLength(parsed.data.instructions)) / 4
+      ),
+      auditEvent: 'llm.responses.request',
+      auditStreamEvent: 'llm.responses.stream.completed'
+    });
+  });
+
+  app.post('/v1/messages', async (req, reply) => {
+    let key: ApiKeyRecord;
+    try {
+      key = await authenticate(req, 'messages:write');
+    } catch (error) {
+      return handleError(error, reply, req.id, 'anthropic');
+    }
+
+    const parsed = messagesRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return sendProtocolError(
+        reply,
+        'anthropic',
+        400,
+        'invalid_request',
+        'Request body failed schema validation',
+        req.id
+      );
+    }
+
+    const required: Capability[] = ['text'];
+    if (parsed.data.tools?.length) required.push('tools');
+    if (parsed.data.stream) required.push('stream');
+
+    let model: ModelPolicy;
+    try {
+      model = resolveModel(parsed.data.model, required, key.tenantId);
+    } catch (error) {
+      return handleError(error, reply, req.id, 'anthropic');
+    }
+
+    const maxTokens = Math.min(parsed.data.max_tokens, model.maxOutputTokens);
+    return execute(req, reply, key, {
+      dialect: 'anthropic',
+      upstreamPath: '/v1/messages',
+      body: { ...parsed.data, model: model.upstreamModel, max_tokens: maxTokens },
+      stream: parsed.data.stream,
+      model: parsed.data.model,
+      estimateUnits: Math.ceil(
+        maxTokens +
+          (JSON.stringify(parsed.data.messages).length + textLength(parsed.data.system)) / 4
+      ),
+      auditEvent: 'llm.messages.request',
+      auditStreamEvent: 'llm.messages.stream.completed'
+    });
+  });
+
+  app.post('/v1/messages/count_tokens', async (req, reply) => {
+    let key: ApiKeyRecord;
+    try {
+      key = await authenticate(req, 'messages:write');
+    } catch (error) {
+      return handleError(error, reply, req.id, 'anthropic');
+    }
+
+    const parsed = countTokensRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return sendProtocolError(
+        reply,
+        'anthropic',
+        400,
+        'invalid_request',
+        'Request body failed schema validation',
+        req.id
+      );
+    }
+
+    let model: ModelPolicy;
+    try {
+      model = resolveModel(parsed.data.model, ['text'], key.tenantId);
+    } catch (error) {
+      return handleError(error, reply, req.id, 'anthropic');
+    }
+
+    // Counting is cheap but still upstream work, so it stays inside the same
+    // budget, tenant concurrency, and audit envelope.
+    return execute(req, reply, key, {
+      dialect: 'anthropic',
+      upstreamPath: '/v1/messages/count_tokens',
+      body: { ...parsed.data, model: model.upstreamModel },
+      stream: false,
+      model: parsed.data.model,
+      estimateUnits: 1,
+      auditEvent: 'llm.messages.count_tokens',
+      auditStreamEvent: 'llm.messages.count_tokens'
+    });
+  });
+
+  app.setErrorHandler((error, req, reply) => handleError(error, reply, req.id, 'openai'));
   return app;
 }
 
-function handleError(error: unknown, reply: Parameters<typeof sendError>[0], traceId: string) {
+function handleError(
+  error: unknown,
+  reply: FastifyReply,
+  traceId: string,
+  dialect: Dialect = 'openai'
+) {
   if (error instanceof RateLimitError) {
     reply.header('retry-after', String(error.retryAfterSeconds));
-    return sendError(reply, 429, 'rate_limited', 'Too many requests', traceId, true);
+    return sendProtocolError(reply, dialect, 429, 'rate_limited', 'Too many requests', traceId, true);
   }
   if (error instanceof AuthError || error instanceof PolicyError) {
-    return sendError(reply, error.statusCode, error.code, error.message, traceId);
+    return sendProtocolError(reply, dialect, error.statusCode, error.code, error.message, traceId);
   }
   if (error instanceof OverloadError) {
     reply.header('retry-after', '1');
-    return sendError(reply, 503, 'overloaded', 'Concurrency limit reached', traceId, true);
+    return sendProtocolError(
+      reply,
+      dialect,
+      503,
+      'overloaded',
+      'Concurrency limit reached',
+      traceId,
+      true
+    );
   }
-  return sendError(reply, 502, 'gateway_error', 'Request could not be completed', traceId, true);
+  return sendProtocolError(
+    reply,
+    dialect,
+    502,
+    'gateway_error',
+    'Request could not be completed',
+    traceId,
+    true
+  );
 }

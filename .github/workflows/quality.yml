@@ -5,6 +5,9 @@ on:
     branches: [main]
 permissions:
   contents: read
+concurrency:
+  group: quality-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   validate:
     runs-on: ubuntu-24.04
@@ -14,17 +17,31 @@ jobs:
         with: { fetch-depth: 0 }
       - uses: actions/setup-node@v4
         with: { node-version: '22' }
-      - run: npm install --no-audit --no-fund
-      - run: npm run validate
-      - run: npm run build
-      - name: Validate operational scripts
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - name: Convention gate
+        run: npm run check:conventions
+      - name: Secret scan
+        run: npm run scan:secrets
+      - name: Lint
+        run: npm run lint
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Tests
+        run: npm test -- --reporter=verbose
+      - name: Build
+        run: npm run build
+      - name: Shell syntax
         run: bash -n scripts/*.sh
-      - name: Build immutable production artifact
+      - name: Package immutable release
         run: scripts/build-release.sh "$GITHUB_SHA"
       - name: Verify artifact checksum
         run: cd .release && sha256sum -c "$GITHUB_SHA.tar.gz.sha256"
-      - name: Verify tracked tree remains clean
+      - name: Verify tracked tree is clean
         run: git diff --exit-code
+      - name: Report gate result
+        if: always()
+        run: echo "quality gates finished with status ${{ job.status }} for $GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:
           name: gateway-${{ github.sha }}
@@ -32,12 +49,3 @@ jobs:
             .release/${{ github.sha }}.tar.gz
             .release/${{ github.sha }}.tar.gz.sha256
           if-no-files-found: error
-  secrets:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
-      - uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

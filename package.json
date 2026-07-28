@@ -8,18 +8,16 @@
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/main.js",
     "dev": "tsx watch src/main.ts",
-    "lint": "eslint src tests scripts --max-warnings=0",
+    "lint": "eslint src tests scripts eslint.config.js --max-warnings=0",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "check:conventions": "node scripts/check-conventions.mjs",
-    "validate": "npm run check:conventions && npm run lint && npm run typecheck && npm test"
+    "scan:secrets": "node scripts/scan-secrets.mjs",
+    "validate": "npm run check:conventions && npm run scan:secrets && npm run lint && npm run typecheck && npm test"
   },
   "dependencies": {
-    "@fastify/rate-limit": "^10.2.1",
     "better-sqlite3": "^12.2.0",
     "fastify": "^5.4.0",
-    "fastify-plugin": "^5.0.1",
-    "jose": "^6.0.12",
     "pino": "^9.7.0",
     "zod": "^3.25.67"
   },

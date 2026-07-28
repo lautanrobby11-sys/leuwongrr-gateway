@@ -10,15 +10,15 @@ import {
 
 const PATH_LINE = /^ {2}(\/\S*):$/;
 const METHOD_LINE = /^ {4}(get|post):$/;
+const OPENAPI_PATH = join(process.cwd(), 'docs/api/openapi.yaml');
 
 /**
  * A line scanner rather than a YAML parser: the gateway ships no parser
  * dependency and the lockfile is pinned, so the document is authored with a
  * fixed two-space path and four-space method layout that this can read.
  */
-function operationsInSpec(): Set<string> {
-  const source = readFileSync(join(process.cwd(), 'docs/api/openapi.yaml'), 'utf8');
-  const lines = source.split('\n');
+function operationsInSource(source: string): Set<string> {
+  const lines = source.split(/\r?\n/);
   const start = lines.indexOf('paths:');
   if (start === -1) throw new Error('openapi.yaml declares no paths block');
   const found = new Set<string>();
@@ -38,6 +38,10 @@ function operationsInSpec(): Set<string> {
   return found;
 }
 
+function operationsInSpec(): Set<string> {
+  return operationsInSource(readFileSync(OPENAPI_PATH, 'utf8'));
+}
+
 function declared(): Set<string> {
   return new Set(DOCUMENTED_OPERATIONS.map((op) => `${op.method} ${op.path}`));
 }
@@ -47,6 +51,11 @@ describe('published API contract', () => {
     const spec = [...operationsInSpec()].sort();
     expect(spec.length).toBeGreaterThan(30);
     expect(spec).toEqual([...declared()].sort());
+  });
+
+  it('parses the contract after a Windows CRLF checkout', () => {
+    const source = readFileSync(OPENAPI_PATH, 'utf8').replace(/\r?\n/g, '\r\n');
+    expect([...operationsInSource(source)].sort()).toEqual([...declared()].sort());
   });
 
   it('keeps every documented path reachable through the allowlist', () => {

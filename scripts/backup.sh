@@ -33,4 +33,17 @@ rsync -a --delete "$ROOT/data/attachments/" "$WORK/attachments/"
 tar -C "$WORK" -czf - gateway.db attachments manifest.sha256 | age -r "$AGE_RECIPIENT" -o "$ROOT/data/backups/$STAMP.tar.gz.age"
 sha256sum "$ROOT/data/backups/$STAMP.tar.gz.age" > "$ROOT/data/backups/$STAMP.tar.gz.age.sha256"
 chmod 600 "$ROOT/data/backups/$STAMP.tar.gz.age" "$ROOT/data/backups/$STAMP.tar.gz.age.sha256"
+
+# Retention runs only after the new archive exists and its checksum is written,
+# so a failed run can never delete the last good copy. Pruning is by count, not
+# age: a host that stops taking snapshots must keep the old ones rather than
+# quietly expire into having none.
+KEEP=${BACKUP_KEEP:-14}
+if [[ $KEEP =~ ^[0-9]+$ ]] && (( KEEP > 0 )); then
+  while IFS= read -r stale; do
+    [[ -n $stale ]] || continue
+    rm -f "$stale" "$stale.sha256"
+  done < <(ls -1t "$ROOT"/data/backups/*.tar.gz.age 2>/dev/null | tail -n +$((KEEP + 1)) || true)
+fi
+
 echo "$STAMP"

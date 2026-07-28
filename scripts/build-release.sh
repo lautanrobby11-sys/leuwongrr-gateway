@@ -30,7 +30,14 @@ if [[ -f web/package-lock.json ]]; then
   cp web/package-lock.json "$STAGE/web/package-lock.json"
 fi
 cp scripts/deploy.sh scripts/rollback.sh scripts/backup.sh scripts/restore-drill.sh "$STAGE/scripts/"
-cp infra/systemd/leuwongrr-gateway.service "$STAGE/infra/systemd/"
+# Every unit the runbook tells the operator to install must ship in the
+# artifact. The snapshot timer is installed from current/infra/systemd, so a
+# release that omits it turns the documented command into "No such file or
+# directory" on a host that is otherwise perfectly deployed.
+for unit in leuwongrr-gateway.service leuwongrr-gateway-snapshot.service leuwongrr-gateway-snapshot.timer; do
+  [[ -f infra/systemd/$unit ]] || { echo "unit missing from repository: infra/systemd/$unit" >&2; exit 1; }
+  cp "infra/systemd/$unit" "$STAGE/infra/systemd/"
+done
 chmod 0755 "$STAGE/scripts/"*.sh
 # The operator key CLI ships as part of dist so issuance always matches the
 # running service instead of a separate copy of the hashing rules.

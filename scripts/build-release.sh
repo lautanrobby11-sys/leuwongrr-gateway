@@ -11,10 +11,12 @@ mkdir -p .release "$STAGE/dist" "$STAGE/scripts" "$STAGE/infra/systemd"
 cp -a dist/. "$STAGE/dist/"
 cp package.json "$STAGE/package.json"
 [[ -f package-lock.json ]] && cp package-lock.json "$STAGE/package-lock.json"
-cp scripts/seed-tenant.mjs "$STAGE/scripts/seed-tenant.mjs"
 cp scripts/deploy.sh scripts/rollback.sh scripts/backup.sh scripts/restore-drill.sh "$STAGE/scripts/"
 cp infra/systemd/leuwongrr-gateway.service "$STAGE/infra/systemd/"
-chmod 0755 "$STAGE/scripts/"*.sh "$STAGE/scripts/seed-tenant.mjs"
+chmod 0755 "$STAGE/scripts/"*.sh
+# The operator key CLI ships as part of dist so issuance always matches the
+# running service instead of a separate copy of the hashing rules.
+[[ -f $STAGE/dist/cli/keys.js ]] || { echo 'operator key CLI missing from build output' >&2; exit 1; }
 printf 'git_sha=%s\nbuilt_at=%s\nnode=%s\n' "$SHA" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(node --version)" > "$STAGE/RELEASE"
 (
   cd "$STAGE"

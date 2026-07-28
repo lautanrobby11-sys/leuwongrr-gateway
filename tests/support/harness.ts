@@ -6,7 +6,7 @@ import { buildApp } from '../../src/http/app.js';
 import { GatewayDatabase } from '../../src/persistence/database.js';
 import { OmniRouteClient } from '../../src/upstream.js';
 import { createLogger } from '../../src/observability.js';
-import { issueApiKey, type Scope } from '../../src/auth/api-keys.js';
+import { type Scope } from '../../src/auth/api-keys.js';
 import type { Config } from '../../src/config.js';
 
 export const testConfig: Config = {
@@ -51,14 +51,10 @@ export function createTempDatabase(): { db: GatewayDatabase; dispose: () => void
   };
 }
 
+/** Provisions through the canonical store so tests exercise the real path. */
 export function seedTenant(db: GatewayDatabase, tenantId: string, scopes: Scope[]): string {
-  const issued = issueApiKey(testConfig.API_KEY_PEPPER);
-  const now = new Date().toISOString();
-  db.db.prepare('INSERT OR IGNORE INTO tenants(id,name,created_at) VALUES(?,?,?)').run(tenantId, tenantId, now);
-  db.db
-    .prepare('INSERT INTO api_keys(id,tenant_id,key_hash,prefix,last4,scopes_json,created_at) VALUES(?,?,?,?,?,?,?)')
-    .run(`key-${tenantId}`, tenantId, issued.hash, issued.prefix, issued.last4, JSON.stringify(scopes), now);
-  return issued.plaintext;
+  db.tenants.upsertTenant(tenantId, tenantId);
+  return db.tenants.issue({ tenantId, name: 'harness', scopes }).plaintext;
 }
 
 export function createHarness(
@@ -71,7 +67,7 @@ export function createHarness(
     cacheKib: config.SQLITE_CACHE_KIB
   });
   const token = seedTenant(db, 'tenant-a', ['models:read', 'chat:write']);
-  db.db.prepare('INSERT INTO model_policies(tenant_id,model_id,enabled) VALUES(?,?,1)').run('tenant-a', 'lwrr-text');
+  db.tenants.setModelPolicy('tenant-a', 'lwrr-text', true);
   const fetcher = vi.fn(async () => respond());
   const upstream = new OmniRouteClient(
     config.OMNIROUTE_URL,

@@ -59,9 +59,13 @@ sudo nano /opt/leuwongrr-gateway/config/gateway.env
    - Package contents: `dist/` (including `dist/public` and `dist/cli/keys.js`),
      `package.json`, `web/package.json`, both lockfiles when present,
      `scripts/{deploy,rollback,backup,restore-drill}.sh`,
-     `infra/systemd/leuwongrr-gateway.service`, `RELEASE`, `manifest.sha256`
+     `infra/systemd/leuwongrr-gateway.service`,
+     `infra/systemd/leuwongrr-gateway-snapshot.service`,
+     `infra/systemd/leuwongrr-gateway-snapshot.timer`, `RELEASE`,
+     `manifest.sha256`
    - The script refuses to package unless
-     `dist/public/{admin,member,chat,login}.html` and `dist/public/assets` exist.
+     `dist/public/{admin,member,chat,login}.html` and `dist/public/assets` exist,
+     and unless every unit above is present in the repository.
 3. Transfer only the artifact and checksum, then run `sudo scripts/deploy.sh <40-char-sha> <artifact.tar.gz>`.
 4. Deploy verifies checksum + manifest, requires `package-lock.json` and the four
    console entries, installs production dependencies on the server, runs preflight
@@ -142,11 +146,15 @@ cannot be re-encrypted.
 ## Scheduled snapshots
 
 A snapshot that runs only when someone remembers is not a backup. Install the
-timer once the first manual drill has passed:
+timer once the first manual drill has passed, and only from a release that
+actually contains the units — they ship inside the artifact, so the files exist
+under `current/infra/systemd` only after a deploy of that release:
 
 ```bash
-# the public recipient is not a secret; the identity file stays off the host
-sudo sh -c 'printf "AGE_RECIPIENT=%s\n" age1... >> /opt/leuwongrr-gateway/config/gateway.env'
+# the public recipient is not a secret; the identity file stays off the host.
+# Substitute the real age1... value; a literal placeholder makes every
+# scheduled run fail inside age with an unusable recipient.
+sudo sh -c 'printf "AGE_RECIPIENT=%s\n" age1realrecipientvalue >> /opt/leuwongrr-gateway/config/gateway.env'
 sudo install -m 0644 \
   /opt/leuwongrr-gateway/current/infra/systemd/leuwongrr-gateway-snapshot.service \
   /opt/leuwongrr-gateway/current/infra/systemd/leuwongrr-gateway-snapshot.timer \

@@ -1,27 +1,28 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
+/** Scopes backed by an implemented, allowlisted route. */
 export type Scope =
   | 'models:read'
   | 'chat:write'
-  | 'usage:read'
   | 'responses:write'
-  | 'messages:write'
+  | 'messages:write';
+
+/** Reserved names are documented but cannot be issued before their routes exist. */
+export type ReservedScope =
+  | 'usage:read'
   | 'embeddings:write'
   | 'media:write'
   | 'files:write'
   | 'realtime:write';
 
-/** Canonical scope list. Operator tooling and validation both read this. */
+export type KnownScope = Scope | ReservedScope;
+
+/** Canonical implemented scope list used by operator tooling and validation. */
 export const SCOPES: readonly Scope[] = [
   'models:read',
   'chat:write',
-  'usage:read',
   'responses:write',
-  'messages:write',
-  'embeddings:write',
-  'media:write',
-  'files:write',
-  'realtime:write'
+  'messages:write'
 ];
 
 export type KeyMode = 'live' | 'test';

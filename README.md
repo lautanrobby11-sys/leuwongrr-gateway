@@ -74,7 +74,7 @@ sudo -u leuwongrr-gateway bash -lc '
 
   node dist/cli/keys.js tenant:create --tenant demo --name "Demo" --model lwrr-text
   node dist/cli/keys.js key:issue --tenant demo --name laptop \
-    --scopes models:read,chat:write --expires-days 90
+    --scopes models:read,chat:write,responses:write,messages:write --expires-days 90
 '
 ```
 
@@ -92,13 +92,47 @@ Rotasi tanpa downtime: `key:rotate --grace-minutes 60`, sebarkan key baru,
 lalu pastikan `key:list` menunjukkan key lama sudah tidak dipakai sebelum masa
 tenggang habis.
 
-## Endpoint fondasi
+## Endpoint publik
 
-- `GET /health/live` — publik minimal
-- `GET /health/ready` — token internal
-- `GET /v1/models` — key + `models:read`
-- `POST /v1/chat/completions` — key + `chat:write`
-- di luar allowlist → 404, tanpa menyentuh OmniRoute
+| Endpoint | Scope | Catatan |
+| --- | --- | --- |
+| `GET /health/live` | — | Publik minimal, tanpa detail dependency |
+| `GET /health/ready` | token internal | Memeriksa SQLite dan OmniRoute |
+| `GET /v1/models` | `models:read` | Difilter entitlement tenant |
+| `POST /v1/chat/completions` | `chat:write` | Streaming dan non-streaming |
+| `POST /v1/responses` | `responses:write` | OpenAI Responses |
+| `POST /v1/messages` | `messages:write` | Anthropic Messages |
+| `POST /v1/messages/count_tokens` | `messages:write` | Hitung token |
+
+Di luar allowlist selalu `404` dan tidak pernah menyentuh OmniRoute. Tidak ada
+passthrough catch-all.
+
+Perilaku yang berlaku sama di seluruh endpoint di atas, karena semuanya
+melewati satu pipeline `src/http/pipeline.ts`:
+
+- Kontrak request ketat; field yang tidak dikenal ditolak, bukan diteruskan.
+- Capability model diperiksa sebelum biaya dikeluarkan.
+- `Idempotency-Key` untuk request non-streaming.
+- Budget direservasi dari estimasi lalu **disettle dari usage yang dilaporkan
+  upstream**; estimasi hanya dipakai bila upstream tidak melaporkan usage.
+- Batas rpm dan concurrency per tenant; kelebihan dijawab `503 tenant_overloaded`
+  dengan `Retry-After`.
+- Error mengikuti dialek pemanggil: `/v1/messages` memakai envelope Anthropic,
+  endpoint lain memakai envelope `{ error: { code, message, trace_id, retryable } }`.
+
+### Contoh klien
+
+```bash
+# OpenAI-compatible (Codex, SDK openai)
+curl -sS https://api.leuwongrr.cloud/v1/chat/completions \
+  -H "authorization: Bearer $LWRR_KEY" -H 'content-type: application/json' \
+  -d '{"model":"lwrr-text","messages":[{"role":"user","content":"halo"}]}'
+
+# Anthropic-compatible (SDK anthropic)
+curl -sS https://api.leuwongrr.cloud/v1/messages \
+  -H "authorization: Bearer $LWRR_KEY" -H 'content-type: application/json' \
+  -d '{"model":"lwrr-text","max_tokens":256,"messages":[{"role":"user","content":"halo"}]}'
+```
 
 ## Operasi
 

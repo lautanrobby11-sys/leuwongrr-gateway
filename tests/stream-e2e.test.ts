@@ -3,20 +3,16 @@ import type { AddressInfo } from 'node:net';
 import { createHarness, type Harness } from './support/harness.js';
 
 let harness: Harness | null = null;
-let listening = false;
 
 afterEach(async () => {
   if (harness) {
-    // listen() owns app.close via cleanup; avoid double-close races.
     await harness.cleanup();
     harness = null;
-    listening = false;
   }
 });
 
 interface StreamControl {
   cancelled: () => boolean;
-  pulls: () => number;
 }
 
 /**
@@ -30,21 +26,17 @@ function createSseUpstream(options: {
 }): { respond: () => Response; control: StreamControl } {
   const encoder = new TextEncoder();
   let cancelled = false;
-  let pulls = 0;
   const delayMs = options.delayMs ?? 20;
 
   const control: StreamControl = {
-    cancelled: () => cancelled,
-    pulls: () => pulls
+    cancelled: () => cancelled
   };
 
   const respond = (): Response => {
     let index = 0;
     cancelled = false;
-    pulls = 0;
     const body = new ReadableStream<Uint8Array>({
       async pull(controller) {
-        pulls += 1;
         if (cancelled) {
           try {
             controller.close();
@@ -97,7 +89,6 @@ function createSseUpstream(options: {
 
 async function listen(active: Harness): Promise<string> {
   await active.app.listen({ host: '127.0.0.1', port: 0 });
-  listening = true;
   const address = active.app.server.address() as AddressInfo;
   return `http://127.0.0.1:${address.port}`;
 }
@@ -145,21 +136,18 @@ async function postChat(
   content: string,
   init: RequestInit = {}
 ): Promise<Response> {
+  const headers = new Headers(init.headers);
+  headers.set('authorization', `Bearer ${token}`);
+  headers.set('content-type', 'application/json');
   return fetch(`${baseUrl}/v1/chat/completions`, {
+    ...init,
     method: 'POST',
-    headers: {
-      authorization: `Bearer ${token}`,
-      'content-type': 'application/json',
-      ...(init.headers ?? {})
-    },
+    headers,
     body: JSON.stringify({
       model: 'lwrr-text',
       stream: true,
       messages: [{ role: 'user', content }]
-    }),
-    ...init,
-    // body/headers above win over spread when caller omits them
-    method: 'POST'
+    })
   });
 }
 

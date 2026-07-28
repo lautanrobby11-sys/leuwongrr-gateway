@@ -100,7 +100,10 @@ jobs:
 
       - name: Lint
         id: lint
-        run: npm run lint
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run lint 2>&1 | tee /tmp/lint.log
 
       - name: Typecheck
         id: typecheck
@@ -111,7 +114,10 @@ jobs:
 
       - name: Tests
         id: tests
-        run: npm test -- --reporter=verbose
+        shell: bash
+        run: |
+          set -o pipefail
+          npm test -- --reporter=verbose 2>&1 | tee /tmp/tests.log
 
       - name: Build gateway and console
         id: build
@@ -176,25 +182,38 @@ jobs:
               ['checksum', '${{ steps.checksum.outcome }}'],
               ['clean', '${{ steps.clean.outcome }}']
             ];
+            const required = ['conventions','secrets','lint','typecheck','tests','build','console','shell','package','checksum','clean'];
+            const redRequired = rows.filter(([gate, outcome]) => required.includes(gate) && outcome !== 'success');
             const bodyLines = [
               marker,
               '## quality diagnostics',
               '',
               `SHA: \`${context.sha}\``,
               '',
+              redRequired.length === 0
+                ? '**Merge/deploy gate: GREEN** — required PR gates are success.'
+                : '**Merge/deploy gate: RED — do not merge or deploy.** Fix required gates first.',
+              '',
               '| Gate | Outcome |',
               '| --- | --- |',
               ...rows.map(([gate, outcome]) => `| ${gate} | **${outcome}** |`)
             ];
-            if ('${{ steps.typecheck.outcome }}' === 'failure' && fs.existsSync('/tmp/typecheck.log')) {
-              const diagnostics = fs.readFileSync('/tmp/typecheck.log', 'utf8')
-                .split('\n')
-                .filter((line) => /error TS\d+:/.test(line))
-                .slice(0, 50)
-                .join('\n');
-              bodyLines.push('', '### TypeScript diagnostics', '', '```text', diagnostics || 'No TS diagnostic line captured.', '```');
+            function appendSanitized(title, path, filter) {
+              if (!fs.existsSync(path)) return;
+              const lines = fs.readFileSync(path, 'utf8').split('\n').filter(filter).slice(0, 40);
+              bodyLines.push('', `### ${title}`, '', '```text', lines.join('\n') || 'No matching diagnostic line captured.', '```');
             }
-            bodyLines.push('', 'Only sanitized compiler diagnostics are copied; no runtime output or secrets.');
+            if ('${{ steps.lint.outcome }}' === 'failure') {
+              appendSanitized('Lint diagnostics', '/tmp/lint.log', (line) => /error|✖|problems?/.test(line));
+            }
+            if ('${{ steps.typecheck.outcome }}' === 'failure') {
+              appendSanitized('TypeScript diagnostics', '/tmp/typecheck.log', (line) => /error TS\d+:/.test(line));
+            }
+            if ('${{ steps.tests.outcome }}' === 'failure') {
+              appendSanitized('Test failures', '/tmp/tests.log', (line) => /FAIL |AssertionError|Error:|× |x /.test(line));
+            }
+            bodyLines.push('', 'Only sanitized compiler/test diagnostics are copied; no runtime secrets.');
+            bodyLines.push('', 'Rule: red required gate => no merge, no deploy, no DONE status.');
             const body = bodyLines.join('\n');
             const comments = await github.paginate(github.rest.issues.listComments, {
               owner: context.repo.owner,
@@ -233,6 +252,7 @@ jobs:
             echo "- node: $(node --version 2>/dev/null || echo unavailable)"
             echo "- root lockfile: $([[ -f package-lock.json ]] && echo present || echo absent)"
             echo "- console lockfile: $([[ -f web/package-lock.json ]] && echo present || echo absent)"
+            echo "- rule: red required gate => no merge/deploy"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload immutable artifact

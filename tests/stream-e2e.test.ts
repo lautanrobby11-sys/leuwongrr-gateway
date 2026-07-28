@@ -3,88 +3,110 @@ import type { AddressInfo } from 'node:net';
 import { createHarness, type Harness } from './support/harness.js';
 
 let harness: Harness | null = null;
+let listening = false;
 
 afterEach(async () => {
   if (harness) {
+    // listen() owns app.close via cleanup; avoid double-close races.
     await harness.cleanup();
     harness = null;
+    listening = false;
   }
 });
 
-interface StreamFixture {
-  body: Response;
+interface StreamControl {
   cancelled: () => boolean;
   pulls: () => number;
 }
 
-/** Slow SSE body so the client can disconnect before the upstream finishes. */
-function slowSseFixture(options: {
+/**
+ * Build a fresh SSE Response on every call. Reusing one Response body locks the
+ * stream after the first upstream request and makes concurrent/retry cases flake.
+ */
+function createSseUpstream(options: {
   chunks: string[];
   delayMs?: number;
   hangAfterFirst?: boolean;
-}): StreamFixture {
+}): { respond: () => Response; control: StreamControl } {
   const encoder = new TextEncoder();
   let cancelled = false;
   let pulls = 0;
-  let index = 0;
-  const delayMs = options.delayMs ?? 40;
+  const delayMs = options.delayMs ?? 20;
 
-  const body = new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      pulls += 1;
-      if (cancelled) {
-        controller.close();
-        return;
-      }
-      if (index >= options.chunks.length) {
-        if (options.hangAfterFirst) {
-          await new Promise<void>((resolve) => {
-            const timer = setTimeout(resolve, 30_000);
-            timer.unref?.();
-          });
-          if (!cancelled) controller.close();
-          return;
-        }
-        controller.close();
-        return;
-      }
-      const chunk = options.chunks[index];
-      index += 1;
-      controller.enqueue(encoder.encode(chunk));
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, delayMs);
-        timer.unref?.();
-      });
-    },
-    cancel() {
-      cancelled = true;
-    }
-  });
-
-  return {
-    body: new Response(body, {
-      status: 200,
-      headers: { 'content-type': 'text/event-stream' }
-    }),
+  const control: StreamControl = {
     cancelled: () => cancelled,
     pulls: () => pulls
   };
+
+  const respond = (): Response => {
+    let index = 0;
+    cancelled = false;
+    pulls = 0;
+    const body = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        pulls += 1;
+        if (cancelled) {
+          try {
+            controller.close();
+          } catch {
+            // already closed by cancel()
+          }
+          return;
+        }
+        if (index >= options.chunks.length) {
+          if (options.hangAfterFirst) {
+            // Stay open until cancel/idle/timeout tears the stream down.
+            await new Promise<void>((resolve) => {
+              const timer = setTimeout(resolve, 60_000);
+              timer.unref?.();
+            });
+            if (!cancelled) {
+              try {
+                controller.close();
+              } catch {
+                // ignore
+              }
+            }
+            return;
+          }
+          controller.close();
+          return;
+        }
+        const chunk = options.chunks[index]!;
+        index += 1;
+        controller.enqueue(encoder.encode(chunk));
+        if (index < options.chunks.length || options.hangAfterFirst) {
+          await new Promise<void>((resolve) => {
+            const timer = setTimeout(resolve, delayMs);
+            timer.unref?.();
+          });
+        }
+      },
+      cancel() {
+        cancelled = true;
+      }
+    });
+    return new Response(body, {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' }
+    });
+  };
+
+  return { respond, control };
 }
 
-async function listen(active: Harness): Promise<{ baseUrl: string; close: () => Promise<void> }> {
+async function listen(active: Harness): Promise<string> {
   await active.app.listen({ host: '127.0.0.1', port: 0 });
+  listening = true;
   const address = active.app.server.address() as AddressInfo;
-  return {
-    baseUrl: `http://127.0.0.1:${address.port}`,
-    close: async () => {
-      await active.app.close();
-    }
-  };
+  return `http://127.0.0.1:${address.port}`;
 }
 
 function settledUnits(active: Harness, tenantId = 'tenant-a'): number | null {
   const row = active.db.db
-    .prepare("SELECT units FROM usage_events WHERE tenant_id=? AND state='settled' ORDER BY created_at DESC LIMIT 1")
+    .prepare(
+      "SELECT units FROM usage_events WHERE tenant_id=? AND state='settled' ORDER BY rowid DESC LIMIT 1"
+    )
     .get(tenantId) as { units: number } | undefined;
   return row ? row.units : null;
 }
@@ -92,7 +114,7 @@ function settledUnits(active: Harness, tenantId = 'tenant-a'): number | null {
 function usageStates(active: Harness, tenantId = 'tenant-a'): string[] {
   return (
     active.db.db
-      .prepare('SELECT state FROM usage_events WHERE tenant_id=? ORDER BY created_at ASC')
+      .prepare('SELECT state FROM usage_events WHERE tenant_id=? ORDER BY rowid ASC')
       .all(tenantId) as Array<{ state: string }>
   ).map((row) => row.state);
 }
@@ -104,196 +126,163 @@ function streamAuditCount(active: Harness, tenantId = 'tenant-a'): number {
   return row.total;
 }
 
+async function waitFor(
+  predicate: () => boolean,
+  label: string,
+  timeoutMs = 5_000
+): Promise<void> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`timed out waiting for ${label}`);
+}
+
+async function postChat(
+  baseUrl: string,
+  token: string,
+  content: string,
+  init: RequestInit = {}
+): Promise<Response> {
+  return fetch(`${baseUrl}/v1/chat/completions`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${token}`,
+      'content-type': 'application/json',
+      ...(init.headers ?? {})
+    },
+    body: JSON.stringify({
+      model: 'lwrr-text',
+      stream: true,
+      messages: [{ role: 'user', content }]
+    }),
+    ...init,
+    // body/headers above win over spread when caller omits them
+    method: 'POST'
+  });
+}
+
 describe('SSE end-to-end streaming', () => {
   it('forwards a complete chat stream and settles reported usage', async () => {
-    const fixture = slowSseFixture({
+    const { respond } = createSseUpstream({
       chunks: [
         'data: {"id":"chatcmpl_stream","choices":[{"delta":{"content":"hi"}}]}\n\n',
         'data: {"usage":{"total_tokens":9}}\n\n',
         'data: [DONE]\n\n'
       ],
-      delayMs: 10
+      delayMs: 5
     });
-    harness = createHarness(() => fixture.body, { STREAM_IDLE_TIMEOUT_MS: 5_000 });
-    const server = await listen(harness);
+    harness = createHarness(respond, {
+      STREAM_IDLE_TIMEOUT_MS: 5_000,
+      REQUEST_TIMEOUT_MS: 5_000
+    });
+    const baseUrl = await listen(harness);
 
-    try {
-      const response = await fetch(`${server.baseUrl}/v1/chat/completions`, {
-        method: 'POST',
-        headers: {
-          authorization: `Bearer ${harness.token}`,
-          'content-type': 'application/json'
-        },
-        body: JSON.stringify({
-          model: 'lwrr-text',
-          stream: true,
-          messages: [{ role: 'user', content: 'hello' }]
-        })
-      });
+    const response = await postChat(baseUrl, harness.token, 'hello');
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type') ?? '').toContain('text/event-stream');
+    const text = await response.text();
+    expect(text).toContain('chatcmpl_stream');
+    expect(text).toContain('[DONE]');
 
-      expect(response.status).toBe(200);
-      expect(response.headers.get('content-type')).toContain('text/event-stream');
-      const text = await response.text();
-      expect(text).toContain('chatcmpl_stream');
-      expect(text).toContain('[DONE]');
-      expect(settledUnits(harness)).toBe(9);
-      expect(streamAuditCount(harness)).toBe(1);
-      expect(harness.upstreamCalls()).toBe(1);
-    } finally {
-      await server.close();
-    }
+    await waitFor(() => settledUnits(harness!) === 9, 'settled usage units');
+    await waitFor(() => streamAuditCount(harness!) === 1, 'stream completed audit');
+    expect(harness.upstreamCalls()).toBe(1);
   });
 
   it('cancels the upstream body when the client disconnects mid-stream', async () => {
-    const fixture = slowSseFixture({
-      chunks: [
-        'data: {"id":"chatcmpl_abort","choices":[{"delta":{"content":"partial"}}]}\n\n',
-        'data: {"usage":{"total_tokens":4}}\n\n',
-        'data: [DONE]\n\n'
-      ],
-      delayMs: 80
+    const { respond, control } = createSseUpstream({
+      // First byte then hang so abort cannot race a full completion.
+      chunks: ['data: {"id":"chatcmpl_abort","choices":[{"delta":{"content":"partial"}}]}\n\n'],
+      delayMs: 5,
+      hangAfterFirst: true
     });
-    harness = createHarness(() => fixture.body, { STREAM_IDLE_TIMEOUT_MS: 10_000 });
-    const server = await listen(harness);
+    harness = createHarness(respond, {
+      STREAM_IDLE_TIMEOUT_MS: 30_000,
+      REQUEST_TIMEOUT_MS: 30_000
+    });
+    const baseUrl = await listen(harness);
 
+    const controller = new AbortController();
+    const response = await postChat(baseUrl, harness.token, 'abort me', {
+      signal: controller.signal
+    });
+    expect(response.status).toBe(200);
+    expect(response.body).not.toBeNull();
+
+    const reader = response.body!.getReader();
+    const first = await reader.read();
+    expect(first.done).toBe(false);
+
+    controller.abort();
     try {
-      const controller = new AbortController();
-      const response = await fetch(`${server.baseUrl}/v1/chat/completions`, {
-        method: 'POST',
-        headers: {
-          authorization: `Bearer ${harness.token}`,
-          'content-type': 'application/json'
-        },
-        body: JSON.stringify({
-          model: 'lwrr-text',
-          stream: true,
-          messages: [{ role: 'user', content: 'abort me' }]
-        }),
-        signal: controller.signal
-      });
-      expect(response.status).toBe(200);
-      expect(response.body).not.toBeNull();
-
-      const reader = response.body!.getReader();
-      const first = await reader.read();
-      expect(first.done).toBe(false);
-      controller.abort();
-      try {
-        await reader.cancel();
-      } catch {
-        // Abort can race with cancel; both mean the client is gone.
-      }
-
-      await expect
-        .poll(() => fixture.cancelled() || usageStates(harness!).includes('released'), {
-          timeout: 3_000,
-          interval: 50
-        })
-        .toBe(true);
-
-      // Disconnect path must not settle a successful stream charge.
-      expect(settledUnits(harness)).toBeNull();
-      expect(streamAuditCount(harness)).toBe(0);
-    } finally {
-      await server.close();
+      await reader.cancel();
+    } catch {
+      // AbortError is expected once the client is gone.
     }
+
+    await waitFor(
+      () => control.cancelled() || usageStates(harness!).includes('released'),
+      'upstream cancel or budget release'
+    );
+    // Disconnect must never settle a successful stream charge.
+    expect(settledUnits(harness)).toBeNull();
+    expect(streamAuditCount(harness)).toBe(0);
   });
 
   it('releases budget after stream idle timeout without settling usage', async () => {
-    const fixture = slowSseFixture({
+    const { respond } = createSseUpstream({
       chunks: ['data: {"id":"chatcmpl_idle","choices":[{"delta":{"content":"stalled"}}]}\n\n'],
       delayMs: 5,
       hangAfterFirst: true
     });
-    harness = createHarness(() => fixture.body, { STREAM_IDLE_TIMEOUT_MS: 80 });
-    const server = await listen(harness);
+    harness = createHarness(respond, {
+      STREAM_IDLE_TIMEOUT_MS: 120,
+      REQUEST_TIMEOUT_MS: 10_000
+    });
+    const baseUrl = await listen(harness);
 
-    try {
-      const response = await fetch(`${server.baseUrl}/v1/chat/completions`, {
-        method: 'POST',
-        headers: {
-          authorization: `Bearer ${harness.token}`,
-          'content-type': 'application/json'
-        },
-        body: JSON.stringify({
-          model: 'lwrr-text',
-          stream: true,
-          messages: [{ role: 'user', content: 'stall' }]
-        })
-      });
-      expect(response.status).toBe(200);
-      // Drain until the gateway tears the stream down on idle timeout.
-      await response.text();
+    const response = await postChat(baseUrl, harness.token, 'stall');
+    expect(response.status).toBe(200);
+    // Drain until idle timeout destroys the upstream stream.
+    await response.text();
 
-      await expect
-        .poll(() => usageStates(harness!).includes('released'), {
-          timeout: 3_000,
-          interval: 50
-        })
-        .toBe(true);
-      expect(settledUnits(harness)).toBeNull();
-      expect(streamAuditCount(harness)).toBe(0);
-    } finally {
-      await server.close();
-    }
+    await waitFor(() => usageStates(harness!).includes('released'), 'idle timeout budget release');
+    expect(settledUnits(harness)).toBeNull();
+    expect(streamAuditCount(harness)).toBe(0);
   });
 
   it('returns 503 with retry-after when tenant stream concurrency is exhausted', async () => {
-    // Hold the only tenant slot with a never-ending upstream stream.
-    const blocker = slowSseFixture({
+    const { respond } = createSseUpstream({
       chunks: ['data: {"id":"hold","choices":[{"delta":{"content":"x"}}]}\n\n'],
       delayMs: 5,
       hangAfterFirst: true
     });
-    harness = createHarness(() => blocker.body, {
+    harness = createHarness(respond, {
       TENANT_MAX_CONCURRENT: 1,
-      STREAM_IDLE_TIMEOUT_MS: 10_000,
+      STREAM_IDLE_TIMEOUT_MS: 30_000,
+      REQUEST_TIMEOUT_MS: 30_000,
       UPSTREAM_CONCURRENCY: 4
     });
-    const server = await listen(harness);
+    const baseUrl = await listen(harness);
 
-    try {
-      const hold = await fetch(`${server.baseUrl}/v1/chat/completions`, {
-        method: 'POST',
-        headers: {
-          authorization: `Bearer ${harness.token}`,
-          'content-type': 'application/json'
-        },
-        body: JSON.stringify({
-          model: 'lwrr-text',
-          stream: true,
-          messages: [{ role: 'user', content: 'hold slot' }]
-        })
-      });
-      expect(hold.status).toBe(200);
+    const hold = await postChat(baseUrl, harness.token, 'hold slot');
+    expect(hold.status).toBe(200);
+    expect(hold.body).not.toBeNull();
+    const holdReader = hold.body!.getReader();
+    // Wait until the first stream has acquired the tenant slot and started piping.
+    const firstByte = await holdReader.read();
+    expect(firstByte.done).toBe(false);
 
-      // Give the first stream time to acquire the tenant slot.
-      await new Promise((resolve) => setTimeout(resolve, 60));
+    const second = await postChat(baseUrl, harness.token, 'should 503');
+    expect(second.status).toBe(503);
+    expect(second.headers.get('retry-after')).toBeTruthy();
+    const payload = (await second.json()) as { error?: { code?: string } };
+    expect(payload.error?.code).toBe('tenant_overloaded');
+    expect(harness.upstreamCalls()).toBe(1);
 
-      const second = await fetch(`${server.baseUrl}/v1/chat/completions`, {
-        method: 'POST',
-        headers: {
-          authorization: `Bearer ${harness.token}`,
-          'content-type': 'application/json'
-        },
-        body: JSON.stringify({
-          model: 'lwrr-text',
-          stream: true,
-          messages: [{ role: 'user', content: 'should 503' }]
-        })
-      });
-
-      expect(second.status).toBe(503);
-      expect(second.headers.get('retry-after')).toBeTruthy();
-      const payload = (await second.json()) as { error?: { code?: string } };
-      expect(payload.error?.code).toBe('tenant_overloaded');
-
-      // Only the holder should have contacted upstream.
-      expect(harness.upstreamCalls()).toBe(1);
-      await hold.body?.cancel();
-    } finally {
-      await server.close();
-    }
+    await holdReader.cancel().catch(() => undefined);
   });
 });
 
@@ -307,42 +296,38 @@ describe('mock load rejection envelope', () => {
         }),
       { RATE_LIMIT_RPM: 60, RATE_LIMIT_BURST: 2 }
     );
-    const server = await listen(harness);
+    const baseUrl = await listen(harness);
 
-    try {
-      const headers = {
-        authorization: `Bearer ${harness.token}`,
-        'content-type': 'application/json'
-      };
-      const payload = JSON.stringify({
-        model: 'lwrr-text',
-        messages: [{ role: 'user', content: 'load' }]
-      });
+    const headers = {
+      authorization: `Bearer ${harness.token}`,
+      'content-type': 'application/json'
+    };
+    const payload = JSON.stringify({
+      model: 'lwrr-text',
+      messages: [{ role: 'user', content: 'load' }]
+    });
 
-      const first = await fetch(`${server.baseUrl}/v1/chat/completions`, {
-        method: 'POST',
-        headers,
-        body: payload
-      });
-      const second = await fetch(`${server.baseUrl}/v1/chat/completions`, {
-        method: 'POST',
-        headers,
-        body: payload
-      });
-      const third = await fetch(`${server.baseUrl}/v1/chat/completions`, {
-        method: 'POST',
-        headers,
-        body: payload
-      });
+    const first = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers,
+      body: payload
+    });
+    const second = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers,
+      body: payload
+    });
+    const third = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers,
+      body: payload
+    });
 
-      expect(first.status).toBe(200);
-      expect(second.status).toBe(200);
-      expect(third.status).toBe(429);
-      expect(third.headers.get('retry-after')).toBeTruthy();
-      const body = (await third.json()) as { error?: { code?: string } };
-      expect(body.error?.code).toBe('rate_limited');
-    } finally {
-      await server.close();
-    }
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(third.status).toBe(429);
+    expect(third.headers.get('retry-after')).toBeTruthy();
+    const body = (await third.json()) as { error?: { code?: string } };
+    expect(body.error?.code).toBe('rate_limited');
   });
 });

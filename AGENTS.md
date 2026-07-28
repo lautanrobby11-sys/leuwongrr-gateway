@@ -9,6 +9,13 @@ Baca file ini, `README.md`, dan ADR terkait sebelum mengubah repository.
 - Tidak ada passthrough catch-all. Route publik harus ada di `src/policy/allowlist.ts`.
 - Provider secret tidak pernah masuk repository, database Gateway, log, atau respons.
 
+## Gate merah = STOP (wajib)
+- **Jangan merge** PR bila quality gate GitHub merah, partial, skipped-on-failure, atau belum selesai.
+- **Jangan deploy** SHA bila `npm run ci:local` gagal, quality mirror merah, artifact/checksum tidak cocok, atau health gate gagal.
+- **Jangan retry deploy** SHA yang sudah gagal; buat commit baru, validasi ulang, deploy SHA baru.
+- Hijau di GitHub Actions **saja** tidak cukup untuk produksi: workstation `ci:local` + evidence di `docs/runbooks/operator-release-authority.md` tetap wajib.
+- Status Notion/DONE hanya setelah gate wajib lulus dengan bukti; kode yang “sudah dibuat” bukan izin merge/deploy.
+
 ## Prosedur
 1. Jalankan `git status --short`; jangan menimpa perubahan yang tidak terkait.
 2. Cari pemilik kanonis dengan `rg` sebelum membuat route, config, schema, atau helper.
@@ -17,6 +24,7 @@ Baca file ini, `README.md`, dan ADR terkait sebelum mengubah repository.
 5. Tinjau diff, secret, ownership ganda, dan file terlarang.
 6. Untuk release, ikuti `docs/runbooks/operator-release-authority.md`: clean checkout pada workstation operator, kedua lockfile, `npm run ci:local`, artefak full Git SHA, dan checksum. GitHub adalah mirror source; status branch tidak menggantikan bukti lokal.
 7. Deploy hanya commit bersih ke `releases/<git-sha>`; jangan edit `current`, jangan build source di VPS, dan jangan memberi VPS credential GitHub.
+8. Sebelum merge: quality diagnostics PR harus seluruh gate wajib `success` (kecuali `release_readiness` yang memang skipped di PR). Bila `tests`/`lint`/`typecheck`/`conventions`/`secrets` merah — perbaiki dulu, jangan squash.
 
 ## Larangan
 Dilarang membuat source/config dengan suffix `-new`, `-final`, `-final2`, `-fix`, `-fixed`, `-hotfix`, `-patch`, `-override`, `-backup`, `-old`, `-temp`, atau `docker-compose.override.yml`. Backup runtime hanya melalui `scripts/backup.sh`.

@@ -39,6 +39,13 @@ wait_for_health() {
   done
 }
 
+# Preflight runs from inside the candidate release so any relative path it
+# resolves matches what systemd will use once the symlink moves.
+run_preflight() {
+  runuser --preserve-environment -u "$SERVICE" -- \
+    bash -c 'cd "$1" && exec node dist/preflight.js' _ "$1"
+}
+
 [[ $EUID -eq 0 ]] || fail 'deploy must run as root'
 [[ $SHA =~ ^[0-9a-f]{40}$ ]] || fail 'full git SHA required'
 [[ -n $ARTIFACT && -f $ARTIFACT && -f ${ARTIFACT}.sha256 ]] || fail 'artifact and .sha256 required'
@@ -68,6 +75,13 @@ tar --extract --file "$ARTIFACT" --directory "$RELEASE" --no-same-owner --no-sam
 )
 
 [[ -f $RELEASE/package-lock.json ]] || fail 'package-lock.json is required for deterministic production deploy'
+
+# A release without the console would still pass health checks, so the dashboards
+# are verified as part of the artifact contract rather than discovered by a user.
+for page in admin member chat login; do
+  [[ -f $RELEASE/dist/public/$page.html ]] || fail "console entry missing from release: $page.html"
+done
+
 (
   cd "$RELEASE"
   npm ci --omit=dev --ignore-scripts=false --no-audit --no-fund
@@ -82,7 +96,7 @@ set -a
 set +a
 [[ ${GATEWAY_HOST:-} == 127.0.0.1 && ${GATEWAY_PORT:-} == 2080 ]] || fail 'production origin must be 127.0.0.1:2080'
 
-runuser --preserve-environment -u "$SERVICE" -- node "$RELEASE/dist/preflight.js"
+run_preflight "$RELEASE"
 
 PREVIOUS=$(readlink -f "$ROOT/current" 2>/dev/null || true)
 CANDIDATE_LINK="$ROOT/.current-$SHA"

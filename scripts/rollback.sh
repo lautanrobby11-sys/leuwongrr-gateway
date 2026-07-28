@@ -25,6 +25,11 @@ wait_for_health() {
   done
 }
 
+run_preflight() {
+  runuser --preserve-environment -u "$SERVICE" -- \
+    bash -c 'cd "$1" && exec node dist/preflight.js' _ "$1"
+}
+
 [[ $EUID -eq 0 ]] || fail 'rollback must run as root'
 [[ $SHA =~ ^[0-9a-f]{40}$ ]] || fail 'full release SHA required'
 TARGET="$ROOT/releases/$SHA"
@@ -40,7 +45,7 @@ set -a
 . "$ENV_FILE"
 set +a
 
-runuser --preserve-environment -u "$SERVICE" -- node "$TARGET/dist/preflight.js"
+run_preflight "$TARGET"
 ln -s "$TARGET" "$ROOT/.rollback-$SHA"
 mv -Tf "$ROOT/.rollback-$SHA" "$ROOT/current"
 

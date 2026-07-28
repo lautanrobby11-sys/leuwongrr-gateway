@@ -15,6 +15,7 @@ import { listModels, requireModel, PolicyError } from '../policy/capabilities.js
 import { resolveRoute } from '../policy/allowlist.js';
 import { OverloadError } from '../policy/semaphore.js';
 import { TokenBucketLimiter, RateLimitError } from '../policy/rate-limit.js';
+import { TenantConcurrencyRegistry, TenantRateLimiterRegistry } from '../policy/tenant-limits.js';
 import type { GatewayDatabase } from '../persistence/database.js';
 import { claim, complete, abandon } from '../persistence/idempotency.js';
 import type { OmniRouteClient } from '../upstream.js';
@@ -25,6 +26,26 @@ export interface AppDeps {
   db: GatewayDatabase;
   upstream: OmniRouteClient;
   logger: Logger;
+}
+
+const LOOPBACK_PEERS = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+const CLIENT_IP_PATTERN = /^[0-9a-fA-F:.]{3,45}$/;
+
+/**
+ * All public traffic reaches the gateway through cloudflared on loopback, so
+ * `req.ip` collapses every caller into one bucket. The forwarded header is
+ * trusted only when the operator enabled it and the socket peer is the local
+ * tunnel, otherwise a caller could spoof the header and bypass the limiter.
+ */
+export function clientIdentity(req: FastifyRequest, config: Config): string {
+  if (!config.TRUST_PROXY) return req.ip;
+  const peer = req.socket.remoteAddress ?? req.ip;
+  if (!LOOPBACK_PEERS.has(peer)) return req.ip;
+  const raw = req.headers[config.TRUSTED_CLIENT_IP_HEADER.toLowerCase()];
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof value !== 'string') return req.ip;
+  const candidate = value.split(',')[0]?.trim() ?? '';
+  return CLIENT_IP_PATTERN.test(candidate) ? candidate : req.ip;
 }
 
 export function buildApp(deps: AppDeps) {
@@ -51,6 +72,12 @@ export function buildApp(deps: AppDeps) {
     deps.config.RATE_LIMIT_BURST,
     deps.config.RATE_LIMIT_MAX_ENTRIES
   );
+  // Tenant registries make provisioned limits real instead of advisory.
+  const tenantLimiter = new TenantRateLimiterRegistry(
+    deps.config.TENANT_LIMIT_MAX_ENTRIES,
+    deps.config.RATE_LIMIT_BURST
+  );
+  const tenantConcurrency = new TenantConcurrencyRegistry(deps.config.TENANT_LIMIT_MAX_ENTRIES);
 
   app.addHook('onRequest', async (req, reply) => {
     const path = req.url.split('?')[0] ?? req.url;
@@ -61,7 +88,7 @@ export function buildApp(deps: AppDeps) {
     reply.header('x-request-id', req.id).header('cache-control', 'no-store');
     if (route === 'health.live' || route === 'health.ready') return;
 
-    const decision = sourceLimiter.consume(req.ip);
+    const decision = sourceLimiter.consume(clientIdentity(req, deps.config));
     if (!decision.allowed) {
       reply.header('retry-after', String(decision.retryAfterSeconds));
       return sendError(reply, 429, 'rate_limited', 'Too many requests', req.id, true);
@@ -75,6 +102,12 @@ export function buildApp(deps: AppDeps) {
     requireScope(record, scope);
     const decision = credentialLimiter.consume(record.keyHash);
     if (!decision.allowed) throw new RateLimitError(decision.retryAfterSeconds);
+    const limits = deps.db.tenants.limits(record.tenantId);
+    const tenantDecision = tenantLimiter.consume(
+      record.tenantId,
+      limits?.rateLimitRpm ?? deps.config.RATE_LIMIT_RPM
+    );
+    if (!tenantDecision.allowed) throw new RateLimitError(tenantDecision.retryAfterSeconds);
     return record;
   }
 
@@ -87,10 +120,25 @@ export function buildApp(deps: AppDeps) {
     }
     try {
       deps.db.db.prepare('SELECT 1').get();
-      return { status: 'ready' };
     } catch {
       return sendError(reply, 503, 'not_ready', 'Dependency unavailable', req.id, true);
     }
+    // Readiness drives deploy verification and rollback, so it must observe the
+    // upstream the gateway is useless without.
+    try {
+      const probe = await deps.upstream.request(
+        '/api/monitoring/health',
+        { method: 'GET', headers: { 'x-request-id': req.id } },
+        AbortSignal.timeout(deps.config.READY_UPSTREAM_TIMEOUT_MS)
+      );
+      await probe.body?.cancel();
+      if (!probe.ok) {
+        return sendError(reply, 503, 'not_ready', 'Upstream unavailable', req.id, true);
+      }
+    } catch {
+      return sendError(reply, 503, 'not_ready', 'Upstream unavailable', req.id, true);
+    }
+    return { status: 'ready' };
   });
 
   app.get('/v1/models', async (req, reply) => {
@@ -188,6 +236,27 @@ export function buildApp(deps: AppDeps) {
       return sendError(reply, 402, 'budget_exceeded', 'Daily budget exhausted', req.id);
     }
 
+    // One tenant must not be able to occupy every upstream permit on the host.
+    const tenantLimits = deps.db.tenants.limits(key.tenantId);
+    const releaseTenantSlot = tenantConcurrency.tryAcquire(
+      key.tenantId,
+      tenantLimits?.maxConcurrent ?? deps.config.TENANT_MAX_CONCURRENT
+    );
+    if (!releaseTenantSlot) {
+      deps.db.releaseBudget(reservation, key.tenantId);
+      if (idem) abandon(deps.db, key.tenantId, idem, requestHash);
+      reply.header('retry-after', '1');
+      return sendError(
+        reply,
+        503,
+        'tenant_overloaded',
+        'Tenant concurrency limit reached',
+        req.id,
+        true
+      );
+    }
+    let slotHandedToStream = false;
+
     const aborter = new AbortController();
     req.raw.once('aborted', () => aborter.abort());
     reply.raw.once('close', () => {
@@ -244,15 +313,19 @@ export function buildApp(deps: AppDeps) {
         stream.on('data', armIdle);
         stream.once('end', () => {
           clearIdle();
+          releaseTenantSlot();
           deps.db.settleBudget(reservation, key.tenantId, estimate);
           deps.db.audit(key.tenantId, 'llm.stream.completed', req.id, { model: parsed.data.model });
         });
         stream.once('error', () => {
           clearIdle();
+          releaseTenantSlot();
           deps.db.releaseBudget(reservation, key.tenantId);
           if (!reply.raw.writableEnded) reply.raw.end();
         });
         armIdle();
+        // The slot now belongs to the stream lifecycle, not to this handler.
+        slotHandedToStream = true;
         stream.pipe(reply.raw);
         return reply;
       }
@@ -283,6 +356,8 @@ export function buildApp(deps: AppDeps) {
       deps.db.releaseBudget(reservation, key.tenantId);
       if (idem) abandon(deps.db, key.tenantId, idem, requestHash);
       return handleError(error, reply, req.id);
+    } finally {
+      if (!slotHandedToStream) releaseTenantSlot();
     }
   });
 

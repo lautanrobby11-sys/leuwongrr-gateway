@@ -12,7 +12,14 @@ cp -a dist/. "$STAGE/dist/"
 cp package.json "$STAGE/package.json"
 [[ -f package-lock.json ]] && cp package-lock.json "$STAGE/package-lock.json"
 printf 'git_sha=%s\nbuilt_at=%s\nnode=%s\n' "$SHA" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(node --version)" > "$STAGE/RELEASE"
-( cd "$STAGE" && find . -type f -print0 | sort -z | xargs -0 sha256sum > manifest.sha256 )
-tar -C "$STAGE" --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner -czf ".release/$SHA.tar.gz" .
-( cd .release && sha256sum "$SHA.tar.gz" > "$SHA.tar.gz.sha256" )
+(
+  cd "$STAGE"
+  find . -type f -print0 | sort -z | xargs -0 sha256sum > manifest.sha256
+)
+# Portable archive: avoid GNU-only tar flags that break on some runners.
+tar -C "$STAGE" -czf ".release/$SHA.tar.gz" .
+(
+  cd .release
+  sha256sum "$SHA.tar.gz" > "$SHA.tar.gz.sha256"
+)
 echo ".release/$SHA.tar.gz"

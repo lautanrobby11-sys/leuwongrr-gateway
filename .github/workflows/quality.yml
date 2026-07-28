@@ -5,6 +5,7 @@ on:
     branches: [main]
 permissions:
   contents: read
+  actions: write
 concurrency:
   group: quality-${{ github.ref }}
   cancel-in-progress: true
@@ -14,11 +15,22 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+        with: { fetch-depth: 1 }
       - uses: actions/setup-node@v4
-        with: { node-version: '22' }
+        with:
+          node-version: '22'
+          check-latest: false
+      - name: Install native build toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential python3
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci --no-audit --no-fund
+          else
+            npm install --no-audit --no-fund --no-package-lock
+          fi
       - name: Convention gate
         run: npm run check:conventions
       - name: Secret scan
@@ -38,14 +50,26 @@ jobs:
       - name: Verify artifact checksum
         run: cd .release && sha256sum -c "$GITHUB_SHA.tar.gz.sha256"
       - name: Verify tracked tree is clean
-        run: git diff --exit-code
+        run: |
+          git status --porcelain --untracked-files=no
+          git diff --exit-code
       - name: Report gate result
         if: always()
-        run: echo "quality gates finished with status ${{ job.status }} for $GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          {
+            echo "## quality"
+            echo
+            echo "- sha: \`$GITHUB_SHA\`"
+            echo "- result: **${{ job.status }}**"
+            echo "- node: $(node --version)"
+            echo "- lockfile: $([ -f package-lock.json ] && echo present || echo absent)"
+          } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
+        if: success()
         with:
           name: gateway-${{ github.sha }}
           path: |
             .release/${{ github.sha }}.tar.gz
             .release/${{ github.sha }}.tar.gz.sha256
           if-no-files-found: error
+          retention-days: 14

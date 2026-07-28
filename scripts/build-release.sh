@@ -15,7 +15,8 @@ done
 [[ -d dist/public/assets ]] || { echo 'console assets directory missing: dist/public/assets' >&2; exit 1; }
 
 STAGE=$(mktemp -d)
-trap 'rm -rf "$STAGE"' EXIT
+VERIFY=$(mktemp -d)
+trap 'rm -rf "$STAGE" "$VERIFY"' EXIT
 mkdir -p .release "$STAGE/dist" "$STAGE/scripts" "$STAGE/infra/systemd" "$STAGE/web"
 cp -a dist/. "$STAGE/dist/"
 cp package.json "$STAGE/package.json"
@@ -36,13 +37,24 @@ chmod 0755 "$STAGE/scripts/"*.sh
 [[ -f $STAGE/dist/cli/keys.js ]] || { echo 'operator key CLI missing from build output' >&2; exit 1; }
 printf 'git_sha=%s\nbuilt_at=%s\nnode=%s\nconsole=admin,member,chat,login\n' \
   "$SHA" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(node --version)" > "$STAGE/RELEASE"
+# The manifest must not list itself. Redirection creates and truncates
+# manifest.sha256 before find runs, so a self-entry records the checksum of an
+# empty file and deploy.sh then rejects every artifact with one mismatch.
 (
   cd "$STAGE"
-  find . -type f -print0 | sort -z | xargs -0 sha256sum > manifest.sha256
+  find . -type f ! -path ./manifest.sha256 -print0 | sort -z | xargs -0 sha256sum > manifest.sha256
 )
 tar -C "$STAGE" -czf ".release/$SHA.tar.gz" .
 (
   cd .release
   sha256sum "$SHA.tar.gz" > "$SHA.tar.gz.sha256"
+)
+# Verify the finished artifact the same way deploy.sh will. Checking only the
+# outer tarball checksum proves the download is intact, not that the manifest
+# inside it describes the files it ships with.
+tar -C "$VERIFY" -xzf ".release/$SHA.tar.gz"
+(
+  cd "$VERIFY"
+  sha256sum -c manifest.sha256 >/dev/null
 )
 echo ".release/$SHA.tar.gz"

@@ -6,6 +6,8 @@
   "engines": { "node": ">=22.0.0" },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "build:web": "npm --prefix web install && npm --prefix web run build",
+    "build:all": "npm run build && npm run build:web",
     "start": "node dist/main.js",
     "dev": "tsx watch src/main.ts",
     "lint": "eslint src tests scripts eslint.config.js --max-warnings=0",

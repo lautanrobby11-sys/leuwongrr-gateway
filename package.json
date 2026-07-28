@@ -14,7 +14,7 @@
     "check:conventions": "node scripts/check-conventions.mjs",
     "scan:secrets": "node scripts/scan-secrets.mjs",
     "validate": "npm run check:conventions && npm run scan:secrets && npm run lint && npm run typecheck && npm test",
-    "ci:local": "npm run validate && npm run build && bash -n scripts/*.sh && scripts/build-release.sh $(git rev-parse HEAD)",
+    "ci:local": "npm run validate && npm run build && bash -n scripts/*.sh && bash scripts/build-release.sh $(git rev-parse HEAD)",
     "seed:tenant": "node scripts/seed-tenant.mjs"
   },
   "dependencies": {

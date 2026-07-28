@@ -93,7 +93,7 @@ jobs:
 
       - name: Package immutable release
         id: package
-        run: scripts/build-release.sh "$GITHUB_SHA"
+        run: bash scripts/build-release.sh "$GITHUB_SHA"
 
       - name: Verify artifact checksum
         id: checksum

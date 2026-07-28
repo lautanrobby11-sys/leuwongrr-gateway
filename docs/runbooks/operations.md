@@ -5,6 +5,11 @@
 - Operator has VPS root and Cloudflare authority; no secret is pasted into Git/Notion/log.
 - `/opt/leuwongrr-gateway/config/gateway.env` is root-owned mode 600.
 - `leuwongrr-gateway` service user exists without login shell.
+- Host tools `sqlite3`, `age` and `rsync` are installed. `scripts/vps-bootstrap.sh`
+  installs them, but note the trap: the gateway embeds SQLite through
+  `better-sqlite3` and never shells out to the `sqlite3` CLI, so a host missing
+  these tools still runs the service perfectly and only fails when a backup is
+  attempted.
 - Baseline CPU/RSS/disk/FD/OmniRoute latency and SSH responsiveness are recorded before choosing final systemd limits.
 
 ## Developer / CI green path
@@ -61,8 +66,8 @@ sudo nano /opt/leuwongrr-gateway/config/gateway.env
 4. Deploy verifies checksum + manifest, requires `package-lock.json` and the four
    console entries, installs production dependencies on the server, runs preflight
    as the service user with the release directory as the working directory,
-   atomically swaps `current`, health-gates, and auto-restores the previous
-   symlink on failure.
+   atomically swaps `current`, syncs the systemd unit from the release,
+   health-gates, and auto-restores the previous symlink on failure.
 5. Issue the first operator key only after health is green. The CLI ships inside
    the release so hashing rules always match the running service:
 
@@ -97,7 +102,37 @@ and the plaintext is not recoverable. `node dist/cli/keys.js list` and
 
 ## Backup/restore
 
-Run `scripts/backup.sh` with an age recipient. Verify using `scripts/restore-drill.sh <backup> <identity>` in a temporary directory. This uses SQLite online backup and validates checksum, integrity, and foreign keys. Never copy a live WAL database directly.
+`scripts/backup.sh` refuses to run without `AGE_RECIPIENT`, because the archive
+contains the whole tenant database and every API key hash; an unencrypted copy
+on disk is not an acceptable fallback. Generate the operator keypair once:
+
+```bash
+umask 077
+age-keygen -o ~/leuwongrr-backup-identity.txt
+sed -n 's/^# public key: //p' ~/leuwongrr-backup-identity.txt
+```
+
+Take a backup and verify it in a temporary directory:
+
+```bash
+RECIPIENT=$(sed -n 's/^# public key: //p' ~/leuwongrr-backup-identity.txt)
+sudo AGE_RECIPIENT="$RECIPIENT" bash scripts/backup.sh
+# data/backups is not readable by the login user, so expand the glob as root
+BACKUP=$(sudo bash -c 'ls -1 /opt/leuwongrr-gateway/data/backups/*.tar.gz.age | tail -n1')
+sudo bash scripts/restore-drill.sh "$BACKUP" ~/leuwongrr-backup-identity.txt
+```
+
+The drill validates the archive checksum, the inner manifest, `PRAGMA
+integrity_check`, `PRAGMA foreign_key_check`, and the presence of the core
+tables, then prints `restore drill passed`. Backups use the SQLite online backup
+API; never copy a live WAL database directly.
+
+Key custody is a deliberate decision, not a detail. While the identity file sits
+on the same host as `data/backups`, encryption protects nothing against an
+attacker who owns the host — key and ciphertext are in one place. Move the
+identity off the server and keep at least two copies elsewhere. There is no
+recovery path: lose the identity and every backup is permanently unreadable. The
+public recipient is not secret and may be stored on the host for scheduled runs.
 
 ## Rollback
 

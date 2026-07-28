@@ -36,11 +36,18 @@ const schema = z.object({
   TENANT_MAX_CONCURRENT: z.coerce.number().int().min(1).max(64).default(2),
   TENANT_LIMIT_MAX_ENTRIES: z.coerce.number().int().min(16).max(100000).default(512),
 
+  METRICS_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((value) => value === 'true'),
+  INTERNAL_METRICS_TOKEN: z.string().min(32).optional(),
+
   CONSOLE_ENABLED: z
     .enum(['true', 'false'])
     .default('true')
     .transform((value) => value === 'true'),
   PUBLIC_BASE_URL: z.string().url().default('https://api.leuwongrr.cloud'),
+  CONSOLE_ALLOWED_ORIGINS: z.string().max(512).optional(),
   WEB_DIST_PATH: z.string().min(1).default('./dist/public'),
   SESSION_COOKIE_NAME: z.string().min(1).max(64).default('lwrr_session'),
   SESSION_TTL_HOURS: z.coerce.number().int().min(1).max(720).default(12),
@@ -69,6 +76,21 @@ const schema = z.object({
 
 export type Config = z.infer<typeof schema>;
 
+/**
+ * Origins a browser may drive a state-changing console call from. The public
+ * base URL is always included; extra entries exist only for an operator who
+ * serves the console under a second hostname.
+ */
+export function allowedConsoleOrigins(config: Config): ReadonlySet<string> {
+  const origins = new Set<string>([new URL(config.PUBLIC_BASE_URL).origin]);
+  for (const raw of (config.CONSOLE_ALLOWED_ORIGINS ?? '').split(',')) {
+    const value = raw.trim();
+    if (value === '') continue;
+    origins.add(new URL(value).origin);
+  }
+  return origins;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const config = schema.parse(env);
   if (config.RATE_LIMIT_BURST > config.RATE_LIMIT_RPM) {
@@ -82,6 +104,28 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   if (config.NODE_ENV === 'production' && config.CONSOLE_ENABLED && config.OTP_DELIVERY !== 'webhook') {
     throw new Error('production console requires OTP_DELIVERY=webhook; development OTP responses are forbidden');
+  }
+  if (config.METRICS_ENABLED && !config.INTERNAL_METRICS_TOKEN) {
+    throw new Error('METRICS_ENABLED requires INTERNAL_METRICS_TOKEN');
+  }
+  if (
+    config.INTERNAL_METRICS_TOKEN &&
+    config.INTERNAL_METRICS_TOKEN === config.INTERNAL_READY_TOKEN
+  ) {
+    throw new Error('INTERNAL_METRICS_TOKEN must differ from INTERNAL_READY_TOKEN');
+  }
+  let origins: ReadonlySet<string>;
+  try {
+    origins = allowedConsoleOrigins(config);
+  } catch {
+    throw new Error('CONSOLE_ALLOWED_ORIGINS must be a comma separated list of absolute origins');
+  }
+  if (config.NODE_ENV === 'production') {
+    for (const origin of origins) {
+      if (!origin.startsWith('https:')) {
+        throw new Error('production console origins must use https');
+      }
+    }
   }
   if (Boolean(config.GOOGLE_CLIENT_ID) !== Boolean(config.GOOGLE_CLIENT_SECRET)) {
     throw new Error('GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must be set together');

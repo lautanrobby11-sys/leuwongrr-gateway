@@ -1,0 +1,24 @@
+[Unit]
+Description=LeuwongRR Gateway encrypted data snapshot
+Documentation=file:///opt/leuwongrr-gateway/current/docs/runbooks/operations.md
+After=leuwongrr-gateway.service
+
+[Service]
+# Runs as root on purpose: data/ is 0750 root-owned and the archive must be
+# written where the service user cannot read it back. This unit is separate
+# from leuwongrr-gateway.service because the gateway sandbox forbids the writes
+# a snapshot needs, and because a failed snapshot must never stop the service.
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+WorkingDirectory=/opt/leuwongrr-gateway/current
+EnvironmentFile=/opt/leuwongrr-gateway/config/gateway.env
+ExecStart=/usr/bin/env bash /opt/leuwongrr-gateway/current/scripts/backup.sh
+TimeoutStartSec=900
+Nice=10
+IOSchedulingClass=idle
+CPUQuota=50%
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes

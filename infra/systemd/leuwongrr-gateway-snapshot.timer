@@ -1,0 +1,15 @@
+[Unit]
+Description=Daily encrypted snapshot of LeuwongRR Gateway data
+
+[Timer]
+# 19:15 UTC is 02:15 in Asia/Jakarta, the quietest window on a 2 vCPU host that
+# also runs OmniRoute. Persistent=true catches up after a reboot so a host that
+# was down at the scheduled time still takes one snapshot on the next boot.
+OnCalendar=*-*-* 19:15:00 UTC
+RandomizedDelaySec=600
+Persistent=true
+AccuracySec=1min
+Unit=leuwongrr-gateway-snapshot.service
+
+[Install]
+WantedBy=timers.target

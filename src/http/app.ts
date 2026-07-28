@@ -3,8 +3,8 @@ import Fastify, {
   type FastifyReply,
   type FastifyRequest
 } from 'fastify';
-import { randomUUID } from 'node:crypto';
-import type { Config } from '../config.js';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { allowedConsoleOrigins, type Config } from '../config.js';
 import {
   bearerToken,
   requireScope,
@@ -23,7 +23,8 @@ import {
   type Capability,
   type ModelPolicy
 } from '../policy/capabilities.js';
-import { isConsoleRoute, resolveRoute } from '../policy/allowlist.js';
+import { isConsoleRoute, requiresTrustedOrigin, resolveRoute } from '../policy/allowlist.js';
+import { MetricsRegistry } from '../metrics.js';
 import { OverloadError } from '../policy/semaphore.js';
 import { TokenBucketLimiter, RateLimitError } from '../policy/rate-limit.js';
 import { TenantConcurrencyRegistry, TenantRateLimiterRegistry } from '../policy/tenant-limits.js';
@@ -63,6 +64,39 @@ function textLength(value: unknown): number {
   return typeof value === 'string' ? value.length : JSON.stringify(value ?? '').length;
 }
 
+/** Comparison whose duration does not depend on how much of the token matched. */
+function tokenMatches(provided: unknown, expected: string | undefined): boolean {
+  if (typeof provided !== 'string' || typeof expected !== 'string' || expected === '') return false;
+  const left = Buffer.from(provided, 'utf8');
+  const right = Buffer.from(expected, 'utf8');
+  return left.length === right.length && timingSafeEqual(left, right);
+}
+
+/**
+ * The origin a browser attributes the request to. Referer is accepted as a
+ * fallback because a few privacy configurations strip Origin from same-site
+ * form posts, but an unparseable or absent value stays null and is refused.
+ */
+function requestOrigin(req: FastifyRequest): string | null {
+  const origin = req.headers.origin;
+  if (typeof origin === 'string' && origin !== '' && origin !== 'null') {
+    try {
+      return new URL(origin).origin;
+    } catch {
+      return null;
+    }
+  }
+  const referer = req.headers.referer;
+  if (typeof referer === 'string' && referer !== '') {
+    try {
+      return new URL(referer).origin;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
 export function buildApp(deps: AppDeps) {
   // Fastify consumes the documented base logger contract. Pino's concrete
   // Logger is structurally compatible, but exposing its wider generic here
@@ -78,6 +112,9 @@ export function buildApp(deps: AppDeps) {
     keepAliveTimeout: 72_000,
     disableRequestLogging: true
   });
+
+  const metrics = new MetricsRegistry();
+  const consoleOrigins = allowedConsoleOrigins(deps.config);
 
   const sourceLimiter = new TokenBucketLimiter(
     deps.config.RATE_LIMIT_RPM * 2,
@@ -135,7 +172,11 @@ export function buildApp(deps: AppDeps) {
     if (!route) {
       return sendProtocolError(reply, 'openai', 404, 'route_not_found', 'Route is not available', req.id);
     }
-    reply.header('x-request-id', req.id).header('cache-control', 'no-store');
+    reply
+      .header('x-request-id', req.id)
+      .header('cache-control', 'no-store')
+      .header('x-content-type-options', 'nosniff')
+      .header('referrer-policy', 'same-origin');
     if (route === 'health.live' || route === 'health.ready') return;
     if (route === 'console.asset') reply.removeHeader('cache-control');
     const decision = sourceLimiter.consume(clientIdentity(req, deps.config));
@@ -148,6 +189,24 @@ export function buildApp(deps: AppDeps) {
       }
       return sendProtocolError(reply, 'openai', 429, 'rate_limited', 'Too many requests', req.id, true);
     }
+    // Cookie and edge-assertion authority is attached by the browser on its
+    // own, so a state change needs proof the caller is our own page. Checked
+    // here rather than per handler: a route cannot forget a shared hook.
+    if (req.method === 'POST' && requiresTrustedOrigin(route)) {
+      const origin = requestOrigin(req);
+      if (origin === null || !consoleOrigins.has(origin)) {
+        return reply.code(403).send({
+          error: { code: 'origin_rejected', message: 'Origin is not allowed', trace_id: req.id }
+        });
+      }
+    }
+  });
+
+  app.addHook('onResponse', async (req, reply) => {
+    const path = req.url.split('?')[0] ?? req.url;
+    const route = resolveRoute(req.method, path);
+    if (!route) return;
+    metrics.observe(route, reply.statusCode, reply.elapsedTime);
   });
 
   async function authenticate(req: FastifyRequest, scope: Scope): Promise<ApiKeyRecord> {
@@ -195,8 +254,7 @@ export function buildApp(deps: AppDeps) {
   app.get('/health/live', async () => ({ status: 'ok' }));
 
   app.get('/health/ready', async (req, reply) => {
-    const token = req.headers['x-internal-ready-token'];
-    if (typeof token !== 'string' || token !== deps.config.INTERNAL_READY_TOKEN) {
+    if (!tokenMatches(req.headers['x-internal-ready-token'], deps.config.INTERNAL_READY_TOKEN)) {
       return sendProtocolError(reply, 'openai', 404, 'route_not_found', 'Route is not available', req.id);
     }
     try {
@@ -218,6 +276,24 @@ export function buildApp(deps: AppDeps) {
       return sendProtocolError(reply, 'openai', 503, 'not_ready', 'Upstream unavailable', req.id, true);
     }
     return { status: 'ready' };
+  });
+
+  /**
+   * Answers as if it did not exist unless the operator both enabled it and
+   * presented the dedicated token, so a scrape port that is accidentally
+   * reachable still reveals nothing. It stays subject to the source rate limit
+   * so the token cannot be guessed at speed.
+   */
+  app.get('/metrics', async (req, reply) => {
+    if (
+      !deps.config.METRICS_ENABLED ||
+      !tokenMatches(req.headers['x-internal-metrics-token'], deps.config.INTERNAL_METRICS_TOKEN)
+    ) {
+      return sendProtocolError(reply, 'openai', 404, 'route_not_found', 'Route is not available', req.id);
+    }
+    return reply
+      .header('content-type', 'text/plain; version=0.0.4; charset=utf-8')
+      .send(metrics.render());
   });
 
   app.get('/v1/models', async (req, reply) => {

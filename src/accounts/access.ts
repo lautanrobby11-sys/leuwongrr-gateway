@@ -1,5 +1,9 @@
 import { createPublicKey, createVerify, type JsonWebKey } from 'node:crypto';
-import { assertPublicEgress } from '../policy/egress.js';
+import {
+  assertResolvedPublicEgress,
+  systemResolver,
+  type AddressResolver
+} from '../policy/egress.js';
 
 export class AccessError extends Error {
   constructor(
@@ -42,14 +46,20 @@ export class AccessVerifier {
     teamDomain: string,
     private readonly audience: string,
     private readonly cacheMs = 15 * 60 * 1000,
-    private readonly fetcher: typeof fetch = fetch
+    private readonly fetcher: typeof fetch = fetch,
+    private readonly resolver: AddressResolver = systemResolver
   ) {
     this.issuer = 'https://' + teamDomain.replace(/^https?:\/\//, '').replace(/\/+$/, '');
   }
 
   private async refresh(): Promise<void> {
     if (this.keys.size > 0 && Date.now() - this.fetchedAt < this.cacheMs) return;
-    const url = assertPublicEgress(this.issuer + '/cdn-cgi/access/certs');
+    // The team domain is operator configuration, so the name is not enough:
+    // ADR-011 requires the resolved answers to be public before we call out.
+    const url = await assertResolvedPublicEgress(
+      this.issuer + '/cdn-cgi/access/certs',
+      this.resolver
+    );
     const response = await this.fetcher(url, {
       method: 'GET',
       signal: AbortSignal.timeout(5000)

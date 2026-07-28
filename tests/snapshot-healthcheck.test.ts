@@ -35,6 +35,18 @@ function withoutHealthcheckUrl(): NodeJS.ProcessEnv {
   return environment;
 }
 
+/**
+ * Keep Windows process lookup untouched, then prepend the mock directory only
+ * after Git Bash has started and is interpreting POSIX paths itself.
+ */
+function runWithMockPath(bin: string, environment: NodeJS.ProcessEnv) {
+  return spawnSync(
+    bash,
+    ['-c', 'export PATH="$1:$PATH"; exec "$2"', '_', bashPath(bin), script],
+    { encoding: 'utf8', env: environment }
+  );
+}
+
 describe('snapshot dead-man notification', () => {
   it('does nothing safely when monitoring is not configured', () => {
     const result = spawnSync(bash, [script], {
@@ -76,16 +88,10 @@ describe('snapshot dead-man notification', () => {
       );
       await chmod(curl, 0o755);
 
-      const result = spawnSync(bash, [script], {
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          // Keep the native delimiter here: Windows must locate the absolute
-          // executable first, then Git Bash converts PATH to POSIX form.
-          PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`,
-          CAPTURE_FILE: bashPath(capture),
-          SNAPSHOT_HEALTHCHECK_URL: url
-        }
+      const result = runWithMockPath(bin, {
+        ...process.env,
+        CAPTURE_FILE: bashPath(capture),
+        SNAPSHOT_HEALTHCHECK_URL: url
       });
 
       expect(result.error).toBeUndefined();
@@ -121,14 +127,10 @@ describe('snapshot dead-man notification', () => {
       await chmod(curl, 0o755);
       await chmod(sleep, 0o755);
 
-      const result = spawnSync(bash, [script], {
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`,
-          COUNTER_FILE: bashPath(counter),
-          SNAPSHOT_HEALTHCHECK_URL: 'https://monitor.example.invalid/ping-id'
-        }
+      const result = runWithMockPath(bin, {
+        ...process.env,
+        COUNTER_FILE: bashPath(counter),
+        SNAPSHOT_HEALTHCHECK_URL: 'https://monitor.example.invalid/ping-id'
       });
 
       expect(result.error).toBeUndefined();

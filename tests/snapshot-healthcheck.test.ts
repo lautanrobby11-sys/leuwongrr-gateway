@@ -42,7 +42,7 @@ function withoutHealthcheckUrl(): NodeJS.ProcessEnv {
 function runWithMockPath(bin: string, environment: NodeJS.ProcessEnv) {
   return spawnSync(
     bash,
-    ['-c', 'export PATH="$1:$PATH"; exec "$2"', '_', bashPath(bin), script],
+    ['-c', 'export PATH="$1:$PATH"; exec "$BASH" "$2"', '_', bashPath(bin), script],
     { encoding: 'utf8', env: environment }
   );
 }

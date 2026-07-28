@@ -2,10 +2,30 @@
 set -Eeuo pipefail
 umask 077
 ROOT=/opt/leuwongrr-gateway
+
+require_commands() {
+  local missing=()
+  local cmd
+  for cmd in "$@"; do
+    command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
+  done
+  if (( ${#missing[@]} > 0 )); then
+    printf 'missing required command(s): %s\n' "${missing[*]}" >&2
+    printf 'install with: apt-get install -y %s\n' "${missing[*]}" >&2
+    exit 1
+  fi
+}
+
+# Checked before any work so a missing tool cannot fail mid-run after a temp
+# directory exists. The gateway embeds SQLite through better-sqlite3 and never
+# needs the sqlite3 CLI, so the service can be healthy on a host that cannot
+# produce a backup at all.
+require_commands sqlite3 age rsync tar sha256sum
+: "${AGE_RECIPIENT:?AGE_RECIPIENT is required}"
+
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 WORK=$(mktemp -d "$ROOT/runtime/backup.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT
-: "${AGE_RECIPIENT:?AGE_RECIPIENT is required}"
 sqlite3 "$ROOT/data/gateway.db" ".timeout 5000" ".backup '$WORK/gateway.db'"
 mkdir "$WORK/attachments"
 rsync -a --delete "$ROOT/data/attachments/" "$WORK/attachments/"

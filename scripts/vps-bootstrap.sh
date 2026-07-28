@@ -8,6 +8,28 @@ ROOT=/opt/leuwongrr-gateway
 SERVICE_USER=leuwongrr-gateway
 UNIT_SRC=${1:-infra/systemd/leuwongrr-gateway.service}
 
+# Host prerequisites for scripts/backup.sh and scripts/restore-drill.sh.
+# The gateway itself embeds SQLite through better-sqlite3 and never shells out
+# to the sqlite3 CLI, so a host can run the service perfectly while being unable
+# to take a single backup. Bootstrap is the only place that can close that gap
+# before the operator discovers it during an incident.
+HOST_TOOLS=(sqlite3 age rsync)
+MISSING_TOOLS=()
+for tool in "${HOST_TOOLS[@]}"; do
+  command -v "$tool" >/dev/null 2>&1 || MISSING_TOOLS+=("$tool")
+done
+if (( ${#MISSING_TOOLS[@]} > 0 )); then
+  if command -v apt-get >/dev/null 2>&1; then
+    echo "installing host tools: ${MISSING_TOOLS[*]}" >&2
+    DEBIAN_FRONTEND=noninteractive apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y "${MISSING_TOOLS[@]}"
+  else
+    echo "missing required host tools: ${MISSING_TOOLS[*]}" >&2
+    echo 'install them with the distribution package manager, then re-run' >&2
+    exit 1
+  fi
+fi
+
 if ! id "$SERVICE_USER" >/dev/null 2>&1; then
   useradd --system --home "$ROOT" --shell /usr/sbin/nologin "$SERVICE_USER"
 fi

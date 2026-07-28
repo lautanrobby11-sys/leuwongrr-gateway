@@ -1,0 +1,32 @@
+name: Defect report
+description: Report incorrect gateway behaviour with reproducible evidence
+labels: [defect]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Observed behaviour
+      description: Describe what happened. Never paste secrets, tokens, prompts, or raw logs.
+    validations: { required: true }
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations: { required: true }
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Route, method, redacted request shape, and status code.
+    validations: { required: true }
+  - type: input
+    id: release
+    attributes:
+      label: Active release SHA
+    validations: { required: true }
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Affected surface
+      options: [public API, member, chat, admin, callbacks, webhooks, operations]
+    validations: { required: true }

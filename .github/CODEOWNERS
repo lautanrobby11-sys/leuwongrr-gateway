@@ -1,3 +1,4 @@
+# Repository-wide owner. Branch protection must require Code Owner review.
 * @lautanrobby11-sys
 
 /src/auth/ @lautanrobby11-sys
@@ -5,4 +6,8 @@
 /src/persistence/ @lautanrobby11-sys
 /infra/ @lautanrobby11-sys
 /scripts/ @lautanrobby11-sys
+
+# Changes to review policy or executable CI require explicit owner review.
+/.github/CODEOWNERS @lautanrobby11-sys
+/.github/workflows/ @lautanrobby11-sys
 /.github/ @lautanrobby11-sys

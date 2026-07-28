@@ -3,6 +3,22 @@ set -Eeuo pipefail
 umask 077
 BACKUP=${1:?encrypted backup required}
 IDENTITY=${2:?age identity file required}
+
+require_commands() {
+  local missing=()
+  local cmd
+  for cmd in "$@"; do
+    command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
+  done
+  if (( ${#missing[@]} > 0 )); then
+    printf 'missing required command(s): %s\n' "${missing[*]}" >&2
+    printf 'install with: apt-get install -y %s\n' "${missing[*]}" >&2
+    exit 1
+  fi
+}
+
+require_commands sqlite3 age tar sha256sum
+
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 sha256sum -c "${BACKUP}.sha256"

@@ -10,6 +10,12 @@ import { type Scope } from '../../src/auth/api-keys.js';
 import type { Config } from '../../src/config.js';
 
 export const testConfig: Config = {
+  /**
+   * ADR-010: production fails closed on development OTP delivery. Tests run
+   * offline, so the fixture is pinned to the test environment instead of
+   * inheriting the production default.
+   */
+  NODE_ENV: 'test',
   GATEWAY_HOST: '127.0.0.1',
   GATEWAY_PORT: 2080,
   OMNIROUTE_URL: 'http://127.0.0.1:20128',

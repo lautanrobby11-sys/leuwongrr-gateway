@@ -5,7 +5,11 @@ import { requireModel, PolicyError } from '../src/policy/capabilities.js';
 import { assertPublicEgress } from '../src/policy/egress.js';
 import { BoundedSemaphore, OverloadError } from '../src/policy/semaphore.js';
 
-const base = { API_KEY_PEPPER: 'x'.repeat(32), INTERNAL_READY_TOKEN: 'y'.repeat(32) };
+const base = {
+  NODE_ENV: 'test',
+  API_KEY_PEPPER: 'x'.repeat(32),
+  INTERNAL_READY_TOKEN: 'y'.repeat(32)
+};
 
 describe('configuration guardrails', () => {
   it('accepts canonical loopback values', () =>
@@ -18,6 +22,36 @@ describe('configuration guardrails', () => {
     expect(() => loadConfig({ ...base, GATEWAY_HOST: '0.0.0.0' })).toThrow());
   it('rejects non-loopback upstream', () =>
     expect(() => loadConfig({ ...base, OMNIROUTE_URL: 'https://router.example.com' })).toThrow());
+  it('rejects development OTP disclosure in production', () =>
+    expect(() =>
+      loadConfig({
+        ...base,
+        NODE_ENV: 'production',
+        CONSOLE_ENABLED: 'true',
+        OTP_DELIVERY: 'log'
+      })
+    ).toThrow(/production console requires OTP_DELIVERY=webhook/));
+  it('requires both webhook URL and credential in production', () =>
+    expect(() =>
+      loadConfig({
+        ...base,
+        NODE_ENV: 'production',
+        CONSOLE_ENABLED: 'true',
+        OTP_DELIVERY: 'webhook',
+        OTP_WEBHOOK_URL: 'https://mail.example.com/send'
+      })
+    ).toThrow(/OTP_WEBHOOK_URL and OTP_WEBHOOK_TOKEN/));
+  it('accepts a fully configured production OTP webhook', () =>
+    expect(
+      loadConfig({
+        ...base,
+        NODE_ENV: 'production',
+        CONSOLE_ENABLED: 'true',
+        OTP_DELIVERY: 'webhook',
+        OTP_WEBHOOK_URL: 'https://mail.example.com/send',
+        OTP_WEBHOOK_TOKEN: 'z'.repeat(32)
+      }).OTP_DELIVERY
+    ).toBe('webhook'));
 });
 
 describe('explicit route and capability policy', () => {

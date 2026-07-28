@@ -9,6 +9,7 @@ const loopbackUrl = z
   }, 'must target loopback');
 
 const schema = z.object({
+  NODE_ENV: z.enum(['development', 'test', 'production']).default('production'),
   GATEWAY_HOST: z.enum(['127.0.0.1', '::1']).default('127.0.0.1'),
   GATEWAY_PORT: z.coerce.number().int().min(1024).max(65535).default(2080),
   OMNIROUTE_URL: loopbackUrl.default('http://127.0.0.1:20128'),
@@ -26,11 +27,6 @@ const schema = z.object({
   SQLITE_CACHE_KIB: z.coerce.number().int().min(256).max(65536).default(4096),
   RETENTION_DAYS: z.coerce.number().int().min(1).max(3650).default(90),
   MAINTENANCE_INTERVAL_MS: z.coerce.number().int().min(60000).max(86400000).default(3600000),
-  /**
-   * Every request arrives from cloudflared over loopback, so the socket peer is
-   * useless for fairness. The forwarded header is only honoured when the
-   * operator opts in and the peer really is the local tunnel.
-   */
   TRUST_PROXY: z
     .enum(['true', 'false'])
     .default('false')
@@ -40,34 +36,24 @@ const schema = z.object({
   TENANT_MAX_CONCURRENT: z.coerce.number().int().min(1).max(64).default(2),
   TENANT_LIMIT_MAX_ENTRIES: z.coerce.number().int().min(16).max(100000).default(512),
 
-  // ---- Console (dashboards) ----
   CONSOLE_ENABLED: z
     .enum(['true', 'false'])
     .default('true')
     .transform((value) => value === 'true'),
-  /** Absolute origin used to build OAuth redirect URIs and payment callbacks. */
   PUBLIC_BASE_URL: z.string().url().default('https://api.leuwongrr.cloud'),
-  /** Directory holding the built dashboard assets. */
   WEB_DIST_PATH: z.string().min(1).default('./dist/public'),
   SESSION_COOKIE_NAME: z.string().min(1).max(64).default('lwrr_session'),
   SESSION_TTL_HOURS: z.coerce.number().int().min(1).max(720).default(12),
   OTP_TTL_MINUTES: z.coerce.number().int().min(1).max(60).default(10),
   OTP_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(20).default(5),
   OTP_RESEND_SECONDS: z.coerce.number().int().min(15).max(3600).default(60),
-  /**
-   * The gateway does not ship an SMTP client. Codes are handed to an outbound
-   * delivery webhook in production; `log` exists so a developer can work
-   * offline and is refused when a public base URL is configured.
-   */
   OTP_DELIVERY: z.enum(['webhook', 'log']).default('log'),
   OTP_WEBHOOK_URL: z.string().url().optional(),
   OTP_WEBHOOK_TOKEN: z.string().min(16).optional(),
 
-  // ---- Cloudflare Access (admin only) ----
   ACCESS_TEAM_DOMAIN: z.string().min(3).max(253).optional(),
   ACCESS_AUD: z.string().min(8).optional(),
 
-  // ---- Member OAuth providers ----
   GOOGLE_CLIENT_ID: z.string().min(8).optional(),
   GOOGLE_CLIENT_SECRET: z.string().min(8).optional(),
   DISCORD_CLIENT_ID: z.string().min(8).optional(),
@@ -75,7 +61,6 @@ const schema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().min(8).optional(),
   TELEGRAM_BOT_USERNAME: z.string().min(3).max(64).optional(),
 
-  // ---- Cryptomus ----
   CRYPTOMUS_API_URL: z.string().url().default('https://api.cryptomus.com'),
   CRYPTOMUS_MERCHANT_ID: z.string().min(8).optional(),
   CRYPTOMUS_PAYMENT_API_KEY: z.string().min(8).optional(),
@@ -92,11 +77,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (config.TENANT_MAX_CONCURRENT > config.UPSTREAM_CONCURRENCY) {
     throw new Error('TENANT_MAX_CONCURRENT must not exceed UPSTREAM_CONCURRENCY');
   }
-  if (config.OTP_DELIVERY === 'webhook' && !config.OTP_WEBHOOK_URL) {
-    throw new Error('OTP_WEBHOOK_URL is required when OTP_DELIVERY is webhook');
+  if (config.OTP_DELIVERY === 'webhook' && (!config.OTP_WEBHOOK_URL || !config.OTP_WEBHOOK_TOKEN)) {
+    throw new Error('OTP_WEBHOOK_URL and OTP_WEBHOOK_TOKEN are required when OTP_DELIVERY is webhook');
   }
-  // A half-configured provider fails at redirect time, which is the worst place
-  // to discover it, so pairs are validated at startup instead.
+  if (config.NODE_ENV === 'production' && config.CONSOLE_ENABLED && config.OTP_DELIVERY !== 'webhook') {
+    throw new Error('production console requires OTP_DELIVERY=webhook; development OTP responses are forbidden');
+  }
   if (Boolean(config.GOOGLE_CLIENT_ID) !== Boolean(config.GOOGLE_CLIENT_SECRET)) {
     throw new Error('GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must be set together');
   }

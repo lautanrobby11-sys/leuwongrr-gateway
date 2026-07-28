@@ -89,9 +89,9 @@ describe('Cloudflare Access assertion verification', () => {
   });
 
   it('refuses an algorithm the verifier does not check', async () => {
-    await expect(
-      verifier().verify(token(validClaims(), { alg: 'HS256' }))
-    ).rejects.toThrow('access_alg_unsupported');
+    await expect(verifier().verify(token(validClaims(), { alg: 'HS256' }))).rejects.toThrow(
+      'access_alg_unsupported'
+    );
   });
 
   it('refuses a header that names no key', async () => {

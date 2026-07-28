@@ -12,6 +12,17 @@ import {
 
 export type SqliteHandle = InstanceType<typeof Database>;
 
+export interface DatabaseOptions {
+  /** Page cache ceiling in KiB. Keeps SQLite predictable on a small VPS. */
+  cacheKib?: number;
+}
+
+export interface MaintenanceResult {
+  expiredIdempotencyKeys: number;
+  expiredUsageEvents: number;
+  expiredAuditLogs: number;
+}
+
 interface ApiKeyRow {
   id: string;
   tenant_id: string;
@@ -26,13 +37,20 @@ export class GatewayDatabase {
   readonly db: SqliteHandle;
   private readonly pepper: string;
 
-  constructor(path: string, pepper: string) {
+  constructor(path: string, pepper: string, options: DatabaseOptions = {}) {
     this.pepper = pepper;
     mkdirSync(dirname(path), { recursive: true, mode: 0o750 });
     this.db = new Database(path);
     this.db.pragma('journal_mode = WAL');
     this.db.pragma('foreign_keys = ON');
     this.db.pragma('busy_timeout = 5000');
+    this.db.pragma('synchronous = NORMAL');
+    // Negative cache_size is interpreted by SQLite as a KiB ceiling.
+    this.db.pragma(`cache_size = -${options.cacheKib ?? 4096}`);
+    // Avoid mapping the database into the process address space on a small host.
+    this.db.pragma('mmap_size = 0');
+    // Bound WAL growth so disk and page cache stay predictable.
+    this.db.pragma('wal_autocheckpoint = 512');
     this.db.exec(
       'CREATE TABLE IF NOT EXISTS schema_migrations (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL)'
     );
@@ -133,5 +151,35 @@ export class GatewayDatabase {
         JSON.stringify(metadata),
         new Date().toISOString()
       );
+  }
+
+  /**
+   * Removes expired idempotency claims and history older than the retention
+   * window, then truncates the WAL. Unbounded growth is the main long-run
+   * stability risk for a single-node SQLite deployment.
+   */
+  maintain(retentionDays: number): MaintenanceResult {
+    const now = Date.now();
+    const nowIso = new Date(now).toISOString();
+    const cutoffIso = new Date(now - retentionDays * 86_400_000).toISOString();
+    const cutoffDay = cutoffIso.slice(0, 10);
+
+    const result = this.db.transaction((): MaintenanceResult => {
+      const idempotency = this.db
+        .prepare('DELETE FROM idempotency_keys WHERE expires_at<=?')
+        .run(nowIso);
+      const usage = this.db
+        .prepare("DELETE FROM usage_events WHERE day<? AND state IN ('settled','released')")
+        .run(cutoffDay);
+      const audit = this.db.prepare('DELETE FROM audit_logs WHERE created_at<?').run(cutoffIso);
+      return {
+        expiredIdempotencyKeys: idempotency.changes,
+        expiredUsageEvents: usage.changes,
+        expiredAuditLogs: audit.changes
+      };
+    })();
+
+    this.db.pragma('wal_checkpoint(TRUNCATE)');
+    return result;
   }
 }

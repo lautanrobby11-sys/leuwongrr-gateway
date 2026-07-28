@@ -11,6 +11,7 @@ User=leuwongrr-gateway
 Group=leuwongrr-gateway
 WorkingDirectory=/opt/leuwongrr-gateway/current
 Environment=NODE_ENV=production
+Environment=NODE_OPTIONS=--max-old-space-size=192
 EnvironmentFile=/opt/leuwongrr-gateway/config/gateway.env
 ExecStart=/usr/bin/node /opt/leuwongrr-gateway/current/dist/main.js
 Restart=on-failure

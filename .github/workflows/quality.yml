@@ -17,6 +17,8 @@ jobs:
       - run: npm install --no-audit --no-fund
       - run: npm run validate
       - run: npm run build
+      - name: Validate operational scripts
+        run: bash -n scripts/*.sh
       - name: Verify clean generated state
         run: git diff --exit-code
       - uses: actions/upload-artifact@v4

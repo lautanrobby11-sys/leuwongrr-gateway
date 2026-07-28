@@ -1,4 +1,4 @@
-import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
+import Fastify, { type FastifyRequest } from 'fastify';
 import { createHash, randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
 import type { Config } from '../config.js';
@@ -26,7 +26,7 @@ export interface AppDeps {
   logger: Logger;
 }
 
-export function buildApp(deps: AppDeps): FastifyInstance {
+export function buildApp(deps: AppDeps) {
   const app = Fastify({
     loggerInstance: deps.logger,
     requestIdHeader: 'x-request-id',

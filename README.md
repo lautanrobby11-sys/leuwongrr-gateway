@@ -8,17 +8,15 @@ Gateway produk untuk `api.leuwongrr.cloud`, terpisah dari OmniRoute.
 | Upstream | `http://127.0.0.1:20128` |
 | Runtime root | `/opt/leuwongrr-gateway` |
 | Stack | Node.js 22, Fastify, SQLite WAL |
+| PR fondasi | https://github.com/lautanrobby11-sys/leuwongrr-gateway/pull/1 |
 
 ## Jalur normal (lokal → CI hijau → produksi)
 
 ### 1) Bootstrap mesin developer (sekali)
 
 ```bash
-# Node 22 LTS + toolchain native (butuh better-sqlite3)
 node -v   # >= 22
-# Ubuntu/Debian:
 sudo apt-get install -y build-essential python3
-
 git clone git@github.com:lautanrobby11-sys/leuwongrr-gateway.git
 cd leuwongrr-gateway
 git checkout feat/gateway-foundation
@@ -26,45 +24,47 @@ cp .env.example .env
 # isi API_KEY_PEPPER dan INTERNAL_READY_TOKEN (min 32 char), JANGAN commit .env
 ```
 
-### 2) Buat lockfile + buktikan gate lokal
+### 2) Buat lockfile + buktikan gate lokal (WAJIB sebelum merge)
 
 ```bash
-npm install                 # menghasilkan package-lock.json
+npm install
 git add package-lock.json
 git commit -m "chore(deps): pin package-lock for deterministic CI"
-npm run validate            # conventions + secrets + lint + typecheck + test
-npm run build
-npm run ci:local            # validate + build + shell syntax + release artifact
+npm run validate
+npm run ci:local
+git push origin feat/gateway-foundation
 ```
 
-Jika `npm run validate` hijau di mesin Anda, push ke PR #1. Actions harus mengikuti hasil yang sama.
+Buka PR #1 → pastikan workflow **quality** hijau pada HEAD. Jika merah, salin **nama langkah + baris error** saja.
 
-### 3) Hijaukan PR lalu merge
+### 3) Merge ke main
 
-1. Buka https://github.com/lautanrobby11-sys/leuwongrr-gateway/pull/1
-2. Pastikan workflow `quality` **hijau** pada HEAD terbaru
-3. Jika merah: buka job → langkah gagal pertama (Convention / Secret scan / Lint / Typecheck / Tests / Build / Package) → salin **nama langkah + baris error** saja
-4. Setelah hijau: merge ke `main` (squash atau merge commit; jangan force-push `main`)
+Hanya setelah quality hijau. Jangan force-push `main`.
 
-### 4) Staging di VPS (belum publik)
-
-Hanya operator dengan akses root VPS. Jangan tempel secret ke chat/Git/Notion.
+### 4) Staging / first deploy di VPS
 
 ```bash
-# di VPS, setelah backup OmniRoute + baseline resource tercatat
-sudo mkdir -p /opt/leuwongrr-gateway/{releases,config,data,logs,runtime}
-# letakkan gateway.env mode 600 root-owned
-# deploy artifact dari CI ke staging port 2081 dulu (mock upstream)
+# di VPS (root), dari checkout yang berisi scripts/infra:
+sudo bash scripts/vps-bootstrap.sh infra/systemd/leuwongrr-gateway.service
+sudo nano /opt/leuwongrr-gateway/config/gateway.env   # ganti placeholder secrets
+
+# di mesin build (atau CI artifact):
 scripts/build-release.sh <40-char-sha>
-sudo scripts/deploy.sh <40-char-sha> .release/<40-char-sha>.tar.gz
+# transfer .release/<sha>.tar.gz{,.sha256} ke VPS, lalu:
+sudo scripts/deploy.sh <40-char-sha> /path/to/<sha>.tar.gz
 curl -sS http://127.0.0.1:2080/health/live
+
+# seed tenant pertama (cetak key sekali):
+sudo -u leuwongrr-gateway bash -lc '
+  set -a; . /opt/leuwongrr-gateway/config/gateway.env; set +a
+  cd /opt/leuwongrr-gateway/current
+  node scripts/seed-tenant.mjs --tenant demo --scopes models:read,chat:write
+'
 ```
 
 Checklist penuh: `docs/runbooks/operations.md`.
 
 ### 5) Produksi stabil (baru setelah bukti)
-
-Baru boleh dianggap normal/produksi bila **semua** ini punya bukti tertangkap:
 
 - quality CI hijau di `main`
 - bind hanya loopback, service non-root, secret mode 600

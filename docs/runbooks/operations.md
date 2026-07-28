@@ -16,6 +16,27 @@
 5. Push to the PR branch and wait for workflow `quality` to finish green on the same SHA.
 6. Merge only when the PR check is green. Repository CI alone does **not** mean production is ready.
 
+```bash
+git checkout feat/gateway-foundation
+cp .env.example .env   # fill secrets locally only; never commit
+npm install
+git add package-lock.json
+git commit -m "chore(deps): pin package-lock for deterministic CI"
+npm run validate && npm run ci:local
+git push origin feat/gateway-foundation
+```
+
+## First-time VPS bootstrap
+
+```bash
+# from a clean checkout of the release SHA on the VPS (or copy unit file)
+sudo bash scripts/vps-bootstrap.sh infra/systemd/leuwongrr-gateway.service
+# edit secrets in place — never paste them into chat/Git/Notion
+sudo nano /opt/leuwongrr-gateway/config/gateway.env
+# generate strong values, for example:
+#   openssl rand -hex 32
+```
+
 ## Validate and release
 
 1. Clean checkout on the exact git SHA: `git status --short`, `npm ci` (or `npm install` if lockfile absent), `npm run validate`.
@@ -24,7 +45,24 @@
    - Package contents: `dist/`, `package.json`, optional `package-lock.json`, `RELEASE`, `manifest.sha256`
 3. Transfer only the artifact and checksum, then run `sudo scripts/deploy.sh <40-char-sha> <artifact.tar.gz>`.
 4. Deploy verifies checksum + manifest, installs production dependencies on the server, runs preflight as the service user, atomically swaps `current`, health-gates, and auto-restores the previous symlink on failure.
-5. Record SHA, changed canonical files, migration id, validation result, health, resource snapshot, and prior release SHA.
+5. Seed the first tenant only after health is green:
+
+```bash
+sudo -u leuwongrr-gateway env \
+  API_KEY_PEPPER="$(sudo grep ^API_KEY_PEPPER= /opt/leuwongrr-gateway/config/gateway.env | cut -d= -f2-)" \
+  DATABASE_PATH=/opt/leuwongrr-gateway/data/gateway.db \
+  node /opt/leuwongrr-gateway/current/../ # use release path:
+# Prefer:
+sudo -u leuwongrr-gateway bash -lc '
+  set -a; . /opt/leuwongrr-gateway/config/gateway.env; set +a
+  cd /opt/leuwongrr-gateway/current
+  node scripts/seed-tenant.mjs --tenant demo --name "Demo" --scopes models:read,chat:write
+'
+```
+
+Note: `seed-tenant.mjs` is packaged only if present in the release tree. Prefer running it from the repo checkout with `DATABASE_PATH` pointed at the runtime DB, or copy the script into the release before seeding. Store the printed `api_key_once` offline; it is not recoverable.
+
+6. Record SHA, changed canonical files, migration id, validation result, health, resource snapshot, and prior release SHA.
 
 ## Post-deploy negative checks
 

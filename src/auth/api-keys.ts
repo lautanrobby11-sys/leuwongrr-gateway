@@ -1,12 +1,47 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
-export type Scope = 'models:read'|'chat:write'|'usage:read';
-export interface ApiKeyRecord { id:string; tenantId:string; keyHash:string; prefix:string; last4:string; scopes:ReadonlySet<Scope>; revokedAt:string|null }
+export type Scope =
+  | 'models:read'
+  | 'chat:write'
+  | 'usage:read'
+  | 'responses:write'
+  | 'messages:write'
+  | 'embeddings:write'
+  | 'media:write'
+  | 'files:write'
+  | 'realtime:write';
 
-export function issueApiKey(pepper: string, mode: 'live'|'test' = 'live') {
+export interface ApiKeyRecord {
+  id: string;
+  tenantId: string;
+  keyHash: string;
+  prefix: string;
+  last4: string;
+  scopes: ReadonlySet<Scope>;
+  revokedAt: string | null;
+}
+
+const KNOWN_SCOPES = new Set<Scope>([
+  'models:read',
+  'chat:write',
+  'usage:read',
+  'responses:write',
+  'messages:write',
+  'embeddings:write',
+  'media:write',
+  'files:write',
+  'realtime:write'
+]);
+
+export function issueApiKey(pepper: string, mode: 'live' | 'test' = 'live') {
   const secret = randomBytes(32).toString('base64url');
   const plaintext = `lwrr_${mode}_${secret}`;
-  return { plaintext, hash: hashApiKey(plaintext, pepper), prefix: `lwrr_${mode}_`, last4: plaintext.slice(-4) };
+  return {
+    plaintext,
+    hash: hashApiKey(plaintext, pepper),
+    prefix: `lwrr_${mode}_`,
+    last4: plaintext.slice(-4)
+  };
 }
 
 export function hashApiKey(value: string, pepper: string): string {
@@ -24,10 +59,20 @@ export function bearerToken(header: string | undefined): string | null {
   return /^lwrr_(live|test)_[A-Za-z0-9_-]{40,}$/.test(token) ? token : null;
 }
 
+export function parseScopes(raw: unknown): Scope[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((value): value is Scope => typeof value === 'string' && KNOWN_SCOPES.has(value as Scope));
+}
+
 export function requireScope(record: ApiKeyRecord, scope: Scope): void {
   if (record.revokedAt || !record.scopes.has(scope)) throw new AuthError('insufficient_scope', 403);
 }
 
 export class AuthError extends Error {
-  constructor(public readonly code: string, public readonly statusCode: number) { super(code); }
+  constructor(
+    public readonly code: string,
+    public readonly statusCode: number
+  ) {
+    super(code);
+  }
 }

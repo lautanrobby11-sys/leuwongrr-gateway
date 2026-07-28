@@ -3,6 +3,7 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 permissions:
   contents: read
   actions: write
@@ -13,6 +14,10 @@ jobs:
   validate:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    env:
+      NODE_ENV: test
+      npm_config_fund: false
+      npm_config_audit: false
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 1 }
@@ -63,6 +68,7 @@ jobs:
             echo "- result: **${{ job.status }}**"
             echo "- node: $(node --version)"
             echo "- lockfile: $([ -f package-lock.json ] && echo present || echo absent)"
+            echo "- branch: \`${{ github.ref_name }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: success()

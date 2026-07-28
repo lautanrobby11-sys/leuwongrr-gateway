@@ -9,10 +9,24 @@ ARTIFACT=${2:-}
 RELEASE=
 ACTIVATED=0
 
+# readlink -f canonicalises a path even when the final component does not
+# exist, so it happily returns "$ROOT/current" when nothing is deployed yet.
+# Feeding that value back into `ln -s` produces a symlink pointing at itself
+# and every later start fails with ELOOP. -e resolves only when the whole
+# chain exists, and the explicit -L test keeps a dangling link from counting
+# as a usable previous release.
+resolve_current() {
+  [[ -L $ROOT/current ]] || return 0
+  local resolved
+  resolved=$(readlink -e "$ROOT/current") || return 0
+  [[ $resolved != "$ROOT/current" ]] || return 0
+  printf '%s\n' "$resolved"
+}
+
 cleanup_failed_release() {
   local rc=$?
   if [[ $rc -ne 0 && $ACTIVATED -eq 0 && -n ${RELEASE:-} && -d $RELEASE ]]; then
-    if [[ $(readlink -f "$ROOT/current" 2>/dev/null || true) != "$RELEASE" ]]; then
+    if [[ $(resolve_current) != "$RELEASE" ]]; then
       rm -rf -- "$RELEASE"
     fi
   fi
@@ -25,6 +39,21 @@ fail() {
   exit 1
 }
 
+# The unit file ships inside the artifact, so the running service definition
+# is part of the release contract rather than something an operator has to
+# remember to copy by hand. A release whose code and unit disagree can crash
+# loop for reasons no amount of application debugging will explain.
+sync_unit() {
+  local src="$1/infra/systemd/$SERVICE.service"
+  local dst="/etc/systemd/system/$SERVICE.service"
+  [[ -f $src ]] || return 0
+  if ! cmp -s "$src" "$dst"; then
+    install -m 0644 -o root -g root "$src" "$dst"
+    systemctl daemon-reload
+    echo "systemd unit synced from $1"
+  fi
+}
+
 check_health() {
   curl -fsS --max-time 2 http://127.0.0.1:2080/health/live >/dev/null &&
     printf 'x-internal-ready-token: %s\n' "$INTERNAL_READY_TOKEN" |
@@ -33,7 +62,7 @@ check_health() {
 
 wait_for_health() {
   local deadline=$((SECONDS + 30))
-  until check_health; do
+  until check_health 2>/dev/null; do
     (( SECONDS >= deadline )) && return 1
     sleep 1
   done
@@ -60,6 +89,13 @@ install -d -o root -g "$SERVICE" -m 0750 "$ROOT" "$ROOT/releases" "$ROOT/config"
 install -d -o "$SERVICE" -g "$SERVICE" -m 0750 \
   "$ROOT/data" "$ROOT/data/attachments" "$ROOT/data/backups" "$ROOT/logs" "$ROOT/runtime"
 
+# A self-referential or dangling current link is unusable and would otherwise
+# survive into the next deploy, so clear it before anything depends on it.
+if [[ -L $ROOT/current && -z $(resolve_current) ]]; then
+  echo 'removing unusable current symlink' >&2
+  rm -f "$ROOT/current"
+fi
+
 ENV_FILE="$ROOT/config/gateway.env"
 [[ -f $ENV_FILE ]] || fail 'missing config/gateway.env'
 [[ $(stat -c %a "$ENV_FILE") == 600 ]] || fail 'gateway.env must be mode 600'
@@ -75,6 +111,7 @@ tar --extract --file "$ARTIFACT" --directory "$RELEASE" --no-same-owner --no-sam
 )
 
 [[ -f $RELEASE/package-lock.json ]] || fail 'package-lock.json is required for deterministic production deploy'
+[[ -f $RELEASE/infra/systemd/$SERVICE.service ]] || fail 'systemd unit missing from release'
 
 # A release without the console would still pass health checks, so the dashboards
 # are verified as part of the artifact contract rather than discovered by a user.
@@ -98,15 +135,23 @@ set +a
 
 run_preflight "$RELEASE"
 
-PREVIOUS=$(readlink -f "$ROOT/current" 2>/dev/null || true)
+PREVIOUS=$(resolve_current)
 CANDIDATE_LINK="$ROOT/.current-$SHA"
 ln -s "$RELEASE" "$CANDIDATE_LINK"
 mv -Tf "$CANDIDATE_LINK" "$ROOT/current"
+
+sync_unit "$RELEASE"
+# A crash loop from an earlier attempt can exhaust StartLimitBurst, and then
+# systemctl restart refuses to start the service at all. Clearing that state
+# keeps a good release from being blocked by a bad one.
+systemctl reset-failed "$SERVICE" 2>/dev/null || true
 
 if ! systemctl restart "$SERVICE" || ! wait_for_health; then
   if [[ -n $PREVIOUS && -d $PREVIOUS ]]; then
     ln -s "$PREVIOUS" "$ROOT/.rollback"
     mv -Tf "$ROOT/.rollback" "$ROOT/current"
+    sync_unit "$PREVIOUS"
+    systemctl reset-failed "$SERVICE" 2>/dev/null || true
     systemctl restart "$SERVICE" || true
     wait_for_health || echo 'warning: previous release did not recover readiness' >&2
   else

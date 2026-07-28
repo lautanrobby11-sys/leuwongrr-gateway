@@ -5,7 +5,7 @@ import { AccessVerifier } from '../src/accounts/access.js';
 const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
 const KID = 'kid-primary';
 const TEAM = 'leuwongrr.cloudflareaccess.com';
-const ISSUER = `https://${TEAM}`;
+const ISSUER = 'https://' + TEAM;
 const AUD = 'a'.repeat(32);
 
 const jwk = {
@@ -31,12 +31,12 @@ function token(claims: Record<string, unknown>, options: TokenOptions = {}): str
   const header = encode(rawHeader);
   const payload = encode(claims);
   if (options.forge) {
-    return `${header}.${payload}.${Buffer.from('forged-signature').toString('base64url')}`;
+    return header + '.' + payload + '.' + Buffer.from('forged-signature').toString('base64url');
   }
   const signer = createSign('RSA-SHA256');
-  signer.update(`${header}.${payload}`);
+  signer.update(header + '.' + payload);
   signer.end();
-  return `${header}.${payload}.${signer.sign(privateKey).toString('base64url')}`;
+  return header + '.' + payload + '.' + signer.sign(privateKey).toString('base64url');
 }
 
 function validClaims(overrides: Record<string, unknown> = {}): Record<string, unknown> {

@@ -10,8 +10,32 @@ updates:
         dependency-type: production
       development:
         dependency-type: development
+    ignore:
+      # Major upgrades rewrite the toolchain (TypeScript, ESLint, Vitest, Zod)
+      # and must be piloted on a branch with a green quality run, never merged
+      # automatically. Minor and patch updates stay enabled.
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: npm
+    directory: "/web"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      console:
+        patterns: ["*"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
       interval: weekly
     open-pull-requests-limit: 3
+    ignore:
+      # actions/checkout v7 and actions/setup-node v7 do not exist; a major
+      # bump here fails every job at the first step.
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]

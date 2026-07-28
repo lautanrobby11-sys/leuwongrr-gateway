@@ -1,0 +1,197 @@
+export interface Plan {
+  id: string;
+  name: string;
+  monthlyPriceCents: number;
+  includedTokens: number;
+  overageCentsPerMillion: number;
+  maxConcurrent: number;
+  rateLimitRpm: number;
+  dailyBudgetUnits: number;
+  models: string[];
+  active: boolean;
+}
+
+export interface Subscription {
+  id: string;
+  planId: string;
+  status: 'active' | 'past_due' | 'canceled';
+  periodStart: string;
+  periodEnd: string;
+  includedTokens: number;
+  usedTokens: number;
+  autoRenew: boolean;
+}
+
+export interface BillingSummary {
+  plan: Plan | null;
+  subscription: Subscription | null;
+  walletTokens: number;
+  subscriptionRemaining: number;
+  totalAvailable: number;
+  funded: boolean;
+  usageToday: number;
+  usageThisPeriod: number;
+  projectedDaysLeft: number | null;
+}
+
+export interface LedgerEntry {
+  id: string;
+  kind: string;
+  source: string;
+  tokens: number;
+  reference: string;
+  balanceAfter: number;
+  createdAt: string;
+}
+
+export interface SessionState {
+  authenticated: boolean;
+  account: { email: string; display_name: string; role: string; tenant_id: string } | null;
+  providers: {
+    google: boolean;
+    discord: boolean;
+    telegram: boolean;
+    telegram_bot: string | null;
+  };
+}
+
+export class ApiError extends Error {
+  constructor(
+    public readonly code: string,
+    public readonly status: number,
+    message: string
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
+/**
+ * One request helper for the whole console. Errors are normalised here so no
+ * screen has to guess whether a failure arrived as JSON, HTML, or a dropped
+ * connection.
+ */
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      credentials: 'same-origin',
+      headers: init?.body ? { 'content-type': 'application/json' } : undefined,
+      ...init
+    });
+  } catch {
+    throw new ApiError('network_error', 0, 'Network unavailable. Check your connection.');
+  }
+
+  const text = await response.text();
+  const payload = text ? (JSON.parse(text) as unknown) : {};
+
+  if (!response.ok) {
+    const detail = (payload as { error?: { code?: string; message?: string } }).error;
+    throw new ApiError(
+      detail?.code ?? 'request_failed',
+      response.status,
+      detail?.message ?? 'Request failed'
+    );
+  }
+  return payload as T;
+}
+
+const get = <T,>(path: string) => request<T>(path);
+const post = <T,>(path: string, body?: unknown) =>
+  request<T>(path, { method: 'POST', body: JSON.stringify(body ?? {}) });
+
+export const api = {
+  session: () => get<SessionState>('/console/api/session'),
+  requestCode: (email: string) =>
+    post<{ delivered: boolean; ttl_minutes: number; dev_code?: string }>(
+      '/console/api/auth/request-code',
+      { email }
+    ),
+  verifyCode: (email: string, code: string) =>
+    post<{ authenticated: boolean; role: string }>('/console/api/auth/verify-code', {
+      email,
+      code
+    }),
+  logout: () => post<{ authenticated: boolean }>('/console/api/auth/logout'),
+
+  member: {
+    overview: () =>
+      get<{
+        account: { email: string; display_name: string; role: string };
+        billing: BillingSummary;
+        ledger: LedgerEntry[];
+      }>('/console/api/member/overview'),
+    usage: () => get<{ days: Array<{ day: string; units: number }> }>('/console/api/member/usage'),
+    plans: () => get<{ plans: Plan[] }>('/console/api/member/plans'),
+    keys: () =>
+      get<{ keys: Array<{ id: string; name: string; scopes: string[]; createdAt: string; revokedAt: string | null }> }>(
+        '/console/api/member/keys'
+      ),
+    createKey: (name: string, scopes: string[]) =>
+      post<{ key: string }>('/console/api/member/keys', { name, scopes }),
+    revokeKey: (keyId: string) => post<{ revoked: boolean }>('/console/api/member/keys/revoke', { keyId }),
+    payments: () =>
+      get<{ payments: Array<Record<string, string | number | null>> }>('/console/api/member/payments'),
+    subscribe: (planId: string) =>
+      post<{ payment_url?: string; subscription?: Subscription }>('/console/api/member/subscribe', {
+        planId
+      }),
+    topup: (planId: string, amountCents: number) =>
+      post<{ payment_url: string; tokens: number }>('/console/api/member/topup', {
+        planId,
+        amountCents
+      })
+  },
+
+  admin: {
+    overview: () =>
+      get<{
+        totals: {
+          accounts: number;
+          active_subscriptions: number;
+          wallet_tokens: number;
+          units_today: number;
+        };
+        revenue_cents: number;
+      }>('/console/api/admin/overview'),
+    plans: () => get<{ plans: Plan[] }>('/console/api/admin/plans'),
+    savePlan: (plan: Omit<Plan, 'active'> & { active?: boolean }) =>
+      post<{ plan: Plan }>('/console/api/admin/plans', plan),
+    models: () =>
+      get<{
+        catalog: Array<{ id: string; capabilities: string[]; max_output_tokens: number }>;
+        policies: Array<{ tenant_id: string; model_id: string; enabled: number }>;
+      }>('/console/api/admin/models'),
+    setModel: (tenantId: string, modelId: string, enabled: boolean) =>
+      post<{ updated: boolean }>('/console/api/admin/models', { tenantId, modelId, enabled }),
+    accounts: () =>
+      get<{
+        accounts: Array<{
+          id: string;
+          email: string;
+          displayName: string;
+          role: string;
+          status: string;
+          tenantId: string;
+          billing: BillingSummary;
+        }>;
+      }>('/console/api/admin/accounts'),
+    setLimits: (input: {
+      tenantId: string;
+      dailyBudgetUnits: number;
+      maxConcurrent: number;
+      rateLimitRpm: number;
+    }) => post<{ updated: boolean }>('/console/api/admin/accounts/limits', input),
+    credit: (accountId: string, tokens: number, reason: string) =>
+      post<{ balance_tokens: number }>('/console/api/admin/accounts/credit', {
+        accountId,
+        tokens,
+        reason
+      }),
+    setStatus: (accountId: string, status: 'active' | 'suspended') =>
+      post<{ updated: boolean }>('/console/api/admin/accounts/status', { accountId, status }),
+    payments: () =>
+      get<{ payments: Array<Record<string, string | number | null>> }>('/console/api/admin/payments')
+  }
+};

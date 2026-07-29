@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { vi } from 'vitest';
 import { buildApp } from '../../src/http/app.js';
+import { closeActiveStreams } from '../../src/http/stream-lifecycle.js';
 import { GatewayDatabase } from '../../src/persistence/database.js';
 import { OmniRouteClient } from '../../src/upstream.js';
 import { createLogger } from '../../src/observability.js';
@@ -69,6 +70,7 @@ export function createTempDatabase(): { db: GatewayDatabase; dispose: () => void
   return {
     db,
     dispose: () => {
+      closeActiveStreams(db);
       db.close();
       rmSync(root, { recursive: true, force: true });
     }
@@ -111,6 +113,7 @@ export function createHarness(
     token,
     upstreamCalls: () => fetcher.mock.calls.length,
     cleanup: async () => {
+      closeActiveStreams(db);
       await app.close();
       db.close();
       rmSync(root, { recursive: true, force: true });

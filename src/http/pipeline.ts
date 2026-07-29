@@ -183,30 +183,23 @@ export function createUpstreamExecutor(deps: ExecutorDeps) {
         // A stalled upstream must not hold a connection, permit, and budget
         // reservation open indefinitely on a small host.
         let idleTimer: NodeJS.Timeout | null = null;
+        let streamFinalized = false;
         const clearIdle = () => {
           if (idleTimer) {
             clearTimeout(idleTimer);
             idleTimer = null;
           }
         };
-        const armIdle = () => {
+        const finalizeFailure = () => {
+          if (streamFinalized) return;
+          streamFinalized = true;
           clearIdle();
-          idleTimer = setTimeout(() => {
-            aborter.abort();
-            stream.destroy(new Error('stream_idle_timeout'));
-          }, deps.config.STREAM_IDLE_TIMEOUT_MS);
-          idleTimer.unref();
+          releaseTenantSlot();
+          deps.db.releaseBudget(reservation, key.tenantId);
         };
-
-        const onDisconnect = () => {
-          if (!reply.raw.writableEnded) stream.destroy(new Error('client_disconnected'));
-        };
-        reply.raw.once('close', onDisconnect);
-        stream.on('data', (chunk: Buffer | string) => {
-          armIdle();
-          meter.observeSseChunk(typeof chunk === 'string' ? chunk : chunk.toString('utf8'));
-        });
-        stream.once('end', () => {
+        const finalizeSuccess = () => {
+          if (streamFinalized) return;
+          streamFinalized = true;
           clearIdle();
           releaseTenantSlot();
           const reported = meter.units();
@@ -218,11 +211,35 @@ export function createUpstreamExecutor(deps: ExecutorDeps) {
             actual: reported ?? call.estimateUnits,
             reconciled: reported !== null
           });
-        });
-        stream.once('error', () => {
+        };
+        const armIdle = () => {
           clearIdle();
-          releaseTenantSlot();
-          deps.db.releaseBudget(reservation, key.tenantId);
+          idleTimer = setTimeout(() => {
+            // Finalize synchronously while the database is still available.
+            // stream.destroy() emits error later and must only transport close.
+            finalizeFailure();
+            aborter.abort();
+            stream.destroy(new Error('stream_idle_timeout'));
+          }, deps.config.STREAM_IDLE_TIMEOUT_MS);
+          idleTimer.unref();
+        };
+
+        const onDisconnect = () => {
+          if (!reply.raw.writableEnded) {
+            // Fastify does not await hijacked stream error events during close.
+            // Release state before destroy so shutdown cannot close SQLite first.
+            finalizeFailure();
+            stream.destroy(new Error('client_disconnected'));
+          }
+        };
+        reply.raw.once('close', onDisconnect);
+        stream.on('data', (chunk: Buffer | string) => {
+          armIdle();
+          meter.observeSseChunk(typeof chunk === 'string' ? chunk : chunk.toString('utf8'));
+        });
+        stream.once('end', finalizeSuccess);
+        stream.once('error', () => {
+          finalizeFailure();
           if (!reply.raw.writableEnded) reply.raw.end();
         });
         armIdle();

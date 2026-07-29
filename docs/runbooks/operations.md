@@ -3,7 +3,10 @@
 ## Preconditions
 
 - Operator has VPS root and Cloudflare authority; no secret is pasted into Git/Notion/log.
-- `/opt/leuwongrr-gateway/config/gateway.env` is root-owned mode 600.
+- `/opt/leuwongrr-gateway/config/gateway.env` is root-owned mode 600 and is **not**
+  readable by the service user. Any documented command that reads it as
+  `leuwongrr-gateway` is impossible on this host; read it as root and drop
+  privileges afterwards.
 - `leuwongrr-gateway` service user exists without login shell.
 - Host tools `sqlite3`, `age` and `rsync` are installed. `scripts/vps-bootstrap.sh`
   installs them, but note the trap: the gateway embeds SQLite through
@@ -45,7 +48,7 @@ only then merge.
 ```bash
 # from a clean checkout of the release SHA on the VPS (or copy unit file)
 sudo bash scripts/vps-bootstrap.sh infra/systemd/leuwongrr-gateway.service
-# edit secrets in place — never paste them into chat/Git/Notion
+# edit secrets in place - never paste them into chat/Git/Notion
 sudo nano /opt/leuwongrr-gateway/config/gateway.env
 # generate strong values, for example:
 #   openssl rand -hex 32
@@ -73,19 +76,55 @@ sudo nano /opt/leuwongrr-gateway/config/gateway.env
    atomically swaps `current`, syncs the systemd unit from the release,
    health-gates, and auto-restores the previous symlink on failure.
 5. Issue the first operator key only after health is green. The CLI ships inside
-   the release so hashing rules always match the running service:
+   the release so hashing rules always match the running service.
+
+   `gateway.env` is `root:root` mode 600 and unreadable by the service user, so
+   the environment is sourced as root and the process then drops to the service
+   user with `runuser`. Running the CLI as root would leave `gateway.db-wal` and
+   `gateway.db-shm` owned by root; passing secrets as `env VAR=...` or `sudo -E`
+   would expose them in `ps`.
 
 ```bash
-sudo -u leuwongrr-gateway bash -lc '
-  set -a; . /opt/leuwongrr-gateway/config/gateway.env; set +a
+sudo bash -c 'set -a; . /opt/leuwongrr-gateway/config/gateway.env; set +a
   cd /opt/leuwongrr-gateway/current
-  node dist/cli/keys.js issue --tenant demo --scopes models:read,chat:write
-'
+  runuser -u leuwongrr-gateway -- /usr/bin/node dist/cli/keys.js \
+    key:issue --tenant <tenant> --scopes models:read,chat:write'
 ```
 
 Store the printed key offline; only its peppered HMAC-SHA256 hash is persisted
-and the plaintext is not recoverable. `node dist/cli/keys.js list` and
-`... revoke <id>` cover the rest of the lifecycle.
+and the plaintext is not recoverable.
+
+The command names are namespaced. `keys.js issue`, `keys.js list` and
+`keys.js revoke` do not exist and exit non-zero. The real contract in
+`src/cli/keys.ts` is:
+
+```text
+tenant:create   --tenant <id> [--name <label>] [--model <id>]
+key:issue       --tenant <id> [--name <label>] [--scopes a,b] [--mode live|test] [--expires-days N]
+key:list        --tenant <id>
+key:revoke      --tenant <id> --key <key-id>
+key:rotate      --tenant <id> --key <key-id> [--grace-minutes N] [--expires-days N]
+limits:set      --tenant <id> --daily-units N --max-concurrent N --rpm N
+model:enable    --tenant <id> --model <id>
+model:disable   --tenant <id> --model <id>
+```
+
+There is no `tenant:list`. To inventory tenants, read the database read-only
+instead of inventing a subcommand.
+
+`limits:set` validates `--daily-units`, `--max-concurrent` and `--rpm` as
+positive integers, so `--daily-units 0` is rejected even though the underlying
+store accepts `0`. Quarantine a tenant with `model:disable` plus revocation of
+its keys rather than expecting a zero budget.
+
+After any CLI run, confirm ownership stayed correct:
+
+```bash
+sudo ls -l /opt/leuwongrr-gateway/data/gateway.db*
+```
+
+All three of `gateway.db`, `gateway.db-wal` and `gateway.db-shm` must remain
+`leuwongrr-gateway:leuwongrr-gateway` mode 600.
 
 6. Record SHA, changed canonical files, migration id, validation result, health, resource snapshot, and prior release SHA.
 
@@ -94,15 +133,36 @@ and the plaintext is not recoverable. `node dist/cli/keys.js list` and
 - `ss -ltnp`: Gateway only `127.0.0.1:2080`; OmniRoute only expected loopback port.
 - Unknown route returns 404 and produces no OmniRoute request.
 - `/v1/models` without/invalid key returns 401; wrong scope returns 403.
+- A **revoked** key returns `403 insufficient_scope`, not `401`. `authenticate()`
+  filters only `expires_at`, so a revoked key still resolves and `requireScope()`
+  rejects it. `401 invalid_api_key` covers unknown, malformed and expired keys.
+  Demanding `401` after revocation would require a source change.
 - `/health/ready` without internal token returns 404.
+- `/health/ready` proves the upstream health route answers, not that `/v1/*` is
+  usable: OmniRoute leaves its health route unauthenticated while `/v1/*`
+  requires a credential. Readiness can be green while chat is impossible.
 - `/admin*`: missing/forged/expired Access JWT fails; valid Access identity without application role fails.
 - `/member` and `/chat` without a session cookie redirect to `/login`; a member
   session cannot read another account's usage, wallet or payments.
 - `/admin`, `/member`, `/chat`, `/login` all return HTML, not `503 console_not_built`.
-- A request from an unfunded account returns 402 rather than reaching OmniRoute.
+- `402 budget_exceeded` is reachable by exhausting the tenant budget. The
+  unfunded-account `402` is **not** provable while `CONSOLE_ENABLED=false`,
+  because `assertFunded()` exits early; do not record it as evidence.
 - A replayed Cryptomus webhook credits the wallet exactly once.
 - `/v1` and `/v1beta` never redirect to Cloudflare interactive login.
 - Check `systemctl show leuwongrr-gateway` resource limits and `journalctl` redaction.
+
+## Upstream credential
+
+OmniRoute runs with `REQUIRE_API_KEY=true`, so every `/v1/*` upstream call needs
+`Authorization: Bearer <key>`. Without `OMNIROUTE_API_KEY` the gateway fails
+closed: production refuses to boot, and a misconfigured runtime could only answer
+`502 upstream_error` on chat while `/v1/models` still succeeded.
+
+Issue the key from the OmniRoute dashboard and add it to `gateway.env` as root,
+keeping the file `root:root` mode 600. The value never belongs in chat, Notion,
+logs, `argv`, or a release artifact. Only its presence is logged, as
+`upstreamCredential` in the `gateway_listening` record.
 
 ## Backup/restore
 
@@ -133,12 +193,13 @@ API; never copy a live WAL database directly.
 
 Key custody is a deliberate decision, not a detail. While the identity file sits
 on the same host as `data/backups`, encryption protects nothing against an
-attacker who owns the host — key and ciphertext are in one place. Move the
-identity off the server and keep at least two copies elsewhere. There is no
+attacker who owns the host - key and ciphertext are in one place. Move the
+identity off the server and keep at least two copies elsewhere, verify a restore
+from an off-host copy, and only then delete the on-host identity. There is no
 recovery path: lose the identity and every backup is permanently unreadable. The
 public recipient is not secret and may be stored on the host for scheduled runs.
 
-If the identity is ever exposed — pasted into a chat, a ticket, a screenshot —
+If the identity is ever exposed - pasted into a chat, a ticket, a screenshot -
 treat every existing archive as compromised: generate a new keypair, take a
 fresh snapshot, and delete the archives written for the old recipient. They
 cannot be re-encrypted.
@@ -147,7 +208,7 @@ cannot be re-encrypted.
 
 A snapshot that runs only when someone remembers is not a backup. Install the
 timer once the first manual drill has passed, and only from a release that
-actually contains the units — they ship inside the artifact, so the files exist
+actually contains the units - they ship inside the artifact, so the files exist
 under `current/infra/systemd` only after a deploy of that release:
 
 ```bash
@@ -183,7 +244,9 @@ must never stop the service. Check results with
 `journalctl -u leuwongrr-gateway-snapshot.service`.
 
 The timer proves snapshots are taken, not that they are restorable. Repeat the
-restore drill after any schema migration and once real tenant data exists.
+restore drill after any schema migration and once real tenant data exists. A
+missed-ping alert is only proven after waiting out the monitor's real grace
+period and confirming the alert arrived.
 
 ## Rollback
 

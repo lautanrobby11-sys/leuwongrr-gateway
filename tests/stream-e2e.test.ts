@@ -217,10 +217,15 @@ function postChatAndAbortAfterFirstByte(
   });
 }
 
+/**
+ * Per-test timeouts are deliberately absent: vitest.config.ts owns the single
+ * gate budget, because an inline option silently overrides it and made this file
+ * the only red one on an operator workstation. Real hangs are still caught by
+ * the waitFor budget above and by the harness stream/request timeouts.
+ */
 describe('SSE end-to-end streaming', () => {
   it(
     'forwards a complete chat stream and settles reported usage',
-    { timeout: 20_000 },
     async () => {
       const { respond } = createSseUpstream({
         chunks: [
@@ -251,7 +256,6 @@ describe('SSE end-to-end streaming', () => {
 
   it(
     'cancels the upstream body when the client disconnects mid-stream',
-    { timeout: 20_000 },
     async () => {
       const { respond, control } = createSseUpstream({
         chunks: ['data: {"id":"chatcmpl_abort","choices":[{"delta":{"content":"partial"}}]}\n\n'],
@@ -278,7 +282,6 @@ describe('SSE end-to-end streaming', () => {
 
   it(
     'releases budget after stream idle timeout without settling usage',
-    { timeout: 20_000 },
     async () => {
       const { respond } = createSseUpstream({
         chunks: ['data: {"id":"chatcmpl_idle","choices":[{"delta":{"content":"stalled"}}]}\n\n'],
@@ -303,7 +306,6 @@ describe('SSE end-to-end streaming', () => {
 
   it(
     'returns 503 with retry-after when tenant stream concurrency is exhausted',
-    { timeout: 20_000 },
     async () => {
       const { respond } = createSseUpstream({
         chunks: ['data: {"id":"hold","choices":[{"delta":{"content":"x"}}]}\n\n'],
@@ -338,7 +340,7 @@ describe('SSE end-to-end streaming', () => {
 });
 
 describe('mock load rejection envelope', () => {
-  it('returns 429 with retry-after under credential burst pressure', { timeout: 15_000 }, async () => {
+  it('returns 429 with retry-after under credential burst pressure', async () => {
     harness = createHarness(
       () =>
         new Response(JSON.stringify({ id: 'chatcmpl_mock', choices: [] }), {

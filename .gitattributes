@@ -1,0 +1,9 @@
+* text=auto
+
+# Release-critical Linux files must never inherit Windows CRLF endings.
+*.sh text eol=lf
+*.service text eol=lf
+*.timer text eol=lf
+*.mjs text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf

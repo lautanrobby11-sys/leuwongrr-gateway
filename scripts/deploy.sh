@@ -8,6 +8,9 @@ SHA=${1:-}
 ARTIFACT=${2:-}
 RELEASE=
 ACTIVATED=0
+readonly HEALTH_REQUEST_TIMEOUT_SECONDS=5
+readonly HEALTH_STARTUP_DEADLINE_SECONDS=90
+readonly HEALTH_RETRY_INTERVAL_SECONDS=1
 
 # readlink -f canonicalises a path even when the final component does not
 # exist, so it happily returns "$ROOT/current" when nothing is deployed yet.
@@ -55,17 +58,49 @@ sync_unit() {
 }
 
 check_health() {
-  curl -fsS --max-time 2 http://127.0.0.1:2080/health/live >/dev/null &&
-    printf 'x-internal-ready-token: %s\n' "$INTERNAL_READY_TOKEN" |
-      curl -fsS --max-time 2 -H @- http://127.0.0.1:2080/health/ready >/dev/null
+  local status
+  local rc
+
+  if status=$(curl -sS -o /dev/null -w '%{http_code}' \
+    --max-time "$HEALTH_REQUEST_TIMEOUT_SECONDS" \
+    http://127.0.0.1:2080/health/live); then
+    if [[ $status != 200 ]]; then
+      echo "health probe: liveness returned HTTP $status" >&2
+      return 1
+    fi
+  else
+    rc=$?
+    echo "health probe: liveness transport failure rc=$rc" >&2
+    return 1
+  fi
+
+  if status=$(printf 'x-internal-ready-token: %s\n' "$INTERNAL_READY_TOKEN" |
+    curl -sS -o /dev/null -w '%{http_code}' \
+      --max-time "$HEALTH_REQUEST_TIMEOUT_SECONDS" -H @- \
+      http://127.0.0.1:2080/health/ready); then
+    if [[ $status != 200 ]]; then
+      echo "health probe: readiness returned HTTP $status" >&2
+      return 1
+    fi
+  else
+    rc=$?
+    echo "health probe: readiness transport failure rc=$rc" >&2
+    return 1
+  fi
 }
 
 wait_for_health() {
-  local deadline=$((SECONDS + 30))
-  until check_health 2>/dev/null; do
-    (( SECONDS >= deadline )) && return 1
-    sleep 1
+  local deadline=$((SECONDS + HEALTH_STARTUP_DEADLINE_SECONDS))
+  local retries=0
+  until check_health; do
+    retries=$((retries + 1))
+    if (( SECONDS >= deadline )); then
+      echo "health gate exhausted after ${HEALTH_STARTUP_DEADLINE_SECONDS}s (${retries} failed probes)" >&2
+      return 1
+    fi
+    sleep "$HEALTH_RETRY_INTERVAL_SECONDS"
   done
+  echo "health gate passed after ${retries} failed probes"
 }
 
 # Preflight runs from inside the candidate release so any relative path it

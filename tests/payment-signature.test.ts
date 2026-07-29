@@ -64,6 +64,11 @@ describe('telegram login verification', () => {
     expect(verifyTelegramLogin(payload, BOT_TOKEN, 300, now).id).toBe('99');
   });
 
+  it('accepts small positive clock skew', () => {
+    const payload = sign({ ...fresh, auth_date: String(Math.floor(now() / 1000) + 20) });
+    expect(verifyTelegramLogin(payload, BOT_TOKEN, 300, now).id).toBe('99');
+  });
+
   it('rejects a payload signed by a different bot', () => {
     const payload = sign(fresh);
     expect(() => verifyTelegramLogin(payload, 'other-token', 300, now)).toThrow(
@@ -81,6 +86,13 @@ describe('telegram login verification', () => {
   it('rejects a replayed payload that is older than the window', () => {
     const stale = sign({ ...fresh, auth_date: String(Math.floor(now() / 1000) - 3600) });
     expect(() => verifyTelegramLogin(stale, BOT_TOKEN, 300, now)).toThrow(
+      /telegram_payload_expired/
+    );
+  });
+
+  it('rejects a correctly signed timestamp far in the future', () => {
+    const future = sign({ ...fresh, auth_date: String(Math.floor(now() / 1000) + 3600) });
+    expect(() => verifyTelegramLogin(future, BOT_TOKEN, 300, now)).toThrow(
       /telegram_payload_expired/
     );
   });

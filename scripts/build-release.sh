@@ -29,7 +29,8 @@ fi
 if [[ -f web/package-lock.json ]]; then
   cp web/package-lock.json "$STAGE/web/package-lock.json"
 fi
-cp scripts/deploy.sh scripts/rollback.sh scripts/backup.sh scripts/restore-drill.sh "$STAGE/scripts/"
+cp scripts/deploy.sh scripts/rollback.sh scripts/backup.sh scripts/restore-drill.sh \
+  scripts/ping-snapshot-healthcheck.sh "$STAGE/scripts/"
 # Every unit the runbook tells the operator to install must ship in the
 # artifact. The snapshot timer is installed from current/infra/systemd, so a
 # release that omits it turns the documented command into "No such file or
@@ -38,6 +39,18 @@ for unit in leuwongrr-gateway.service leuwongrr-gateway-snapshot.service leuwong
   [[ -f infra/systemd/$unit ]] || { echo "unit missing from repository: infra/systemd/$unit" >&2; exit 1; }
   cp "infra/systemd/$unit" "$STAGE/infra/systemd/"
 done
+
+# Git for Windows may expose CRLF in an existing checkout even after policy is
+# added. Normalize only the staged release copy, then reject any remaining CR
+# byte. Linux must never receive shell scripts or systemd units with CRLF.
+while IFS= read -r -d '' critical_file; do
+  sed -i 's/\r$//' "$critical_file"
+  if LC_ALL=C grep -q $'\r' "$critical_file"; then
+    echo "release-critical file contains carriage return: $critical_file" >&2
+    exit 1
+  fi
+done < <(find "$STAGE/scripts" "$STAGE/infra/systemd" -type f -print0)
+bash -n "$STAGE/scripts/"*.sh
 chmod 0755 "$STAGE/scripts/"*.sh
 # The operator key CLI ships as part of dist so issuance always matches the
 # running service instead of a separate copy of the hashing rules.
@@ -63,5 +76,12 @@ tar -C "$VERIFY" -xzf ".release/$SHA.tar.gz"
 (
   cd "$VERIFY"
   sha256sum -c manifest.sha256 >/dev/null
+  bash -n scripts/*.sh
+  while IFS= read -r -d '' critical_file; do
+    if LC_ALL=C grep -q $'\r' "$critical_file"; then
+      echo "verified artifact contains carriage return: $critical_file" >&2
+      exit 1
+    fi
+  done < <(find scripts infra/systemd -type f -print0)
 )
 echo ".release/$SHA.tar.gz"

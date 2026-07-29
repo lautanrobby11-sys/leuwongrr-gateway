@@ -3,6 +3,7 @@ import { createLogger } from './observability.js';
 import { GatewayDatabase } from './persistence/database.js';
 import { OmniRouteClient } from './upstream.js';
 import { buildApp } from './http/app.js';
+import { closeActiveStreams } from './http/stream-lifecycle.js';
 
 const config = loadConfig();
 const logger = createLogger(config.LOG_LEVEL);
@@ -37,6 +38,9 @@ async function shutdown(signal: string): Promise<void> {
   clearInterval(maintenanceTimer);
   const deadline = setTimeout(() => process.exit(1), 15_000).unref();
   try {
+    // Hijacked SSE responses are outside Fastify's awaited request lifecycle.
+    // Finalize their budget/permit state while SQLite is still open.
+    closeActiveStreams(db);
     await app.close();
     db.close();
   } finally {
@@ -74,6 +78,7 @@ try {
   );
 } catch (error) {
   logger.fatal({ err: error }, 'listen_failed');
+  closeActiveStreams(db);
   db.close();
   process.exit(1);
 }

@@ -22,3 +22,31 @@ describe('upstream resource envelope',()=>{
     await expect(client.request('/v1/models',{method:'GET'})).resolves.toBeInstanceOf(Response);
   });
 });
+
+describe('upstream credential',()=>{
+  it('sends the configured credential and preserves caller headers',async()=>{
+    let seen: Headers|null=null;
+    const fetcher=vi.fn(async(_url:unknown,init?:RequestInit)=>{ seen=new Headers(init?.headers); return new Response('{}'); });
+    const client=new OmniRouteClient('http://127.0.0.1:20128',1,1000,fetcher as unknown as typeof fetch,'k'.repeat(32));
+    await (await client.request('/v1/chat/completions',{method:'POST',headers:{'content-type':'application/json','x-request-id':'req-1'}})).text();
+    if(!seen)throw new Error('expected captured headers');
+    const headers=seen as Headers;
+    expect(headers.get('authorization')).toBe(`Bearer ${'k'.repeat(32)}`);
+    expect(headers.get('content-type')).toBe('application/json');
+    expect(headers.get('x-request-id')).toBe('req-1');
+  });
+  it('sends no authorization header when no credential is configured',async()=>{
+    let seen: Headers|null=null;
+    const fetcher=vi.fn(async(_url:unknown,init?:RequestInit)=>{ seen=new Headers(init?.headers); return new Response('{}'); });
+    const client=new OmniRouteClient('http://127.0.0.1:20128',1,1000,fetcher as unknown as typeof fetch);
+    await (await client.request('/v1/models',{method:'GET'})).text();
+    if(!seen)throw new Error('expected captured headers');
+    expect((seen as Headers).has('authorization')).toBe(false);
+  });
+  it('keeps the credential out of thrown errors',async()=>{
+    const fetcher=vi.fn().mockRejectedValue(new Error('network'));
+    const client=new OmniRouteClient('http://127.0.0.1:20128',1,1000,fetcher as unknown as typeof fetch,'s'.repeat(32));
+    await expect(client.request('/v1/models',{method:'GET'})).rejects.toThrow('network');
+    expect(JSON.stringify(fetcher.mock.calls[0]?.[1]?.headers ?? {})).not.toContain('s'.repeat(32));
+  });
+});

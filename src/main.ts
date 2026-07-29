@@ -7,13 +7,24 @@ import { closeActiveStreams } from './http/stream-lifecycle.js';
 
 const config = loadConfig();
 const logger = createLogger(config.LOG_LEVEL);
+
+// Fail closed before opening SQLite or a socket: OmniRoute runs with
+// REQUIRE_API_KEY=true, so a production boot without the upstream credential
+// could only ever answer 502 upstream_error on every /v1 request.
+if (config.NODE_ENV === 'production' && !config.OMNIROUTE_API_KEY) {
+  logger.fatal('OMNIROUTE_API_KEY is required in production; OmniRoute rejects /v1/* without a credential');
+  process.exit(1);
+}
+
 const db = new GatewayDatabase(config.DATABASE_PATH, config.API_KEY_PEPPER, {
   cacheKib: config.SQLITE_CACHE_KIB
 });
 const upstream = new OmniRouteClient(
   config.OMNIROUTE_URL,
   config.UPSTREAM_CONCURRENCY,
-  config.REQUEST_TIMEOUT_MS
+  config.REQUEST_TIMEOUT_MS,
+  fetch,
+  config.OMNIROUTE_API_KEY
 );
 const app = buildApp({ config, db, upstream, logger });
 
@@ -70,6 +81,8 @@ try {
       host: config.GATEWAY_HOST,
       port: config.GATEWAY_PORT,
       upstream: config.OMNIROUTE_URL,
+      // Presence only. The credential itself is never logged.
+      upstreamCredential: Boolean(config.OMNIROUTE_API_KEY),
       concurrency: config.UPSTREAM_CONCURRENCY,
       rateLimitRpm: config.RATE_LIMIT_RPM,
       retentionDays: config.RETENTION_DAYS

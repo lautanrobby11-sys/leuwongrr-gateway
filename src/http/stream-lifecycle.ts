@@ -3,7 +3,7 @@ type StreamCloser = () => void;
 /** Active hijacked streams are owned by the database they may still mutate. */
 const activeByOwner = new WeakMap<object, Set<StreamCloser>>();
 
-export function registerActiveStream(owner: object, close: StreamCloser): () => void {
+export function registerActiveStream(owner: object, close: StreamCloser): () => undefined {
   let active = activeByOwner.get(owner);
   if (!active) {
     active = new Set();
@@ -13,6 +13,7 @@ export function registerActiveStream(owner: object, close: StreamCloser): () => 
   return () => {
     active?.delete(close);
     if (active?.size === 0) activeByOwner.delete(owner);
+    return undefined;
   };
 }
 

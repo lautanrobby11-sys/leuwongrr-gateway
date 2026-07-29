@@ -17,8 +17,8 @@ import {
   type OauthProvider
 } from '../accounts/oauth.js';
 import { BillingError, type BillingService } from '../billing/service.js';
-import { PaymentError, PAID_STATUSES, FAILED_STATUSES, type CryptomusClient } from '../payments/cryptomus.js';
-import { assertPublicEgress } from '../policy/egress.js';
+import { PaymentError, PAID_STATUSES, type CryptomusClient } from '../payments/cryptomus.js';
+import { assertResolvedPublicEgress } from '../policy/egress.js';
 import { listModels } from '../policy/capabilities.js';
 import type { Scope } from '../auth/api-keys.js';
 
@@ -56,6 +56,18 @@ const ISSUABLE_SCOPES: readonly Scope[] = [
   'responses:write',
   'messages:write'
 ];
+
+/**
+ * Cryptomus reports money as a decimal string in the invoice currency. A value
+ * we cannot parse is treated as no value at all, so a malformed callback can
+ * never satisfy the amount check by accident.
+ */
+function reportedCents(value: unknown): number | null {
+  if (typeof value !== 'string' && typeof value !== 'number') return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) return null;
+  return Math.round(parsed * 100);
+}
 
 function fail(reply: FastifyReply, status: number, code: string, message: string, traceId: string) {
   return reply.code(status).send({ error: { code, message, trace_id: traceId } });
@@ -242,7 +254,11 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
         config.OTP_RESEND_SECONDS
       );
       if (config.OTP_DELIVERY === 'webhook' && config.OTP_WEBHOOK_URL) {
-        await fetch(assertPublicEgress(config.OTP_WEBHOOK_URL), {
+        // Resolved rather than literal inspection: the relay is operator
+        // supplied, and a public name that answers with a private address is
+        // exactly how a one-time code gets posted to something internal.
+        const target = await assertResolvedPublicEgress(config.OTP_WEBHOOK_URL);
+        const delivery = await fetch(target, {
           method: 'POST',
           headers: {
             'content-type': 'application/json',
@@ -257,6 +273,10 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
           }),
           signal: AbortSignal.timeout(8000)
         });
+        // A relay that answered 4xx or 5xx has delivered nothing. Reporting
+        // success would leave the member waiting for a code that is never
+        // going to arrive, with no signal to the operator that it failed.
+        if (!delivery.ok) throw new AccountError('otp_delivery_failed', 502);
         return reply.send({ delivered: true, ttl_minutes: config.OTP_TTL_MINUTES });
       }
       // Development delivery returns the code in the response instead of the
@@ -772,7 +792,7 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
 
     const payment = db.db
       .prepare(
-        'SELECT id, account_id, purpose, plan_id, tokens, status FROM payments WHERE order_id = ?'
+        'SELECT id, account_id, purpose, plan_id, tokens, amount_cents, currency, status, settled_at FROM payments WHERE order_id = ?'
       )
       .get(orderId) as
       | {
@@ -781,37 +801,71 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
           purpose: 'subscription' | 'topup';
           plan_id: string | null;
           tokens: number;
+          amount_cents: number;
+          currency: string;
           status: string;
+          settled_at: string | null;
         }
       | undefined;
     if (!payment) return fail(reply, 404, 'payment_not_found', 'Unknown order', req.id);
 
-    // Cryptomus retries; the digest makes a repeat delivery a no-op instead of
-    // a second grant.
-    const digest = `${orderId}:${status}:${String(payload.sign)}`;
-    const inserted = db.db
-      .prepare(
-        'INSERT OR IGNORE INTO payment_events (id, payment_id, digest, status, created_at) VALUES (?, ?, ?, ?, ?)'
-      )
-      .run(randomUUID(), payment.id, digest, status, new Date().toISOString());
-    if (inserted.changes === 0) return reply.send({ accepted: true, duplicate: true });
-
-    try {
-      if (PAID_STATUSES.includes(status)) {
-        db.db
-          .prepare('UPDATE payments SET status = ?, settled_at = ? WHERE id = ?')
-          .run(status, new Date().toISOString(), payment.id);
-        if (payment.purpose === 'subscription' && payment.plan_id) {
-          billing.startSubscription(payment.account_id, payment.plan_id);
-        } else if (payment.tokens > 0) {
-          billing.credit(payment.account_id, payment.tokens, 'payment', orderId);
-        }
-      } else if (FAILED_STATUSES.includes(status)) {
-        db.db.prepare('UPDATE payments SET status = ? WHERE id = ?').run(status, payment.id);
-      } else {
-        db.db.prepare('UPDATE payments SET status = ? WHERE id = ?').run(status, payment.id);
+    const settles = PAID_STATUSES.includes(status);
+    if (settles) {
+      // A valid signature proves the message came from the provider, not that
+      // it describes the invoice we issued. Granting on the order id alone
+      // would honour any amount the callback happens to carry.
+      const cents = reportedCents(payload.amount);
+      const currency = typeof payload.currency === 'string' ? payload.currency : null;
+      if (cents === null || cents < payment.amount_cents || currency !== payment.currency) {
+        return fail(
+          reply,
+          409,
+          'payment_amount_mismatch',
+          'Reported settlement does not match the invoice',
+          req.id
+        );
       }
-      return reply.send({ accepted: true });
+    }
+
+    // Cryptomus retries. Recording the delivery and acting on it therefore
+    // share a single transaction: if the grant throws, the marker rolls back
+    // with it and the retry can still settle, instead of being mistaken for a
+    // duplicate and leaving the payer with nothing.
+    const digest = `${orderId}:${status}:${String(payload.sign)}`;
+    const seenAt = new Date().toISOString();
+    try {
+      const outcome = db.db.transaction((): 'duplicate' | 'settled' | 'recorded' => {
+        const inserted = db.db
+          .prepare(
+            'INSERT OR IGNORE INTO payment_events (id, payment_id, digest, status, created_at) VALUES (?, ?, ?, ?, ?)'
+          )
+          .run(randomUUID(), payment.id, digest, status, seenAt);
+        if (inserted.changes === 0) return 'duplicate';
+
+        if (settles) {
+          // paid and paid_over are distinct deliveries of one settlement.
+          // settled_at, not the digest, is what makes the grant one-time.
+          if (payment.settled_at) {
+            db.db.prepare('UPDATE payments SET status = ? WHERE id = ?').run(status, payment.id);
+            return 'recorded';
+          }
+          db.db
+            .prepare('UPDATE payments SET status = ?, settled_at = ? WHERE id = ?')
+            .run(status, seenAt, payment.id);
+          if (payment.purpose === 'subscription' && payment.plan_id) {
+            billing.startSubscription(payment.account_id, payment.plan_id);
+          } else if (payment.tokens > 0) {
+            billing.credit(payment.account_id, payment.tokens, 'payment', orderId);
+          }
+          return 'settled';
+        }
+
+        // A late failure notice must never revoke money already settled.
+        if (payment.settled_at) return 'recorded';
+        db.db.prepare('UPDATE payments SET status = ? WHERE id = ?').run(status, payment.id);
+        return 'recorded';
+      })();
+      return reply.send({ accepted: true, duplicate: outcome === 'duplicate' });
     } catch (error) {
       return handle(error, reply, req.id);
     }

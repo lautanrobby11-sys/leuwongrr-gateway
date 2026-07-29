@@ -24,14 +24,16 @@ describe('upstream resource envelope',()=>{
 });
 
 describe('upstream credential',()=>{
-  it('sends the configured credential and preserves caller headers',async()=>{
+  it('sends the configured credential, overrides caller auth, and preserves safe headers',async()=>{
     let seen: Headers|null=null;
+    const credential='k'.repeat(32);
     const fetcher=vi.fn(async(_url:unknown,init?:RequestInit)=>{ seen=new Headers(init?.headers); return new Response('{}'); });
-    const client=new OmniRouteClient('http://127.0.0.1:20128',1,1000,fetcher as unknown as typeof fetch,'k'.repeat(32));
-    await (await client.request('/v1/chat/completions',{method:'POST',headers:{'content-type':'application/json','x-request-id':'req-1'}})).text();
+    const client=new OmniRouteClient('http://127.0.0.1:20128',1,1000,fetcher as unknown as typeof fetch,credential);
+    await (await client.request('/v1/chat/completions',{method:'POST',headers:{authorization:'Bearer caller-secret','content-type':'application/json','x-request-id':'req-1'}})).text();
     if(!seen)throw new Error('expected captured headers');
     const headers=seen as Headers;
-    expect(headers.get('authorization')).toBe(`Bearer ${'k'.repeat(32)}`);
+    expect(headers.get('authorization')).toBe(`Bearer ${credential}`);
+    expect(headers.get('authorization')).not.toContain('caller-secret');
     expect(headers.get('content-type')).toBe('application/json');
     expect(headers.get('x-request-id')).toBe('req-1');
   });
@@ -43,10 +45,18 @@ describe('upstream credential',()=>{
     if(!seen)throw new Error('expected captured headers');
     expect((seen as Headers).has('authorization')).toBe(false);
   });
-  it('keeps the credential out of thrown errors',async()=>{
+  it('does not append the credential to propagated fetch errors',async()=>{
+    const credential='s'.repeat(32);
     const fetcher=vi.fn().mockRejectedValue(new Error('network'));
-    const client=new OmniRouteClient('http://127.0.0.1:20128',1,1000,fetcher as unknown as typeof fetch,'s'.repeat(32));
-    await expect(client.request('/v1/models',{method:'GET'})).rejects.toThrow('network');
-    expect(JSON.stringify(fetcher.mock.calls[0]?.[1]?.headers ?? {})).not.toContain('s'.repeat(32));
+    const client=new OmniRouteClient('http://127.0.0.1:20128',1,1000,fetcher as unknown as typeof fetch,credential);
+    let thrown: unknown;
+    try {
+      await client.request('/v1/models',{method:'GET'});
+    } catch (error) {
+      thrown=error;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect(String(thrown)).toContain('network');
+    expect(String(thrown)).not.toContain(credential);
   });
 });

@@ -16,7 +16,11 @@ const schema = z.object({
   // OmniRoute enforces REQUIRE_API_KEY on /v1/*; without this credential every
   // upstream call answers 401 AUTH_002. Optional here so development and unit
   // tests keep working; main.ts refuses to boot production without it.
-  OMNIROUTE_API_KEY: z.string().min(16).optional(),
+  OMNIROUTE_API_KEY: z
+    .string()
+    .min(16)
+    .refine((value) => value === value.trim(), 'must not have leading or trailing whitespace')
+    .optional(),
   DATABASE_PATH: z.string().min(1).default('./data/gateway.db'),
   API_KEY_PEPPER: z.string().min(32),
   INTERNAL_READY_TOKEN: z.string().min(32),

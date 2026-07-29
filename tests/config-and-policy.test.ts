@@ -22,6 +22,13 @@ describe('configuration guardrails', () => {
     expect(() => loadConfig({ ...base, GATEWAY_HOST: '0.0.0.0' })).toThrow());
   it('rejects non-loopback upstream', () =>
     expect(() => loadConfig({ ...base, OMNIROUTE_URL: 'https://router.example.com' })).toThrow());
+  it('accepts a well-formed OmniRoute credential', () =>
+    expect(loadConfig({ ...base, OMNIROUTE_API_KEY: 'k'.repeat(32) }).OMNIROUTE_API_KEY).toBe('k'.repeat(32)));
+  it('rejects short or whitespace-padded OmniRoute credentials', () => {
+    expect(() => loadConfig({ ...base, OMNIROUTE_API_KEY: 'short' })).toThrow();
+    expect(() => loadConfig({ ...base, OMNIROUTE_API_KEY: ` ${'k'.repeat(32)}` })).toThrow(/whitespace/);
+    expect(() => loadConfig({ ...base, OMNIROUTE_API_KEY: `${'k'.repeat(32)} ` })).toThrow(/whitespace/);
+  });
   it('rejects development OTP disclosure in production', () =>
     expect(() =>
       loadConfig({

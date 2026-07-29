@@ -157,7 +157,7 @@ export interface TelegramLogin {
 /**
  * Telegram never sends an email address, so a Telegram login can only attach to
  * an account that already exists. The payload signature is checked against the
- * bot token and the timestamp is bounded to stop replay.
+ * bot token and the timestamp is bounded in both directions to stop replay.
  */
 export function verifyTelegramLogin(
   payload: Record<string, string>,
@@ -179,7 +179,15 @@ export function verifyTelegramLogin(
     throw new OauthError('telegram_signature_invalid', 403);
   }
   const authDate = Number(rest.auth_date ?? 0);
-  if (!Number.isFinite(authDate) || now() / 1000 - authDate > maxAgeSeconds) {
+  const ageSeconds = now() / 1000 - authDate;
+  // Thirty seconds accommodates ordinary edge/origin clock skew without
+  // accepting a future assertion that remains replayable for an arbitrary time.
+  if (
+    !Number.isFinite(authDate) ||
+    authDate <= 0 ||
+    ageSeconds < -30 ||
+    ageSeconds > maxAgeSeconds
+  ) {
     throw new OauthError('telegram_payload_expired', 403);
   }
   if (!rest.id) throw new OauthError('telegram_id_missing', 400);

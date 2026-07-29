@@ -2,13 +2,24 @@ import { BoundedSemaphore } from './policy/semaphore.js';
 
 export class OmniRouteClient {
   private readonly semaphore: BoundedSemaphore;
-  constructor(private readonly baseUrl:string, concurrency:number, private readonly timeoutMs:number, private readonly fetcher:typeof fetch = fetch) { this.semaphore = new BoundedSemaphore(concurrency); }
+  constructor(private readonly baseUrl:string, concurrency:number, private readonly timeoutMs:number, private readonly fetcher:typeof fetch = fetch, private readonly apiKey?:string) { this.semaphore = new BoundedSemaphore(concurrency); }
+  /**
+   * OmniRoute answers /v1/* with 401 AUTH_002 while REQUIRE_API_KEY is true, so
+   * the upstream credential is attached to every call, streaming included. Its
+   * value is never logged and never echoed back to a gateway client.
+   */
+  private authenticate(init:RequestInit): RequestInit {
+    if(!this.apiKey) return init;
+    const headers=new Headers(init.headers);
+    headers.set('authorization',`Bearer ${this.apiKey}`);
+    return {...init,headers};
+  }
   async request(path:string, init:RequestInit, clientSignal?:AbortSignal): Promise<Response> {
     const release=this.semaphore.acquire();
     try {
       const timeout=AbortSignal.timeout(this.timeoutMs);
       const signal=clientSignal?AbortSignal.any([clientSignal,timeout]):timeout;
-      const response=await this.fetcher(new URL(path,this.baseUrl),{...init,signal,redirect:'error'});
+      const response=await this.fetcher(new URL(path,this.baseUrl),{...this.authenticate(init),signal,redirect:'error'});
       if(!response.body){ release(); return response; }
       const reader=response.body.getReader();
       const body=new ReadableStream<Uint8Array>({

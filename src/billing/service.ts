@@ -266,6 +266,10 @@ export class BillingService {
            updated_at = excluded.updated_at`
       )
       .run(row.tenant_id, plan.dailyBudgetUnits, plan.maxConcurrent, plan.rateLimitRpm, this.iso());
+    // The plan is an envelope, not an addition. Enabling only what the new plan
+    // lists would leave a downgraded tenant holding a model the plan no longer
+    // pays for, so entitlements outside the plan are withdrawn first.
+    this.db.prepare('UPDATE model_policies SET enabled = 0 WHERE tenant_id = ?').run(row.tenant_id);
     for (const model of plan.models) {
       this.db
         .prepare(
@@ -381,7 +385,20 @@ export class BillingService {
     const already = this.db
       .prepare("SELECT 1 FROM ledger_entries WHERE account_id = ? AND source = 'usage' AND reference = ?")
       .get(accountId, reference);
-    if (already || units <= 0) return;
+    if (already) return;
+    // A zero unit event still has to leave a mark. Reconciliation selects rows
+    // that have no ledger entry, so returning silently here would keep the row
+    // in the window forever and eventually crowd out billable work.
+    if (units <= 0) {
+      this.recordLedger(accountId, {
+        kind: 'debit',
+        source: 'usage',
+        tokens: 0,
+        reference,
+        balanceAfter: this.walletBalance(accountId)
+      });
+      return;
+    }
 
     let remaining = units;
     const subscription = this.activeSubscription(accountId);
@@ -430,7 +447,15 @@ export class BillingService {
     }
   }
 
-  /** Pulls settled metering rows into the ledger. Safe to call on every read. */
+  /**
+   * Pulls settled metering rows into the ledger. Safe to call on every read.
+   *
+   * The cursor is an optimisation, not the correctness boundary. Two rows can
+   * share a millisecond, and a strict `created_at >` comparison silently
+   * dropped whichever arrived after the watermark had already moved past it.
+   * Selecting rows that carry no ledger entry makes the ledger itself the
+   * record of what has been billed, so a row can be late without being free.
+   */
   reconcile(accountId: string, tenantId: string): void {
     const cursor = this.db
       .prepare('SELECT last_usage_at FROM billing_cursors WHERE account_id = ?')
@@ -438,9 +463,21 @@ export class BillingService {
     const since = cursor?.last_usage_at ?? '1970-01-01T00:00:00.000Z';
     const rows = this.db
       .prepare(
-        "SELECT id, units, created_at FROM usage_events WHERE tenant_id = ? AND state = 'settled' AND created_at > ? ORDER BY created_at LIMIT ?"
+        `SELECT u.id AS id, u.units AS units, u.created_at AS created_at
+           FROM usage_events u
+          WHERE u.tenant_id = ?
+            AND u.state = 'settled'
+            AND u.created_at >= ?
+            AND NOT EXISTS (
+              SELECT 1 FROM ledger_entries l
+               WHERE l.account_id = ?
+                 AND l.source = 'usage'
+                 AND l.reference = u.id
+            )
+          ORDER BY u.created_at, u.id
+          LIMIT ?`
       )
-      .all(tenantId, since, RECONCILE_BATCH) as Array<{
+      .all(tenantId, since, accountId, RECONCILE_BATCH) as Array<{
       id: string;
       units: number;
       created_at: string;

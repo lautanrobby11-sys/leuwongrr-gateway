@@ -197,9 +197,13 @@ plan:upsert     --plan <id> --name <label> --price-cents N --included-tokens N \
 
 `account:role` is the only path by which an account becomes `admin` or `owner`;
 the member must have signed in once first. It grants the role, not the access —
-`/admin*` still requires a verified Cloudflare Access assertion. `plan:upsert`
+`/admin*` still requires a verified Cloudflare Access assertion. Every promotion
+writes an `operator.account.role` row to `audit_logs`. `plan:upsert`
 seeds the catalogue `/console/api/member/plans` reads; an empty catalogue leaves
-the member console with nothing to subscribe to.
+the member console with nothing to subscribe to. Its values are validated against
+the same schema as `POST /console/api/admin/plans`
+(`src/billing/plan-input.ts`), because `applyPlanLimits` copies them into
+`tenant_limits` and they become live enforcement state.
 
 Full procedure, including ownership checks after each run, is
 `docs/runbooks/operations.md`.

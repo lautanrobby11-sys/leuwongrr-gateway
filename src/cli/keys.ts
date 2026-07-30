@@ -8,10 +8,12 @@
  *     node dist/cli/keys.js key:issue --tenant demo --scopes models:read,chat:write
  */
 import { parseArgs } from 'node:util';
+import { randomUUID } from 'node:crypto';
 import { GatewayDatabase } from '../persistence/database.js';
 import { isScope, parseKeyMode, SCOPES, type Scope } from '../auth/api-keys.js';
 import { AccountStore, type AccountRole } from '../accounts/store.js';
 import { BillingService } from '../billing/service.js';
+import { planInputSchema } from '../billing/plan-input.js';
 import { DEFAULT_DATABASE_PATH } from '../config.js';
 import { listModels } from '../policy/capabilities.js';
 
@@ -216,6 +218,16 @@ try {
       const account = accounts.findByEmail(email);
       if (!account) fail('no account with that email; the member must sign in once first');
       accounts.setRole(account.id, role as AccountRole);
+      // Privilege granted outside any HTTP surface still leaves a trail: the
+      // console exposes no role-change route, so this command is the only path
+      // to `admin`, and an unlogged promotion would be invisible afterwards.
+      db.audit({
+        tenantId: account.tenantId,
+        actorType: 'system',
+        event: 'operator.account.role',
+        traceId: `cli-${randomUUID()}`,
+        metadata: { account_id: account.id, previous_role: account.role, role }
+      });
       emit({ account_id: account.id, email: account.email, role });
       console.error(
         'Role updated. Admin console routes still require a verified Cloudflare Access assertion.'
@@ -224,7 +236,11 @@ try {
     }
     case 'plan:upsert': {
       const billing = new BillingService(db.db);
-      const stored = billing.upsertPlan({
+      // The console route and this command are the only writers of `plans`, and
+      // `applyPlanLimits` copies plan values into `tenant_limits`, so an
+      // unvalidated write here becomes live enforcement state. Both go through
+      // one schema rather than two hand-rolled range checks.
+      const candidate = planInputSchema.safeParse({
         id: requireOption(values.plan, 'plan'),
         name: requireOption(values.name, 'name'),
         monthlyPriceCents: nonNegativeInteger(values['price-cents'], 'price-cents'),
@@ -235,6 +251,18 @@ try {
         dailyBudgetUnits: nonNegativeInteger(values['daily-units'], 'daily-units'),
         models: parseModelList(values.models ?? 'lwrr-text'),
         active: !values.inactive
+      });
+      if (!candidate.success) {
+        const first = candidate.error.issues[0];
+        fail(`invalid plan: ${first?.path.join('.') ?? 'input'}: ${first?.message ?? 'rejected'}`);
+      }
+      const stored = billing.upsertPlan(candidate.data);
+      db.audit({
+        tenantId: null,
+        actorType: 'system',
+        event: 'operator.plan.upserted',
+        traceId: `cli-${randomUUID()}`,
+        metadata: { plan: stored.id, active: stored.active }
       });
       emit(stored);
       break;

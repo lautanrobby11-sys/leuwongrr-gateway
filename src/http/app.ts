@@ -180,14 +180,26 @@ export function buildApp(deps: AppDeps) {
   app.addHook('onRequest', async (req, reply) => {
     const path = req.url.split('?')[0] ?? req.url;
     const route = resolveRoute(req.method, path);
-    if (!route) {
-      return sendProtocolError(reply, 'openai', 404, 'route_not_found', 'Route is not available', req.id);
-    }
+    // Headers first, so a rejected request carries the same trace id and
+    // hardening headers as an accepted one. Previously an unlisted path answered
+    // the envelope with none of them, while an allowlisted-but-unregistered path
+    // answered with the headers and Fastify's own body.
     reply
       .header('x-request-id', req.id)
       .header('cache-control', 'no-store')
       .header('x-content-type-options', 'nosniff')
       .header('referrer-policy', 'same-origin');
+    if (!route) {
+      return sendProtocolError(reply, 'openai', 404, 'route_not_found', 'Route is not available', req.id);
+    }
+    // The console family is allowlisted unconditionally but only registered when
+    // CONSOLE_ENABLED is true. Without this branch every console path — the apex
+    // included — fell through to Fastify's default handler and answered
+    // `{"message":"Route GET:/ not found",...}` instead of the gateway envelope,
+    // which is the shape production returns today.
+    if (!deps.config.CONSOLE_ENABLED && isConsoleRoute(route)) {
+      return sendProtocolError(reply, 'openai', 404, 'route_not_found', 'Route is not available', req.id);
+    }
     if (route === 'health.live' || route === 'health.ready') return;
     if (route === 'console.asset') reply.removeHeader('cache-control');
     // Only the static shell moves to the wider bucket. Every state-changing

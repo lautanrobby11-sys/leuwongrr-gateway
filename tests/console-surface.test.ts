@@ -95,6 +95,50 @@ describe('console shell delivery', () => {
     expect(response.statusCode).toBe(404);
   });
 
+  it('does not let an asset miss be cached as a negative answer', async () => {
+    const active = start();
+    const response = await active.app.inject({ method: 'GET', url: '/console/assets/missing.js' });
+    expect(response.statusCode).toBe(404);
+    // The shared hook drops cache-control for asset routes so a hit can declare
+    // itself immutable. A miss must put it back, or an intermediary may cache the
+    // 404 for a hashed name that exists in the next release.
+    expect(response.headers['cache-control']).toBe('no-store');
+    expect(response.json().error.code).toBe('route_not_found');
+  });
+
+  it('answers the gateway envelope on every console path when the console is off', async () => {
+    const active = start({ CONSOLE_ENABLED: false });
+    const paths = [
+      '/',
+      '/login',
+      '/admin',
+      '/member',
+      '/chat',
+      '/console/assets/member.js',
+      '/console/api/session',
+      '/console/api/admin/overview'
+    ];
+    for (const url of paths) {
+      const response = await active.app.inject({ method: 'GET', url });
+      // Allowlisted but unregistered: without the hook branch these fell through
+      // to Fastify's default handler and answered {"message":"Route GET:/ not
+      // found"}, which is not the documented error shape.
+      expect({ url, status: response.statusCode }).toEqual({ url, status: 404 });
+      expect({ url, code: response.json().error?.code }).toEqual({ url, code: 'route_not_found' });
+      expect(response.headers['x-request-id']).toBeTruthy();
+    }
+  });
+
+  it('carries the hardening headers on an unlisted path too', async () => {
+    const active = start();
+    const response = await active.app.inject({ method: 'GET', url: '/not-a-route' });
+    expect(response.statusCode).toBe(404);
+    expect(response.json().error.code).toBe('route_not_found');
+    expect(response.headers['x-content-type-options']).toBe('nosniff');
+    expect(response.headers['cache-control']).toBe('no-store');
+    expect(response.headers['referrer-policy']).toBe('same-origin');
+  });
+
   it('does not spend the data plane budget on shell traffic', async () => {
     const active = start();
     const attempts = testConfig.RATE_LIMIT_BURST * 2 + 5;

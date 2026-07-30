@@ -123,12 +123,24 @@ ever assigns either, so without this command the admin surface is unreachable.
 The account must have signed in once first — the command promotes an existing row
 and fails on an unknown email rather than creating one. Granting the role does
 **not** grant access on its own: `/admin*` still requires a verified Cloudflare
-Access assertion.
+Access assertion. The promotion is recorded as an `operator.account.role` row in
+`audit_logs` with `actor_type='system'` and the previous role in its metadata, so
+a privilege change made outside every HTTP surface is still discoverable:
+
+```bash
+sudo -u leuwongrr-gateway sqlite3 -readonly /opt/leuwongrr-gateway/data/gateway.db \
+  "SELECT created_at, metadata_json FROM audit_logs WHERE event='operator.account.role' ORDER BY created_at DESC LIMIT 5;"
+```
 
 `plan:upsert` seeds the plan catalogue that `/console/api/member/plans` reads. An
 empty catalogue leaves the member console with nothing to subscribe to.
 `--models` is validated against the registry's public model IDs and defaults to
-`lwrr-text`. Prices, token allowances and daily units accept `0`.
+`lwrr-text`. Prices, token allowances and daily units accept `0`. Every field is
+checked against `src/billing/plan-input.ts`, the same schema
+`POST /console/api/admin/plans` uses, so `--max-concurrent` is capped at 64 and
+`--rpm` at 100000: `applyPlanLimits` copies plan values into `tenant_limits`, so
+an out-of-range plan would become live enforcement state rather than a merely odd
+row. A rejected value prints `invalid plan: <field>: <reason>` and writes nothing.
 
 There is no `tenant:list`. To inventory tenants, read the database read-only
 instead of inventing a subcommand.
@@ -152,7 +164,12 @@ All three of `gateway.db`, `gateway.db-wal` and `gateway.db-shm` must remain
 ## Post-deploy negative checks
 
 - `ss -ltnp`: Gateway only `127.0.0.1:2080`; OmniRoute only expected loopback port.
-- Unknown route returns 404 and produces no OmniRoute request.
+- Unknown route returns 404 and produces no OmniRoute request. The body is the
+  gateway envelope `{"error":{"code":"route_not_found",...}}` with
+  `x-request-id`, `cache-control: no-store` and `nosniff`, on both an unlisted
+  path and a console path while `CONSOLE_ENABLED=false`. Fastify's own
+  `{"message":"Route GET:/ not found",...}` must never appear; if it does, a route
+  is allowlisted without a handler.
 - `/v1/models` without/invalid key returns 401; wrong scope returns 403.
 - A **revoked** key returns `403 insufficient_scope`, not `401`. `authenticate()`
   filters only `expires_at`, so a revoked key still resolves and `requireScope()`

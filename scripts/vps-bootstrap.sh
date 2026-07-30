@@ -88,6 +88,23 @@ ACCESS_TEAM_DOMAIN=your-team.cloudflareaccess.com
 ACCESS_AUD=replace-with-access-application-audience-tag
 CRYPTOMUS_API_URL=https://api.cryptomus.com
 CRYPTOMUS_TIMEOUT_MS=15000
+# Optional keys, commented so the seed boots without them. Listed here because an
+# absent line is indistinguishable from an unsupported one: an operator who needs
+# federated sign-in, payments, metrics or a second console origin should not have
+# to read src/config.ts to learn the spelling. Each group is all-or-nothing;
+# loadConfig() rejects a half-configured pair at startup.
+# CONSOLE_ALLOWED_ORIGINS=https://console.leuwongrr.cloud
+# INTERNAL_METRICS_TOKEN=REPLACE_ME     # required when METRICS_ENABLED=true, and
+                                        # must differ from INTERNAL_READY_TOKEN
+# SNAPSHOT_HEALTHCHECK_URL=https://external-deadman.example/ping-id
+# GOOGLE_CLIENT_ID=
+# GOOGLE_CLIENT_SECRET=
+# DISCORD_CLIENT_ID=
+# DISCORD_CLIENT_SECRET=
+# TELEGRAM_BOT_TOKEN=REPLACE_ME
+# TELEGRAM_BOT_USERNAME=
+# CRYPTOMUS_MERCHANT_ID=
+# CRYPTOMUS_PAYMENT_API_KEY=REPLACE_ME
 EOF
   echo "$ROOT/config/gateway.env created with mode 600; every REPLACE_ME must be substituted before deploy" >&2
 fi

@@ -71,9 +71,20 @@ describe('metrics exposure', () => {
 });
 
 describe('console origin enforcement', () => {
+  /**
+   * The origin rule only exists where console routes are registered. The default
+   * fixture keeps `CONSOLE_ENABLED: false`, which now answers every console path
+   * with `404 route_not_found` instead of falling through to the shared hook, so
+   * these cases must opt the console in to be about origin at all.
+   */
+  function withConsole(): Harness {
+    harness = createHarness(jsonResponse, { CONSOLE_ENABLED: true });
+    return harness;
+  }
+
   it('refuses a state change that carries no origin at all', async () => {
-    harness = createHarness(jsonResponse);
-    const response = await harness.app.inject({
+    const active = withConsole();
+    const response = await active.app.inject({
       method: 'POST',
       url: '/console/api/auth/request-code',
       payload: { email: 'member@example.com' }
@@ -83,8 +94,8 @@ describe('console origin enforcement', () => {
   });
 
   it('refuses a state change driven from another site', async () => {
-    harness = createHarness(jsonResponse);
-    const response = await harness.app.inject({
+    const active = withConsole();
+    const response = await active.app.inject({
       method: 'POST',
       url: '/console/api/member/topup',
       headers: { origin: 'https://evil.example.com' },
@@ -95,8 +106,8 @@ describe('console origin enforcement', () => {
   });
 
   it('admits the configured console origin', async () => {
-    harness = createHarness(jsonResponse);
-    const response = await harness.app.inject({
+    const active = withConsole();
+    const response = await active.app.inject({
       method: 'POST',
       url: '/console/api/auth/request-code',
       headers: { origin: 'http://127.0.0.1:2080' },
@@ -106,14 +117,14 @@ describe('console origin enforcement', () => {
   });
 
   it('leaves reads alone, since they change nothing', async () => {
-    harness = createHarness(jsonResponse);
-    const response = await harness.app.inject({ method: 'GET', url: '/console/api/session' });
+    const active = withConsole();
+    const response = await active.app.inject({ method: 'GET', url: '/console/api/session' });
     expect(response.statusCode).not.toBe(403);
   });
 
   it('leaves signed third party callbacks alone', async () => {
-    harness = createHarness(jsonResponse);
-    const response = await harness.app.inject({
+    const active = withConsole();
+    const response = await active.app.inject({
       method: 'POST',
       url: '/webhooks/cryptomus',
       payload: { sign: 'unverified' }

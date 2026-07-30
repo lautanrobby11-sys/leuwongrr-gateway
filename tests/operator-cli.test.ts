@@ -86,9 +86,55 @@ describe('operator CLI account:role', () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('no account with that email');
   });
+
+  it('records the promotion in audit_logs', () => {
+    const path = databasePath();
+    const email = `operator-${randomUUID()}@example.com`;
+    withDatabase(path, (db) => new AccountStore(db.db, testConfig.API_KEY_PEPPER).create({ email }));
+
+    expect(run(path, ['account:role', '--email', email, '--role', 'admin']).status).toBe(0);
+
+    // Privilege granted outside any HTTP surface still has to be discoverable
+    // afterwards; this command is the only path to `admin`.
+    const row = withDatabase(path, (db) =>
+      db.db
+        .prepare("SELECT actor_type, metadata_json FROM audit_logs WHERE event='operator.account.role'")
+        .get()
+    ) as { actor_type: string; metadata_json: string } | undefined;
+    expect(row?.actor_type).toBe('system');
+    expect(JSON.parse(row?.metadata_json ?? '{}')).toMatchObject({
+      previous_role: 'member',
+      role: 'admin'
+    });
+  });
 });
 
 describe('operator CLI plan:upsert', () => {
+  /**
+   * A valid invocation. Appending a flag overrides the earlier occurrence —
+   * `parseArgs` keeps the last value for a non-multiple option — so each rejection
+   * case differs from the accepted one by exactly one field.
+   */
+  const PLAN_ARGS = [
+    'plan:upsert',
+    '--plan',
+    'starter',
+    '--name',
+    'Starter',
+    '--price-cents',
+    '0',
+    '--included-tokens',
+    '0',
+    '--overage-cents',
+    '400',
+    '--daily-units',
+    '100',
+    '--max-concurrent',
+    '1',
+    '--rpm',
+    '10'
+  ];
+
   it('seeds a plan the console can list', () => {
     const path = databasePath();
 
@@ -128,29 +174,32 @@ describe('operator CLI plan:upsert', () => {
   it('refuses a model the capability registry does not serve', () => {
     const path = databasePath();
 
-    const result = run(path, [
-      'plan:upsert',
-      '--plan',
-      'starter',
-      '--name',
-      'Starter',
-      '--price-cents',
-      '0',
-      '--included-tokens',
-      '0',
-      '--overage-cents',
-      '400',
-      '--daily-units',
-      '100',
-      '--max-concurrent',
-      '1',
-      '--rpm',
-      '10',
-      '--models',
-      'lwrr-imaginary'
-    ]);
+    const result = run(path, [...PLAN_ARGS, '--models', 'lwrr-imaginary']);
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('unknown model: lwrr-imaginary');
+  });
+
+  /**
+   * `applyPlanLimits` copies plan values into `tenant_limits`, which the request
+   * path enforces, so the CLI has to reject exactly what the console route
+   * rejects. Before the shared schema, `--max-concurrent 5000` persisted and
+   * became live enforcement state.
+   */
+  it.each([
+    ['--plan', 'Bad Id!', 'id'],
+    ['--max-concurrent', '5000', 'maxConcurrent'],
+    ['--rpm', '999999', 'rateLimitRpm'],
+    ['--price-cents', '999999999', 'monthlyPriceCents'],
+    ['--overage-cents', '999999999', 'overageCentsPerMillion'],
+    ['--name', 'x'.repeat(65), 'name']
+  ])('refuses %s %s outside the shared plan schema', (flag, value, field) => {
+    const path = databasePath();
+
+    const result = run(path, [...PLAN_ARGS, flag, value]);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`invalid plan: ${field}`);
+    expect(withDatabase(path, (db) => new BillingService(db.db).listPlans(true))).toEqual([]);
   });
 });

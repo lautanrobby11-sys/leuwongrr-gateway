@@ -33,6 +33,9 @@ export interface ConsoleDeps {
 }
 
 const PAGES: Record<string, string> = {
+  // The apex is the sign-in portal. Without this entry the allowlist refuses `/`
+  // and a visitor who types the bare hostname gets a protocol 404.
+  '/': 'login.html',
   '/admin': 'admin.html',
   '/member': 'member.html',
   '/chat': 'chat.html',
@@ -182,6 +185,7 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
 
   // ---- Static shell ----
 
+  app.get('/', (req, reply) => servePage(req, reply));
   app.get('/admin', (req, reply) => servePage(req, reply));
   app.get('/member', (req, reply) => servePage(req, reply));
   app.get('/chat', (req, reply) => servePage(req, reply));

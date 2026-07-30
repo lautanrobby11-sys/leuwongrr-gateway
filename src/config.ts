@@ -8,9 +8,18 @@ const loopbackUrl = z
     return host === '127.0.0.1' || host === 'localhost' || host === '::1';
   }, 'must target loopback');
 
+/**
+ * One spelling of the database default. The operator CLI resolves the same path
+ * as the service when `DATABASE_PATH` is unset, so the two cannot drift apart.
+ */
+export const DEFAULT_DATABASE_PATH = './data/gateway.db';
+
 const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('production'),
   GATEWAY_HOST: z.enum(['127.0.0.1', '::1']).default('127.0.0.1'),
+  // 2080 is the deploy contract, not a preference: scripts/deploy.sh asserts this
+  // exact value and the Cloudflare Tunnel ingress that fronts the service is
+  // configured for it outside this repository. Changing it needs both.
   GATEWAY_PORT: z.coerce.number().int().min(1024).max(65535).default(2080),
   OMNIROUTE_URL: loopbackUrl.default('http://127.0.0.1:20128'),
   // OmniRoute enforces REQUIRE_API_KEY on /v1/*; without this credential every
@@ -21,7 +30,7 @@ const schema = z.object({
     .min(16)
     .refine((value) => value === value.trim(), 'must not have leading or trailing whitespace')
     .optional(),
-  DATABASE_PATH: z.string().min(1).default('./data/gateway.db'),
+  DATABASE_PATH: z.string().min(1).default(DEFAULT_DATABASE_PATH),
   API_KEY_PEPPER: z.string().min(32),
   INTERNAL_READY_TOKEN: z.string().min(32),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),

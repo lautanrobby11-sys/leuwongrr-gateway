@@ -80,3 +80,25 @@ in `src/policy/allowlist.ts` like every other route.
   rewrite rule or a catch-all route, which the routing policy forbids.
 - **Trusting the Access JWT without verification.** Rejected: the header is
   only meaningful if the signature, audience, and issuer are checked.
+
+## Update 2026-07-30
+
+Two consequences of this decision were unreachable in practice and are now
+closed by the operator CLI rather than by weakening the decision:
+
+- No code path ever assigned `admin` or `owner`, so the role check this ADR
+  requires could never pass. `keys.ts account:role` promotes an existing account,
+  which keeps privilege an explicit operator act rather than a deploy side
+  effect. A migration seed was rejected: it cannot know the operator's email and
+  would grant privilege as a consequence of deploying.
+- The plan catalogue had no writer outside the admin console, which itself
+  needed an admin. `keys.ts plan:upsert` seeds it, so the member console has
+  something to read at `/console/api/member/plans`.
+
+Neither command may run against the production database while a soak is in
+progress: the member console reads live rows.
+
+Console asset delivery also no longer shares the data-plane rate limiter. One
+page load fetches HTML plus several hashed assets, so charging the shell to the
+caller's `/v1/*` budget let opening the dashboard exhaust it. The static bucket is
+wider but still bounded — an unmetered static path is a free amplifier.

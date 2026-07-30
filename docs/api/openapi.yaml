@@ -130,6 +130,17 @@ paths:
           description: Input token count.
         '400':
           description: Body failed schema validation.
+  /:
+    get:
+      summary: Sign-in portal
+      description: >-
+        The apex serves the same document as /login so a visitor who types the
+        bare hostname reaches the portal instead of a 404.
+      responses:
+        '200':
+          description: HTML document.
+        '503':
+          description: Console assets are not installed.
   /admin:
     get:
       summary: Admin console page

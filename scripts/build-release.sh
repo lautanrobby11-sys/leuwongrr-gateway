@@ -29,8 +29,11 @@ fi
 if [[ -f web/package-lock.json ]]; then
   cp web/package-lock.json "$STAGE/web/package-lock.json"
 fi
+# vps-bootstrap.sh ships even though it runs before the first deploy: copying the
+# repository to the VPS is forbidden, so the artifact is the only path by which
+# the documented host-prep script can reach the host.
 cp scripts/deploy.sh scripts/rollback.sh scripts/backup.sh scripts/restore-drill.sh \
-  scripts/ping-snapshot-healthcheck.sh "$STAGE/scripts/"
+  scripts/ping-snapshot-healthcheck.sh scripts/vps-bootstrap.sh "$STAGE/scripts/"
 # Every unit the runbook tells the operator to install must ship in the
 # artifact. The snapshot timer is installed from current/infra/systemd, so a
 # release that omits it turns the documented command into "No such file or

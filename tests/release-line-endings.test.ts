@@ -7,6 +7,7 @@ const releaseCriticalFiles = [
   'scripts/backup.sh',
   'scripts/restore-drill.sh',
   'scripts/ping-snapshot-healthcheck.sh',
+  'scripts/vps-bootstrap.sh',
   'infra/systemd/leuwongrr-gateway.service',
   'infra/systemd/leuwongrr-gateway-snapshot.service',
   'infra/systemd/leuwongrr-gateway-snapshot.timer'

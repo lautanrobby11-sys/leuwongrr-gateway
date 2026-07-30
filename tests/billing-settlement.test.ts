@@ -106,6 +106,51 @@ describe('plan entitlement envelope', () => {
   });
 });
 
+describe('plan catalogue visibility', () => {
+  it('exposes an upserted plan to the active-only listing the console reads', () => {
+    const { billing } = setup();
+    expect(billing.listPlans(true)).toEqual([]);
+
+    const stored = billing.upsertPlan(plan('starter', ['lwrr-text']));
+
+    expect(stored.active).toBe(true);
+    expect(billing.listPlans(true).map((entry) => entry.id)).toEqual(['starter']);
+  });
+
+  it('hides an inactive plan from the active listing but keeps it on record', () => {
+    const { billing } = setup();
+    billing.upsertPlan({ ...plan('retired', ['lwrr-text']), active: false });
+
+    expect(billing.listPlans(true)).toEqual([]);
+    expect(billing.listPlans().map((entry) => entry.id)).toEqual(['retired']);
+  });
+});
+
+describe('account roles', () => {
+  /**
+   * Mirrors the literal set requireAdmin accepts in src/http/console.ts rather
+   * than exporting it, so a widening there has to be a deliberate edit here too.
+   */
+  const ADMIN_ROLES = new Set(['admin', 'owner']);
+
+  it('creates members that the admin guard rejects, and promotes them', () => {
+    const temp = createTempDatabase();
+    dispose = temp.dispose;
+    const accounts = new AccountStore(temp.db.db, testConfig.API_KEY_PEPPER);
+    const account = accounts.create({ email: `owner-${randomUUID()}@example.com` });
+
+    expect(account.role).toBe('member');
+    expect(ADMIN_ROLES.has(account.role)).toBe(false);
+
+    accounts.setRole(account.id, 'admin');
+    expect(accounts.findById(account.id)?.role).toBe('admin');
+    expect(ADMIN_ROLES.has(accounts.findById(account.id)!.role)).toBe(true);
+
+    accounts.setRole(account.id, 'owner');
+    expect(ADMIN_ROLES.has(accounts.findById(account.id)!.role)).toBe(true);
+  });
+});
+
 function enabledModels(db: GatewayDatabase, tenantId: string): string[] {
   const rows = db.db
     .prepare('SELECT model_id FROM model_policies WHERE tenant_id = ? AND enabled = 1 ORDER BY model_id')

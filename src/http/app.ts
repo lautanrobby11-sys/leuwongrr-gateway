@@ -126,6 +126,17 @@ export function buildApp(deps: AppDeps) {
     deps.config.RATE_LIMIT_BURST,
     deps.config.RATE_LIMIT_MAX_ENTRIES
   );
+  /**
+   * A console page load fetches its HTML plus several hashed assets, so charging
+   * the shell to the data-plane bucket lets opening the dashboard exhaust the
+   * caller's budget for /v1/*. Static delivery gets its own, wider bucket —
+   * still bounded, because an unmetered static path is a free amplifier.
+   */
+  const consoleShellLimiter = new TokenBucketLimiter(
+    deps.config.RATE_LIMIT_RPM * 20,
+    deps.config.RATE_LIMIT_BURST * 20,
+    deps.config.RATE_LIMIT_MAX_ENTRIES
+  );
   const tenantLimiter = new TenantRateLimiterRegistry(
     deps.config.TENANT_LIMIT_MAX_ENTRIES,
     deps.config.RATE_LIMIT_BURST
@@ -179,7 +190,12 @@ export function buildApp(deps: AppDeps) {
       .header('referrer-policy', 'same-origin');
     if (route === 'health.live' || route === 'health.ready') return;
     if (route === 'console.asset') reply.removeHeader('cache-control');
-    const decision = sourceLimiter.consume(clientIdentity(req, deps.config));
+    // Only the static shell moves to the wider bucket. Every state-changing
+    // console surface, the OTP request path included, stays on the data-plane
+    // limiter.
+    const limiter =
+      route === 'console.page' || route === 'console.asset' ? consoleShellLimiter : sourceLimiter;
+    const decision = limiter.consume(clientIdentity(req, deps.config));
     if (!decision.allowed) {
       reply.header('retry-after', String(decision.retryAfterSeconds));
       if (isConsoleRoute(route)) {

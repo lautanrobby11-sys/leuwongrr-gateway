@@ -47,6 +47,20 @@ function runWithMockPath(bin: string, environment: NodeJS.ProcessEnv) {
   );
 }
 
+describe('snapshot script wiring', () => {
+  /**
+   * backup.sh used to hardcode $ROOT/current/scripts, so a snapshot run from a
+   * checkout pinged with the deployed release's copy of the script instead of
+   * its own.
+   */
+  it('resolves the ping script beside the running backup script', async () => {
+    const source = await readFile('scripts/backup.sh', 'utf8');
+    expect(source).toContain('BASH_SOURCE');
+    expect(source).toContain('"$SCRIPT_DIR/ping-snapshot-healthcheck.sh"');
+    expect(source).not.toContain('current/scripts/ping-snapshot-healthcheck.sh');
+  });
+});
+
 describe('snapshot dead-man notification', () => {
   it('does nothing safely when monitoring is not configured', () => {
     const result = spawnSync(bash, [script], {

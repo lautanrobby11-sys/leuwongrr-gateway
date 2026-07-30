@@ -52,6 +52,18 @@ interface AdminAccount {
   billing: BillingSummary;
 }
 
+/**
+ * Bounds mirror the schema behind POST /console/api/admin/accounts/limits, so
+ * the form cannot submit a value the gateway will reject with a 400.
+ */
+interface TenantLimits {
+  dailyBudgetUnits: number;
+  maxConcurrent: number;
+  rateLimitRpm: number;
+}
+
+const BLANK_LIMITS: TenantLimits = { dailyBudgetUnits: 100_000, maxConcurrent: 2, rateLimitRpm: 120 };
+
 function PlanEditor({
   plan,
   onChange
@@ -158,6 +170,8 @@ function Admin() {
   const [creditFor, setCreditFor] = useState<AdminAccount | null>(null);
   const [creditTokens, setCreditTokens] = useState(100_000);
   const [creditReason, setCreditReason] = useState('goodwill');
+  const [limitsFor, setLimitsFor] = useState<AdminAccount | null>(null);
+  const [limits, setLimits] = useState<TenantLimits>(BLANK_LIMITS);
   const [busy, setBusy] = useState(false);
 
   async function load() {
@@ -193,7 +207,9 @@ function Admin() {
 
   useEffect(() => {
     void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Mount-only: load() reads no reactive value, so an empty dependency list is
+    // correct. eslint-plugin-react-hooks is deliberately not a dependency of this
+    // repository, so there is no rule to suppress here.
   }, []);
 
   async function savePlan() {
@@ -206,6 +222,21 @@ function Admin() {
       await load();
     } catch (error) {
       toast(error instanceof ApiError ? error.message : 'Could not save the plan', 'bad');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveLimits() {
+    if (!limitsFor) return;
+    setBusy(true);
+    try {
+      await api.admin.setLimits({ tenantId: limitsFor.tenantId, ...limits });
+      toast(`Limits updated for ${limitsFor.email}`);
+      setLimitsFor(null);
+      await load();
+    } catch (error) {
+      toast(error instanceof ApiError ? error.message : 'Could not update limits', 'bad');
     } finally {
       setBusy(false);
     }
@@ -356,7 +387,27 @@ function Admin() {
                       <Badge tone={account.status === 'active' ? 'good' : 'bad'}>{account.status}</Badge>
                     </Cell>
                     <Cell className="whitespace-nowrap text-right">
-                      <Button variant="outline" onClick={() => setCreditFor(account)}>
+                      <Button
+                        variant="outline"
+                        onClick={() => {
+                          setLimits({
+                            dailyBudgetUnits:
+                              account.billing.plan?.dailyBudgetUnits ?? BLANK_LIMITS.dailyBudgetUnits,
+                            maxConcurrent:
+                              account.billing.plan?.maxConcurrent ?? BLANK_LIMITS.maxConcurrent,
+                            rateLimitRpm:
+                              account.billing.plan?.rateLimitRpm ?? BLANK_LIMITS.rateLimitRpm
+                          });
+                          setLimitsFor(account);
+                        }}
+                      >
+                        Limits
+                      </Button>
+                      <Button
+                        variant="outline"
+                        className="ml-1.5"
+                        onClick={() => setCreditFor(account)}
+                      >
                         Credit
                       </Button>
                       <Button
@@ -466,6 +517,68 @@ function Admin() {
                   }
                 >
                   Apply credit
+                </Button>
+              </div>
+            )}
+          </Modal>
+
+          <Modal open={limitsFor !== null} title="Tenant limits" onClose={() => setLimitsFor(null)}>
+            {limitsFor && (
+              <div className="space-y-4">
+                <p className="text-sm text-muted">
+                  Sets the enforced envelope for{' '}
+                  <span className="font-mono text-xs">{limitsFor.tenantId}</span>. A later plan
+                  change overwrites these values.
+                </p>
+                <Field label="Daily budget units" hint="0 blocks the tenant for the rest of the day">
+                  <input
+                    className={inputClass}
+                    type="number"
+                    min={0}
+                    value={limits.dailyBudgetUnits}
+                    onChange={(event) =>
+                      setLimits({ ...limits, dailyBudgetUnits: Number(event.target.value) })
+                    }
+                  />
+                </Field>
+                <Field label="Max concurrent">
+                  <input
+                    className={inputClass}
+                    type="number"
+                    min={1}
+                    max={64}
+                    value={limits.maxConcurrent}
+                    onChange={(event) =>
+                      setLimits({ ...limits, maxConcurrent: Number(event.target.value) })
+                    }
+                  />
+                </Field>
+                <Field label="Rate limit (rpm)">
+                  <input
+                    className={inputClass}
+                    type="number"
+                    min={1}
+                    max={100000}
+                    value={limits.rateLimitRpm}
+                    onChange={(event) =>
+                      setLimits({ ...limits, rateLimitRpm: Number(event.target.value) })
+                    }
+                  />
+                </Field>
+                <Button
+                  className="w-full"
+                  icon="gauge"
+                  busy={busy}
+                  disabled={
+                    limits.dailyBudgetUnits < 0 ||
+                    limits.maxConcurrent < 1 ||
+                    limits.maxConcurrent > 64 ||
+                    limits.rateLimitRpm < 1 ||
+                    limits.rateLimitRpm > 100000
+                  }
+                  onClick={() => void saveLimits()}
+                >
+                  Save limits
                 </Button>
               </div>
             )}

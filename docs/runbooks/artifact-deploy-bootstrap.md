@@ -44,10 +44,16 @@ Extract only the canonical deploy entrypoint, then verify its bytes against the 
 ```bash
 tar -xOf "$ARTIFACT" ./scripts/deploy.sh > "$ENTRYPOINT"
 chmod 0700 "$ENTRYPOINT"
-EXPECTED=$(tar -xOf "$ARTIFACT" ./manifest.sha256 | awk '$2 == "./scripts/deploy.sh" { print $1 }')
+EXPECTED=$(tar -xOf "$ARTIFACT" ./manifest.sha256 |
+  awk '{ sub(/^\*/, "", $2); if ($2 == "./scripts/deploy.sh") print $1 }')
 ACTUAL=$(sha256sum "$ENTRYPOINT" | awk '{ print $1 }')
 [[ -n $EXPECTED && $ACTUAL == "$EXPECTED" ]]
 ```
+
+The `sub(/^\*/, ...)` is not cosmetic: `sha256sum` defaults to binary mode on
+Windows, so an artifact packaged on a Windows workstation records ` *./path`
+where a Linux build records `  ./path`. A plain `$2 ==` comparison silently
+finds nothing and the guard then fails on an artifact that is actually intact.
 
 Prove Linux syntax and line endings before root executes anything:
 
@@ -116,11 +122,16 @@ chmod 0600 "$UNIT"
 for pair in "./scripts/vps-bootstrap.sh:$BOOTSTRAP" "./infra/systemd/leuwongrr-gateway.service:$UNIT"; do
   MEMBER=${pair%%:*}
   LOCAL=${pair#*:}
-  EXPECTED=$(tar -xOf "$ARTIFACT" ./manifest.sha256 | awk -v m="$MEMBER" '$2 == m { print $1 }')
+  EXPECTED=$(tar -xOf "$ARTIFACT" ./manifest.sha256 |
+    awk -v m="$MEMBER" '{ sub(/^\*/, "", $2); if ($2 == m) print $1 }')
   ACTUAL=$(sha256sum "$LOCAL" | awk '{ print $1 }')
   [[ -n $EXPECTED && $ACTUAL == "$EXPECTED" ]] || { echo "manifest mismatch: $MEMBER" >&2; exit 1; }
 done
 ```
+
+The `sub(/^\*/, ...)` strips the binary-mode marker `sha256sum` writes when the
+artifact was packaged on Windows (` *./path` instead of `  ./path`). Without it
+the lookup returns nothing and the guard rejects an intact artifact.
 
 Prove Linux syntax and line endings before root executes anything:
 

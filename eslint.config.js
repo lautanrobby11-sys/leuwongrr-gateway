@@ -17,7 +17,17 @@ export default tseslint.config(
     }
   },
   {
-    files: ['scripts/**/*.mjs','eslint.config.js'],
+    files: ['web/src/**/*.ts','web/src/**/*.tsx'],
+    languageOptions: { globals: { ...globals.browser, ...globals.es2023 } },
+    rules: {
+      '@typescript-eslint/no-explicit-any': 'error',
+      '@typescript-eslint/no-unused-vars': ['error',{ argsIgnorePattern:'^_', caughtErrorsIgnorePattern:'^_' }],
+      'no-console': ['error',{ allow:['warn','error'] }],
+      'eqeqeq': ['error','always']
+    }
+  },
+  {
+    files: ['scripts/**/*.mjs','eslint.config.js','vitest.config.ts'],
     languageOptions: { globals: { ...globals.node } }
   }
 );

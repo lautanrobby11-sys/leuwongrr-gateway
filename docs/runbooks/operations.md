@@ -45,14 +45,17 @@ only then merge.
 
 ## First-time VPS bootstrap
 
-```bash
-# from a clean checkout of the release SHA on the VPS (or copy unit file)
-sudo bash scripts/vps-bootstrap.sh infra/systemd/leuwongrr-gateway.service
-# edit secrets in place - never paste them into chat/Git/Notion
-sudo nano /opt/leuwongrr-gateway/config/gateway.env
-# generate strong values, for example:
-#   openssl rand -hex 32
-```
+No checkout is ever copied to the VPS. `scripts/vps-bootstrap.sh` ships inside the
+release artifact and is extracted from it with manifest verification. The full
+procedure, including the checksum and carriage-return proofs, is
+`docs/runbooks/artifact-deploy-bootstrap.md` under "First deploy on a bare host".
+
+Summary of what it does: creates `/opt/leuwongrr-gateway` and its tree, the
+`leuwongrr-gateway` service user, a mode-600 `config/gateway.env` seeded with every
+key the schema requires (secrets as the literal `REPLACE_ME`), and installs the
+systemd unit without starting it. Substitute the placeholders in place before any
+deploy; generate values with `openssl rand -hex 32` and never paste them into
+chat, Git, or Notion.
 
 ## Validate and release
 
@@ -62,6 +65,7 @@ sudo nano /opt/leuwongrr-gateway/config/gateway.env
    - Package contents: `dist/` (including `dist/public` and `dist/cli/keys.js`),
      `package.json`, `web/package.json`, both lockfiles when present,
      `scripts/{deploy,rollback,backup,restore-drill}.sh`,
+     `scripts/ping-snapshot-healthcheck.sh`, `scripts/vps-bootstrap.sh`,
      `infra/systemd/leuwongrr-gateway.service`,
      `infra/systemd/leuwongrr-gateway-snapshot.service`,
      `infra/systemd/leuwongrr-gateway-snapshot.timer`, `RELEASE`,
@@ -107,7 +111,36 @@ key:rotate      --tenant <id> --key <key-id> [--grace-minutes N] [--expires-days
 limits:set      --tenant <id> --daily-units N --max-concurrent N --rpm N
 model:enable    --tenant <id> --model <id>
 model:disable   --tenant <id> --model <id>
+account:role    --email <address> --role member|support|operator|admin|owner
+plan:upsert     --plan <id> --name <label> --price-cents N --included-tokens N \
+                --overage-cents N --max-concurrent N --rpm N --daily-units N \
+                [--models a,b] [--inactive]
 ```
+
+`account:role` is the only way an account becomes `admin`. The console's
+`requireAdmin` accepts `admin` and `owner` only, and no migration or sign-in path
+ever assigns either, so without this command the admin surface is unreachable.
+The account must have signed in once first — the command promotes an existing row
+and fails on an unknown email rather than creating one. Granting the role does
+**not** grant access on its own: `/admin*` still requires a verified Cloudflare
+Access assertion. The promotion is recorded as an `operator.account.role` row in
+`audit_logs` with `actor_type='system'` and the previous role in its metadata, so
+a privilege change made outside every HTTP surface is still discoverable:
+
+```bash
+sudo -u leuwongrr-gateway sqlite3 -readonly /opt/leuwongrr-gateway/data/gateway.db \
+  "SELECT created_at, metadata_json FROM audit_logs WHERE event='operator.account.role' ORDER BY created_at DESC LIMIT 5;"
+```
+
+`plan:upsert` seeds the plan catalogue that `/console/api/member/plans` reads. An
+empty catalogue leaves the member console with nothing to subscribe to.
+`--models` is validated against the registry's public model IDs and defaults to
+`lwrr-text`. Prices, token allowances and daily units accept `0`. Every field is
+checked against `src/billing/plan-input.ts`, the same schema
+`POST /console/api/admin/plans` uses, so `--max-concurrent` is capped at 64 and
+`--rpm` at 100000: `applyPlanLimits` copies plan values into `tenant_limits`, so
+an out-of-range plan would become live enforcement state rather than a merely odd
+row. A rejected value prints `invalid plan: <field>: <reason>` and writes nothing.
 
 There is no `tenant:list`. To inventory tenants, read the database read-only
 instead of inventing a subcommand.
@@ -131,7 +164,12 @@ All three of `gateway.db`, `gateway.db-wal` and `gateway.db-shm` must remain
 ## Post-deploy negative checks
 
 - `ss -ltnp`: Gateway only `127.0.0.1:2080`; OmniRoute only expected loopback port.
-- Unknown route returns 404 and produces no OmniRoute request.
+- Unknown route returns 404 and produces no OmniRoute request. The body is the
+  gateway envelope `{"error":{"code":"route_not_found",...}}` with
+  `x-request-id`, `cache-control: no-store` and `nosniff`, on both an unlisted
+  path and a console path while `CONSOLE_ENABLED=false`. Fastify's own
+  `{"message":"Route GET:/ not found",...}` must never appear; if it does, a route
+  is allowlisted without a handler.
 - `/v1/models` without/invalid key returns 401; wrong scope returns 403.
 - A **revoked** key returns `403 insufficient_scope`, not `401`. `authenticate()`
   filters only `expires_at`, so a revoked key still resolves and `requireScope()`
@@ -145,12 +183,18 @@ All three of `gateway.db`, `gateway.db-wal` and `gateway.db-shm` must remain
 - `/member` and `/chat` without a session cookie redirect to `/login`; a member
   session cannot read another account's usage, wallet or payments.
 - `/admin`, `/member`, `/chat`, `/login` all return HTML, not `503 console_not_built`.
+  The apex `/` serves the sign-in portal and must also return HTML, not 404.
 - `402 budget_exceeded` is reachable by exhausting the tenant budget. The
   unfunded-account `402` is **not** provable while `CONSOLE_ENABLED=false`,
   because `assertFunded()` exits early; do not record it as evidence.
 - A replayed Cryptomus webhook credits the wallet exactly once.
 - `/v1` and `/v1beta` never redirect to Cloudflare interactive login.
 - Check `systemctl show leuwongrr-gateway` resource limits and `journalctl` redaction.
+
+The edge configuration these cases exercise — tunnel target, the `/admin*`-only
+Access application, and the cache-bypass list — is recorded in
+`infra/cloudflare/README.md`. Dashboard changes are operator-owned and belong in
+the deployment audit; that file is the canonical record, not this runbook.
 
 ## Upstream credential
 

@@ -1,6 +1,5 @@
 [Unit]
 Description=LeuwongRR Gateway encrypted data snapshot
-Documentation=file:///opt/leuwongrr-gateway/current/docs/runbooks/operations.md
 After=leuwongrr-gateway.service
 
 [Service]
@@ -8,6 +7,9 @@ After=leuwongrr-gateway.service
 # written where the service user cannot read it back. This unit is separate
 # from leuwongrr-gateway.service because the gateway sandbox forbids the writes
 # a snapshot needs, and because a failed snapshot must never stop the service.
+# Procedure of record is docs/runbooks/operations.md in the repository. It is
+# deliberately not referenced by Documentation= because docs/ is not staged into
+# the release artifact, so no such path exists on a deployed host.
 Type=oneshot
 User=root
 Group=root

@@ -2,6 +2,10 @@
 set -Eeuo pipefail
 umask 077
 ROOT=/opt/leuwongrr-gateway
+# Resolved from this file rather than from $ROOT/current so the ping script comes
+# from the same copy as the backup script being run. Under the snapshot unit both
+# resolve to the deployed release; run from a checkout they no longer disagree.
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 
 require_commands() {
   local missing=()
@@ -49,6 +53,6 @@ fi
 # Notify only after archive, checksum, permissions, and retention complete. If
 # the external ping fails, systemd marks the snapshot unit failed even though
 # the new archive remains valid; the missed dead-man ping then raises the alert.
-bash "$ROOT/current/scripts/ping-snapshot-healthcheck.sh"
+bash "$SCRIPT_DIR/ping-snapshot-healthcheck.sh"
 
 echo "$STAMP"

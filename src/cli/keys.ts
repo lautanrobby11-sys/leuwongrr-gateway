@@ -8,8 +8,16 @@
  *     node dist/cli/keys.js key:issue --tenant demo --scopes models:read,chat:write
  */
 import { parseArgs } from 'node:util';
+import { randomUUID } from 'node:crypto';
 import { GatewayDatabase } from '../persistence/database.js';
 import { isScope, parseKeyMode, SCOPES, type Scope } from '../auth/api-keys.js';
+import { AccountStore, type AccountRole } from '../accounts/store.js';
+import { BillingService } from '../billing/service.js';
+import { planInputSchema } from '../billing/plan-input.js';
+import { DEFAULT_DATABASE_PATH } from '../config.js';
+import { listModels } from '../policy/capabilities.js';
+
+const ACCOUNT_ROLES: readonly AccountRole[] = ['member', 'support', 'operator', 'admin', 'owner'];
 
 const USAGE = `Usage: node dist/cli/keys.js <command> [options]
 
@@ -22,10 +30,21 @@ Commands:
   limits:set      --tenant <id> --daily-units N --max-concurrent N --rpm N
   model:enable    --tenant <id> --model <id>
   model:disable   --tenant <id> --model <id>
+  account:role    --email <address> --role ${ACCOUNT_ROLES.join('|')}
+  plan:upsert     --plan <id> --name <label> --price-cents N --included-tokens N
+                  --overage-cents N --daily-units N --max-concurrent N --rpm N
+                  [--models a,b] [--inactive]
+
+Notes:
+  account:role only sets the database role. Admin console routes additionally
+  require a verified Cloudflare Access assertion, so a role change alone does
+  not grant access.
+  plan:upsert is the bootstrap path for the first plan; once an admin exists the
+  console owns plan edits at POST /console/api/admin/plans.
 
 Environment:
   API_KEY_PEPPER  required, minimum 32 characters
-  DATABASE_PATH   defaults to ./data/gateway.db
+  DATABASE_PATH   defaults to ${DEFAULT_DATABASE_PATH}
 
 Scopes: ${SCOPES.join(', ')}`;
 
@@ -47,6 +66,28 @@ function positiveInteger(value: string | undefined, name: string): number {
   const parsed = Number(requireOption(value, name));
   if (!Number.isInteger(parsed) || parsed < 1) fail(`--${name} must be a positive integer`);
   return parsed;
+}
+
+/**
+ * Plan prices, included tokens, overage and daily units legitimately accept 0,
+ * matching the `min(0)` schema the console applies at POST /admin/plans. Kept
+ * separate from positiveInteger so tenant limit validation is unchanged.
+ */
+function nonNegativeInteger(value: string | undefined, name: string): number {
+  const parsed = Number(requireOption(value, name));
+  if (!Number.isInteger(parsed) || parsed < 0) fail(`--${name} must be a non-negative integer`);
+  return parsed;
+}
+
+function parseModelList(raw: string): string[] {
+  const requested = raw
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  const known = new Set(listModels().map((model) => model.publicId));
+  const unknown = requested.filter((entry) => !known.has(entry));
+  if (unknown.length > 0) fail(`unknown model: ${unknown.join(', ')}`);
+  return requested;
 }
 
 function parseScopeList(raw: string): Scope[] {
@@ -73,6 +114,14 @@ const { values, positionals } = parseArgs({
     'daily-units': { type: 'string' },
     'max-concurrent': { type: 'string' },
     rpm: { type: 'string' },
+    email: { type: 'string' },
+    role: { type: 'string' },
+    plan: { type: 'string' },
+    'price-cents': { type: 'string' },
+    'included-tokens': { type: 'string' },
+    'overage-cents': { type: 'string' },
+    models: { type: 'string' },
+    inactive: { type: 'boolean', default: false },
     help: { type: 'boolean', default: false }
   }
 });
@@ -86,7 +135,7 @@ if (values.help || !command) {
 const pepper = process.env.API_KEY_PEPPER;
 if (!pepper || pepper.length < 32) fail('API_KEY_PEPPER environment variable required (min 32 chars)');
 
-const databasePath = process.env.DATABASE_PATH ?? './data/gateway.db';
+const databasePath = process.env.DATABASE_PATH ?? DEFAULT_DATABASE_PATH;
 const db = new GatewayDatabase(databasePath, pepper);
 
 try {
@@ -157,6 +206,65 @@ try {
       const enabled = command === 'model:enable';
       db.tenants.setModelPolicy(tenant, model, enabled);
       emit({ tenant_id: tenant, model_id: model, enabled });
+      break;
+    }
+    case 'account:role': {
+      const email = requireOption(values.email, 'email');
+      const role = requireOption(values.role, 'role');
+      if (!ACCOUNT_ROLES.includes(role as AccountRole)) {
+        fail(`--role must be one of: ${ACCOUNT_ROLES.join(', ')}`);
+      }
+      const accounts = new AccountStore(db.db, pepper);
+      const account = accounts.findByEmail(email);
+      if (!account) fail('no account with that email; the member must sign in once first');
+      accounts.setRole(account.id, role as AccountRole);
+      // Privilege granted outside any HTTP surface still leaves a trail: the
+      // console exposes no role-change route, so this command is the only path
+      // to `admin`, and an unlogged promotion would be invisible afterwards.
+      db.audit({
+        tenantId: account.tenantId,
+        actorType: 'system',
+        event: 'operator.account.role',
+        traceId: `cli-${randomUUID()}`,
+        metadata: { account_id: account.id, previous_role: account.role, role }
+      });
+      emit({ account_id: account.id, email: account.email, role });
+      console.error(
+        'Role updated. Admin console routes still require a verified Cloudflare Access assertion.'
+      );
+      break;
+    }
+    case 'plan:upsert': {
+      const billing = new BillingService(db.db);
+      // The console route and this command are the only writers of `plans`, and
+      // `applyPlanLimits` copies plan values into `tenant_limits`, so an
+      // unvalidated write here becomes live enforcement state. Both go through
+      // one schema rather than two hand-rolled range checks.
+      const candidate = planInputSchema.safeParse({
+        id: requireOption(values.plan, 'plan'),
+        name: requireOption(values.name, 'name'),
+        monthlyPriceCents: nonNegativeInteger(values['price-cents'], 'price-cents'),
+        includedTokens: nonNegativeInteger(values['included-tokens'], 'included-tokens'),
+        overageCentsPerMillion: nonNegativeInteger(values['overage-cents'], 'overage-cents'),
+        maxConcurrent: positiveInteger(values['max-concurrent'], 'max-concurrent'),
+        rateLimitRpm: positiveInteger(values.rpm, 'rpm'),
+        dailyBudgetUnits: nonNegativeInteger(values['daily-units'], 'daily-units'),
+        models: parseModelList(values.models ?? 'lwrr-text'),
+        active: !values.inactive
+      });
+      if (!candidate.success) {
+        const first = candidate.error.issues[0];
+        fail(`invalid plan: ${first?.path.join('.') ?? 'input'}: ${first?.message ?? 'rejected'}`);
+      }
+      const stored = billing.upsertPlan(candidate.data);
+      db.audit({
+        tenantId: null,
+        actorType: 'system',
+        event: 'operator.plan.upserted',
+        traceId: `cli-${randomUUID()}`,
+        metadata: { plan: stored.id, active: stored.active }
+      });
+      emit(stored);
       break;
     }
     default:

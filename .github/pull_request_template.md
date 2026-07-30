@@ -11,14 +11,29 @@
 
 ## Evidence
 
+The eleven rows below are exactly the gates `quality` treats as required. A red
+required gate means no merge, no deploy, no DONE status.
+
 | Gate | Result |
 | --- | --- |
-| `npm run check:conventions` | |
-| `npm run scan:secrets` | |
-| `npm run lint` | |
-| `npm run typecheck` | |
-| `npm test` | |
-| `npm run build` | |
+| `conventions` (`npm run check:conventions`) | |
+| `secrets` (`npm run scan:secrets`) | |
+| `lint` (`npm run lint`) | |
+| `typecheck` (`npm run typecheck`) | |
+| `tests` (`npm test`) | |
+| `build` (`npm run build:all`) | |
+| `console` (`dist/public/{admin,member,chat,login}.html` + `assets` present) | |
+| `shell` (`bash -n scripts/*.sh`) | |
+| `package` (`scripts/build-release.sh <sha>`) | |
+| `checksum` (`sha256sum -c` inside `.release/`) | |
+| `clean` (`git status --porcelain --untracked-files=no` empty after packaging) | |
+
+Green GitHub Actions is **not** production authorization. Record the workstation
+gate separately:
+
+| Workstation gate | Result |
+| --- | --- |
+| `npm run ci:local` on the merge SHA | |
 
 ## Security review
 

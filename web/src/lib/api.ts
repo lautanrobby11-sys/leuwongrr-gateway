@@ -83,15 +83,37 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new ApiError('network_error', 0, 'Network unavailable. Check your connection.');
   }
 
+  // A failing edge or an unbuilt console answers with HTML, not JSON. Parsing
+  // outside this guard used to throw a raw SyntaxError, which defeated every
+  // `instanceof ApiError` branch — including the 401 redirect to /login.
   const text = await response.text();
-  const payload = text ? (JSON.parse(text) as unknown) : {};
+  let payload: unknown = {};
+  let parsed = true;
+  if (text) {
+    try {
+      payload = JSON.parse(text) as unknown;
+    } catch {
+      parsed = false;
+    }
+  }
 
+  // Status first: a 401 delivered as an HTML page must still arrive as an
+  // ApiError carrying that status.
   if (!response.ok) {
-    const detail = (payload as { error?: { code?: string; message?: string } }).error;
+    const detail = parsed
+      ? (payload as { error?: { code?: string; message?: string } }).error
+      : undefined;
     throw new ApiError(
       detail?.code ?? 'request_failed',
       response.status,
       detail?.message ?? 'Request failed'
+    );
+  }
+  if (!parsed) {
+    throw new ApiError(
+      'invalid_response',
+      response.status,
+      'The server returned a response this page could not read.'
     );
   }
   return payload as T;

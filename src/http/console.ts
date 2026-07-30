@@ -17,6 +17,7 @@ import {
   type OauthProvider
 } from '../accounts/oauth.js';
 import { BillingError, type BillingService } from '../billing/service.js';
+import { planInputSchema } from '../billing/plan-input.js';
 import { PaymentError, PAID_STATUSES, type CryptomusClient } from '../payments/cryptomus.js';
 import { assertResolvedPublicEgress } from '../policy/egress.js';
 import { listModels } from '../policy/capabilities.js';
@@ -33,6 +34,9 @@ export interface ConsoleDeps {
 }
 
 const PAGES: Record<string, string> = {
+  // The apex is the sign-in portal. Without this entry the allowlist refuses `/`
+  // and a visitor who types the bare hostname gets a protocol 404.
+  '/': 'login.html',
   '/admin': 'admin.html',
   '/member': 'member.html',
   '/chat': 'chat.html',
@@ -113,20 +117,9 @@ const keySchema = z
     expiresDays: z.number().int().min(1).max(365).optional()
   })
   .strict();
-const planSchema = z
-  .object({
-    id: z.string().regex(/^[a-z0-9-]{2,32}$/),
-    name: z.string().min(1).max(64),
-    monthlyPriceCents: z.number().int().min(0).max(10_000_00),
-    includedTokens: z.number().int().min(0),
-    overageCentsPerMillion: z.number().int().min(0).max(1_000_00),
-    maxConcurrent: z.number().int().min(1).max(64),
-    rateLimitRpm: z.number().int().min(1).max(100000),
-    dailyBudgetUnits: z.number().int().min(0),
-    models: z.array(z.string().min(1).max(64)),
-    active: z.boolean().optional()
-  })
-  .strict();
+// Shared with the operator CLI: two writers of the same table must not disagree
+// about what a plan may contain.
+const planSchema = planInputSchema;
 const topupSchema = z
   .object({ planId: z.string().min(1).max(32), amountCents: z.number().int().min(100).max(1_000_000) })
   .strict();
@@ -182,6 +175,7 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
 
   // ---- Static shell ----
 
+  app.get('/', (req, reply) => servePage(req, reply));
   app.get('/admin', (req, reply) => servePage(req, reply));
   app.get('/member', (req, reply) => servePage(req, reply));
   app.get('/chat', (req, reply) => servePage(req, reply));
@@ -208,7 +202,7 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
     // re-checking the prefix makes traversal impossible even if that changes.
     const target = normalize(join(distRoot, 'assets', req.params.file));
     if (!target.startsWith(normalize(join(distRoot, 'assets')))) {
-      return fail(reply, 404, 'route_not_found', 'Route is not available', req.id);
+      return assetMiss(reply, req.id);
     }
     try {
       const body = await readFile(target);
@@ -217,9 +211,20 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
         .header('cache-control', 'public, max-age=31536000, immutable')
         .send(body);
     } catch {
-      return fail(reply, 404, 'route_not_found', 'Route is not available', req.id);
+      return assetMiss(reply, req.id);
     }
   });
+
+  /**
+   * The shared hook removes `cache-control` for asset routes so a hit can declare
+   * itself immutable. A miss must restore it: an absent header lets an
+   * intermediary apply its own default and cache a 404 for a hashed filename that
+   * exists in the next release.
+   */
+  function assetMiss(reply: FastifyReply, traceId: string) {
+    reply.header('cache-control', 'no-store');
+    return fail(reply, 404, 'route_not_found', 'Route is not available', traceId);
+  }
 
   // ---- Session ----
 

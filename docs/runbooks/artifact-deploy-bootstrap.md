@@ -1,6 +1,11 @@
 # Verified deploy bootstrap from an immutable artifact
 
-Use this recovery path only when the deploy entrypoint in the active release fails `bash -n`. It does not authorize a host hotfix: the executed entrypoint is extracted from a newly merged, workstation-authorized immutable artifact and verified against both its outer checksum and inner manifest.
+Two procedures share one rule: every script root executes on the host is extracted from a verified artifact, never copied from a checkout.
+
+- **Verify and extract** / **Activate once** below: recovery path, used only when the deploy entrypoint in the active release fails `bash -n`.
+- **First deploy on a bare host**: host preparation before any release directory exists.
+
+Use the recovery path only when the deploy entrypoint in the active release fails `bash -n`. It does not authorize a host hotfix: the executed entrypoint is extracted from a newly merged, workstation-authorized immutable artifact and verified against both its outer checksum and inner manifest.
 
 An SHA whose deploy invocation already failed is abandoned. Build and transfer a new merged SHA before using this procedure.
 
@@ -39,10 +44,16 @@ Extract only the canonical deploy entrypoint, then verify its bytes against the 
 ```bash
 tar -xOf "$ARTIFACT" ./scripts/deploy.sh > "$ENTRYPOINT"
 chmod 0700 "$ENTRYPOINT"
-EXPECTED=$(tar -xOf "$ARTIFACT" ./manifest.sha256 | awk '$2 == "./scripts/deploy.sh" { print $1 }')
+EXPECTED=$(tar -xOf "$ARTIFACT" ./manifest.sha256 |
+  awk '{ sub(/^\*/, "", $2); if ($2 == "./scripts/deploy.sh") print $1 }')
 ACTUAL=$(sha256sum "$ENTRYPOINT" | awk '{ print $1 }')
 [[ -n $EXPECTED && $ACTUAL == "$EXPECTED" ]]
 ```
+
+The `sub(/^\*/, ...)` is not cosmetic: `sha256sum` defaults to binary mode on
+Windows, so an artifact packaged on a Windows workstation records ` *./path`
+where a Linux build records `  ./path`. A plain `$2 ==` comparison silently
+finds nothing and the guard then fails on an artifact that is actually intact.
 
 Prove Linux syntax and line endings before root executes anything:
 
@@ -75,3 +86,77 @@ curl -sS -o /dev/null -w 'liveness=%{http_code}\n' \
 ```
 
 The temporary entrypoint is executable staging, not configuration. It is deleted after success; no source checkout, Git credential, shadow unit, or environment copy is placed on the host.
+
+## First deploy on a bare host
+
+Host preparation before any release exists. `scripts/vps-bootstrap.sh` is staged into the artifact for exactly this reason: copying the repository to the VPS is forbidden, so the artifact is the only path by which the documented host-prep script reaches the host. It creates `/opt/leuwongrr-gateway`, the service user, the directory tree, a mode-600 `gateway.env` seed, and installs the systemd unit. It does not start the service and does not deploy.
+
+Preconditions: the SHA passed PR diagnostics and the full operator workstation release gate; only `<sha>.tar.gz` and `<sha>.tar.gz.sha256` were transferred to `/tmp`; `/opt/leuwongrr-gateway` does not exist yet.
+
+```bash
+SHA=<new-full-40-character-sha>
+ARTIFACT="/tmp/$SHA.tar.gz"
+BOOTSTRAP="/tmp/leuwongrr-bootstrap-$SHA.sh"
+UNIT="/tmp/leuwongrr-gateway-$SHA.service"
+```
+
+Verify the transferred artifact before extracting executable content:
+
+```bash
+(
+  cd /tmp
+  sha256sum -c "$SHA.tar.gz.sha256"
+)
+sudo test ! -e /opt/leuwongrr-gateway
+```
+
+If the checksum fails or the tree already exists, stop: an existing tree means this is not a first deploy.
+
+Extract the bootstrap script and the unit it installs, then verify both against the manifest inside the already-verified artifact:
+
+```bash
+tar -xOf "$ARTIFACT" ./scripts/vps-bootstrap.sh > "$BOOTSTRAP"
+tar -xOf "$ARTIFACT" ./infra/systemd/leuwongrr-gateway.service > "$UNIT"
+chmod 0700 "$BOOTSTRAP"
+chmod 0600 "$UNIT"
+for pair in "./scripts/vps-bootstrap.sh:$BOOTSTRAP" "./infra/systemd/leuwongrr-gateway.service:$UNIT"; do
+  MEMBER=${pair%%:*}
+  LOCAL=${pair#*:}
+  EXPECTED=$(tar -xOf "$ARTIFACT" ./manifest.sha256 |
+    awk -v m="$MEMBER" '{ sub(/^\*/, "", $2); if ($2 == m) print $1 }')
+  ACTUAL=$(sha256sum "$LOCAL" | awk '{ print $1 }')
+  [[ -n $EXPECTED && $ACTUAL == "$EXPECTED" ]] || { echo "manifest mismatch: $MEMBER" >&2; exit 1; }
+done
+```
+
+The `sub(/^\*/, ...)` strips the binary-mode marker `sha256sum` writes when the
+artifact was packaged on Windows (` *./path` instead of `  ./path`). Without it
+the lookup returns nothing and the guard rejects an intact artifact.
+
+Prove Linux syntax and line endings before root executes anything:
+
+```bash
+bash -n "$BOOTSTRAP"
+CR_BYTES=$(tr -cd '\r' < "$BOOTSTRAP" | wc -c)
+printf 'bootstrap_carriage_returns=%s\n' "$CR_BYTES"
+[[ $CR_BYTES -eq 0 ]]
+```
+
+Expected output is `bootstrap_carriage_returns=0`.
+
+Run it once, passing the verified unit as its argument:
+
+```bash
+sudo bash "$BOOTSTRAP" "$UNIT"
+```
+
+Then substitute secrets in place and remove the staging copies:
+
+```bash
+sudo nano /opt/leuwongrr-gateway/config/gateway.env   # replace every REPLACE_ME
+rm -f "$BOOTSTRAP" "$UNIT"
+```
+
+The seed refuses to boot while any `REPLACE_ME` remains: each placeholder is shorter than the minimum its own schema rule enforces, so `loadConfig()` fails naming the field rather than starting in a half-configured state. Generate values with `openssl rand -hex 32`; never paste them into chat, Git, or Notion.
+
+Only after `gateway.env` holds real values, continue with `## Activate once` above using the same `$ARTIFACT`. Credentials first, deploy second: `OMNIROUTE_API_KEY` must be real before `deploy.sh` runs, or the health gate fails and auto-restores against a symlink that does not exist yet.

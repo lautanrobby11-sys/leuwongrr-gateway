@@ -36,6 +36,7 @@ export const PUBLIC_ALLOWLIST: readonly AllowedRoute[] = Object.freeze([
   { method: 'POST', pattern: /^\/v1\/messages$/, id: 'messages.create' },
   { method: 'POST', pattern: /^\/v1\/messages\/count_tokens$/, id: 'messages.count_tokens' },
 
+  { method: 'GET', pattern: /^\/$/, id: 'console.page' },
   { method: 'GET', pattern: /^\/(admin|member|chat|login)$/, id: 'console.page' },
   { method: 'GET', pattern: /^\/console\/assets\/[A-Za-z0-9._-]{1,128}$/, id: 'console.asset' },
   { method: 'GET', pattern: /^\/console\/api\/session$/, id: 'console.auth' },
@@ -96,6 +97,7 @@ export const DOCUMENTED_OPERATIONS: readonly DocumentedOperation[] = Object.free
   { method: 'POST', path: '/v1/responses', sample: '/v1/responses', id: 'responses.create' },
   { method: 'POST', path: '/v1/messages', sample: '/v1/messages', id: 'messages.create' },
   { method: 'POST', path: '/v1/messages/count_tokens', sample: '/v1/messages/count_tokens', id: 'messages.count_tokens' },
+  { method: 'GET', path: '/', sample: '/', id: 'console.page' },
   { method: 'GET', path: '/admin', sample: '/admin', id: 'console.page' },
   { method: 'GET', path: '/member', sample: '/member', id: 'console.page' },
   { method: 'GET', path: '/chat', sample: '/chat', id: 'console.page' },

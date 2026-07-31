@@ -18,6 +18,7 @@ import {
 } from '../accounts/oauth.js';
 import { BillingError, type BillingService } from '../billing/service.js';
 import { planInputSchema } from '../billing/plan-input.js';
+import { DAILY_BUDGET_UNITS, MAX_CONCURRENT, RATE_LIMIT_RPM } from '../billing/limit-bounds.js';
 import { PaymentError, PAID_STATUSES, type CryptomusClient } from '../payments/cryptomus.js';
 import { assertResolvedPublicEgress } from '../policy/egress.js';
 import { listModels } from '../policy/capabilities.js';
@@ -127,13 +128,22 @@ const planSchema = planInputSchema;
  * than an accident of encoding, and `tenant_limits` is enforcement state — a
  * non-finite value that reached SQLite would write a float or a NULL into a
  * column the request path reads as units.
+ *
+ * The bounds come from `limit-bounds.ts`, the same module `planInputSchema` and
+ * the browser form read. Restating them here is how the UI came to disagree with
+ * the route in the first place.
  */
 const limitsSchema = z
   .object({
     tenantId: z.string().min(1).max(64),
-    dailyBudgetUnits: z.number().finite().int().min(0).max(1_000_000_000_000),
-    maxConcurrent: z.number().finite().int().min(1).max(64),
-    rateLimitRpm: z.number().finite().int().min(1).max(100000)
+    dailyBudgetUnits: z
+      .number()
+      .finite()
+      .int()
+      .min(DAILY_BUDGET_UNITS.min)
+      .max(DAILY_BUDGET_UNITS.max),
+    maxConcurrent: z.number().finite().int().min(MAX_CONCURRENT.min).max(MAX_CONCURRENT.max),
+    rateLimitRpm: z.number().finite().int().min(RATE_LIMIT_RPM.min).max(RATE_LIMIT_RPM.max)
   })
   .strict();
 const topupSchema = z

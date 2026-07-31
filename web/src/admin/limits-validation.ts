@@ -1,13 +1,17 @@
-// Bounds mirror the server envelope that actually rejects the request:
-// planInputSchema in src/billing/plan-input.ts and limitsSchema in
-// src/http/console.ts. Keeping them here lets the form refuse a value before it
-// becomes a 400, and lets the predicate be tested without rendering the page.
+import { DAILY_BUDGET_UNITS, MAX_CONCURRENT, RATE_LIMIT_RPM } from '../../../src/billing/limit-bounds.js';
+
+// The bounds are imported, not restated. They live in src/billing/limit-bounds.ts
+// because that is the envelope the server actually rejects against —
+// planInputSchema and limitsSchema read the same module. A copy here is how the
+// form came to allow a dailyBudgetUnits the route answers with a 400.
 //
-// dailyBudgetUnits = 0 is deliberately legal: the field's hint documents it as
-// "blocks the tenant for the rest of the day", so it is a real operating value.
-export const MAX_DAILY_BUDGET_UNITS = 1_000_000_000_000;
-export const MAX_CONCURRENT = 64;
-export const MAX_RATE_LIMIT_RPM = 100_000;
+// limit-bounds.ts deliberately carries no dependency, so pulling it into the
+// browser bundle costs three frozen objects and no validator.
+//
+// dailyBudgetUnits = 0 is legal: the field's hint documents it as "blocks the
+// tenant for the rest of the day", so it is a real operating value, which is why
+// the check below is `< DAILY_BUDGET_UNITS.min` and not `<= 0`.
+export { DAILY_BUDGET_UNITS, MAX_CONCURRENT, RATE_LIMIT_RPM };
 
 export interface TenantLimitsInput {
   dailyBudgetUnits: number;
@@ -27,11 +31,11 @@ export function limitsSaveDisabled(limits: TenantLimitsInput): boolean {
     !Number.isInteger(limits.dailyBudgetUnits) ||
     !Number.isInteger(limits.maxConcurrent) ||
     !Number.isInteger(limits.rateLimitRpm) ||
-    limits.dailyBudgetUnits < 0 ||
-    limits.dailyBudgetUnits > MAX_DAILY_BUDGET_UNITS ||
-    limits.maxConcurrent < 1 ||
-    limits.maxConcurrent > MAX_CONCURRENT ||
-    limits.rateLimitRpm < 1 ||
-    limits.rateLimitRpm > MAX_RATE_LIMIT_RPM
+    limits.dailyBudgetUnits < DAILY_BUDGET_UNITS.min ||
+    limits.dailyBudgetUnits > DAILY_BUDGET_UNITS.max ||
+    limits.maxConcurrent < MAX_CONCURRENT.min ||
+    limits.maxConcurrent > MAX_CONCURRENT.max ||
+    limits.rateLimitRpm < RATE_LIMIT_RPM.min ||
+    limits.rateLimitRpm > RATE_LIMIT_RPM.max
   );
 }

@@ -26,7 +26,12 @@ import {
   type NavItem
 } from '../components/ui';
 import { dateTime, money, tokens } from '../lib/format';
-import { limitsSaveDisabled } from './limits-validation';
+import {
+  limitsSaveDisabled,
+  DAILY_BUDGET_UNITS,
+  MAX_CONCURRENT,
+  RATE_LIMIT_RPM
+} from './limits-validation';
 import '../styles.css';
 
 const NAV: NavItem[] = [
@@ -542,7 +547,8 @@ function Admin() {
                   <input
                     className={inputClass}
                     type="number"
-                    min={0}
+                    min={DAILY_BUDGET_UNITS.min}
+                    max={DAILY_BUDGET_UNITS.max}
                     value={limits.dailyBudgetUnits}
                     onChange={(event) =>
                       setLimits({ ...limits, dailyBudgetUnits: Number(event.target.value) })
@@ -553,8 +559,8 @@ function Admin() {
                   <input
                     className={inputClass}
                     type="number"
-                    min={1}
-                    max={64}
+                    min={MAX_CONCURRENT.min}
+                    max={MAX_CONCURRENT.max}
                     value={limits.maxConcurrent}
                     onChange={(event) =>
                       setLimits({ ...limits, maxConcurrent: Number(event.target.value) })
@@ -565,8 +571,8 @@ function Admin() {
                   <input
                     className={inputClass}
                     type="number"
-                    min={1}
-                    max={100000}
+                    min={RATE_LIMIT_RPM.min}
+                    max={RATE_LIMIT_RPM.max}
                     value={limits.rateLimitRpm}
                     onChange={(event) =>
                       setLimits({ ...limits, rateLimitRpm: Number(event.target.value) })

@@ -23,9 +23,15 @@ describe('release-critical line endings', () => {
   // A sweep that matched nothing would pass vacuously, so the sweep is asserted
   // before the files are. Every extension below is promised LF by
   // .gitattributes; a glob that silently stops matching is a real regression.
-  it.each(sweeps)('$dir yields at least one release-critical file', ({ dir, extensions }) => {
-    const matched = releaseCriticalFiles.filter((file) => file.startsWith(`${dir}/`));
-    expect(matched, `no ${extensions.join('/')} file found under ${dir}/`).not.toHaveLength(0);
+  // Each extension is asserted on its own: a directory-wide check would stay
+  // green while one extension quietly stops matching and loses its coverage.
+  it.each(sweeps)('$dir yields at least one file per swept extension', ({ dir, extensions }) => {
+    for (const extension of extensions) {
+      const matched = releaseCriticalFiles.filter(
+        (file) => file.startsWith(`${dir}/`) && file.endsWith(extension)
+      );
+      expect(matched, `no ${extension} file found under ${dir}/`).not.toHaveLength(0);
+    }
   });
 
   it.each(releaseCriticalFiles)('%s contains no carriage returns', (file) => {

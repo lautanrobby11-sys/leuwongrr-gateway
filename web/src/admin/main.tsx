@@ -1,6 +1,13 @@
 import { StrictMode, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { api, ApiError, type BillingSummary, type Plan } from '../lib/api';
+import {
+  api,
+  ApiError,
+  type BillingSummary,
+  type EffectiveTenantLimits,
+  type Plan,
+  type TenantLimits
+} from '../lib/api';
 import { Icon } from '../components/icons';
 import {
   Badge,
@@ -50,18 +57,14 @@ interface AdminAccount {
   status: string;
   tenantId: string;
   billing: BillingSummary;
+  /** The enforced envelope from `tenant_limits`, or the process defaults. */
+  limits: EffectiveTenantLimits;
 }
 
 /**
  * Bounds mirror the schema behind POST /console/api/admin/accounts/limits, so
  * the form cannot submit a value the gateway will reject with a 400.
  */
-interface TenantLimits {
-  dailyBudgetUnits: number;
-  maxConcurrent: number;
-  rateLimitRpm: number;
-}
-
 const BLANK_LIMITS: TenantLimits = { dailyBudgetUnits: 100_000, maxConcurrent: 2, rateLimitRpm: 120 };
 
 function PlanEditor({
@@ -390,13 +393,14 @@ function Admin() {
                       <Button
                         variant="outline"
                         onClick={() => {
+                          // The stored envelope, not the plan's copy of it. A
+                          // plan describes what was applied when the
+                          // subscription started; seeding from it discarded
+                          // every later limit edit on the next save.
                           setLimits({
-                            dailyBudgetUnits:
-                              account.billing.plan?.dailyBudgetUnits ?? BLANK_LIMITS.dailyBudgetUnits,
-                            maxConcurrent:
-                              account.billing.plan?.maxConcurrent ?? BLANK_LIMITS.maxConcurrent,
-                            rateLimitRpm:
-                              account.billing.plan?.rateLimitRpm ?? BLANK_LIMITS.rateLimitRpm
+                            dailyBudgetUnits: account.limits.dailyBudgetUnits,
+                            maxConcurrent: account.limits.maxConcurrent,
+                            rateLimitRpm: account.limits.rateLimitRpm
                           });
                           setLimitsFor(account);
                         }}
@@ -527,8 +531,11 @@ function Admin() {
               <div className="space-y-4">
                 <p className="text-sm text-muted">
                   Sets the enforced envelope for{' '}
-                  <span className="font-mono text-xs">{limitsFor.tenantId}</span>. A later plan
-                  change overwrites these values.
+                  <span className="font-mono text-xs">{limitsFor.tenantId}</span>.{' '}
+                  {limitsFor.limits.stored
+                    ? 'These are the values currently stored and enforced.'
+                    : 'No stored limits yet, so the gateway defaults are shown.'}{' '}
+                  A later plan change overwrites these values.
                 </p>
                 <Field label="Daily budget units" hint="0 blocks the tenant for the rest of the day">
                   <input
@@ -570,6 +577,12 @@ function Admin() {
                   icon="gauge"
                   busy={busy}
                   disabled={
+                    // A cleared or non-numeric number input yields NaN, and NaN
+                    // fails every comparison below, so a range check alone left
+                    // the button enabled and the request was rejected with a 400.
+                    !Number.isInteger(limits.dailyBudgetUnits) ||
+                    !Number.isInteger(limits.maxConcurrent) ||
+                    !Number.isInteger(limits.rateLimitRpm) ||
                     limits.dailyBudgetUnits < 0 ||
                     limits.maxConcurrent < 1 ||
                     limits.maxConcurrent > 64 ||

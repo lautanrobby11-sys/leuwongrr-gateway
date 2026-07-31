@@ -3,7 +3,13 @@ set -Eeuo pipefail
 umask 022
 SHA=${1:-$(git rev-parse HEAD)}
 [[ $SHA =~ ^[0-9a-f]{40}$ ]] || { echo 'full git SHA required' >&2; exit 1; }
-[[ -z $(git status --porcelain --untracked-files=no) ]] || { echo 'tracked working tree must be clean' >&2; exit 1; }
+# Resolved from this file so the assertion comes from the same checkout as the
+# build being run, the same reason backup.sh resolves its own ping script.
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+CLEAN_TREE="$SCRIPT_DIR/assert-clean-tree.sh"
+# Preflight: fail before spending a build and a package on a tree that cannot
+# produce a reproducible artifact. The same assertion runs again at the end.
+bash "$CLEAN_TREE" preflight
 
 # The console is part of the product, not an optional extra: a backend-only
 # artifact would pass health checks while every dashboard returned 503.
@@ -87,4 +93,10 @@ tar -C "$VERIFY" -xzf ".release/$SHA.tar.gz"
     fi
   done < <(find scripts infra/systemd -type f -print0)
 )
+# Post-package: the same canonical assertion, so `npm run ci:local` proves that
+# building, staging, packaging and checksumming did not modify a tracked file or
+# leave an unexpected non-ignored file behind. Without this the workstation gate
+# only ever checked the tree it started with, while GitHub Actions checked the
+# tree it ended with, and the two gates named `clean` meant different things.
+bash "$CLEAN_TREE" 'after packaging'
 echo ".release/$SHA.tar.gz"

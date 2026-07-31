@@ -107,10 +107,16 @@ bash scripts/build-release.sh "$(git rev-parse HEAD)"
 # -> .release/<sha>.tar.gz and .release/<sha>.tar.gz.sha256
 ```
 
-The tracked working tree must be clean. The script builds the backend **and**
-the console, verifies that `dist/public/{admin,member,chat,login}.html` and
-`dist/public/assets` exist, and records a `manifest.sha256` over every staged
-file. A release that cannot serve the dashboards is never produced.
+The working tree must be clean, untracked files included: packaging stages from
+the working tree, so an untracked source file would be built into the artifact
+while being absent from the commit the release names. One canonical check,
+`scripts/assert-clean-tree.sh`, runs as a preflight before the build and again
+after packaging and checksumming, and the `clean` step in CI invokes the same
+file; a failure prints the offending paths. The script builds the
+backend **and** the console, verifies that
+`dist/public/{admin,member,chat,login}.html` and `dist/public/assets` exist, and
+records a `manifest.sha256` over every staged file. A release that cannot serve
+the dashboards is never produced.
 
 CI attaches the same tarball to every green `quality` run, so you can download
 the artifact instead of building locally.

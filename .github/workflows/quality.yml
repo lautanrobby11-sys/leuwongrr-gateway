@@ -148,13 +148,16 @@ jobs:
         id: checksum
         run: cd .release && sha256sum -c "$GITHUB_SHA.tar.gz.sha256"
 
-      - name: Verify tracked tree is clean
+      - name: Verify tree is clean
         id: clean
         shell: bash
         run: |
           set -Eeuo pipefail
-          git status --porcelain --untracked-files=no
-          git diff --exit-code
+          # One canonical implementation, shared with scripts/build-release.sh,
+          # which also calls it before the build and again after packaging. Two
+          # separate inline blocks drifted: the workstation checked only before
+          # the build, Actions only after packaging.
+          bash scripts/assert-clean-tree.sh 'after packaging'
 
       - name: Publish gate diagnostics
         if: always() && github.event_name == 'pull_request'

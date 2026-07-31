@@ -12,7 +12,7 @@ A missing server-side merge gate must not become permission to deploy an unteste
 ## Decision
 
 1. GitHub is a private source mirror and audit copy. GitHub Actions diagnostics are useful evidence but are not the authority that permits production activation.
-2. The operator workstation is the release authority. It must use a clean checkout of the exact commit, both committed lockfiles, Node 22, and `npm run ci:local`.
+2. The operator workstation is the release authority. It must use a clean checkout of the exact commit, both committed lockfiles, Node 22, and `npm run ci:local`. Clean means `git status --porcelain` is empty with untracked files included: packaging stages from the working tree, so an untracked file would ship inside the artifact while being absent from the commit the evidence names. `scripts/assert-clean-tree.sh` is the one canonical implementation of that check; `scripts/build-release.sh` runs it as a preflight before the build and again after packaging and checksumming, and the GitHub `clean` step invokes the same file, so workstation and mirror enforce identical semantics. The post-package run is the evidence that building and packaging mutated nothing.
 3. A release candidate is valid only when local validation succeeds and `.release/<full-git-sha>.tar.gz` plus its checksum are produced by `scripts/build-release.sh` from the same clean commit.
 4. Only the artifact and checksum cross into the VPS. The VPS has no GitHub credential, does not run `git pull`, and is not a development or source-editing environment.
 5. Production source is never edited under `current` or any release directory. Failed work produces a new commit and therefore a new release SHA.

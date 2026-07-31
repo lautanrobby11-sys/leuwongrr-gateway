@@ -48,3 +48,31 @@ The gateway must stay reviewable and deployable without GitHub Advanced Security
 - The `keys` and `keys:dev` npm scripts were removed. The operator CLI must run
   with the same pepper as the running service, and a wrapper script hid whether
   it was executing the compiled release or the local source.
+
+## Update 2026-07-31
+
+- The clean-tree check has exactly one implementation,
+  `scripts/assert-clean-tree.sh`. `scripts/build-release.sh` calls it twice —
+  once as a preflight before `npm run build:all` so a doomed tree fails before a
+  build is spent on it, and once after packaging and checksumming — and the
+  `clean` step in `.github/workflows/quality.yml` calls the same file. Two
+  hand-written blocks previously drifted: the workstation checked only before the
+  build while Actions checked only after packaging, so `npm run ci:local` and
+  Actions enforced different things under the same gate name. The post-package
+  call is what proves that building, staging, packaging and checksumming did not
+  modify a tracked file or leave a new non-ignored file behind.
+- The assertion uses `git status --porcelain` with untracked files included, and
+  prints the offending paths. Suppressing untracked reporting made the gate name
+  something it did not verify: packaging stages from the working tree rather than
+  from `git archive <sha>`, so an untracked file under `src/`, `scripts/` or
+  `web/` was compiled into `dist/` and shipped inside the artifact while being
+  absent from the commit the release evidence names, and absent from a fresh
+  clone of it. Ignored paths (`dist/`, `.release/`, `data/`) are not reported by
+  `--porcelain`, so the build's own output does not trip the check. Files are
+  never hidden to satisfy it: an untracked file is committed or deleted, and
+  `.gitignore` is not broadened.
+- `tests/release-clean-tree-gate.test.ts` exercises the assertion behaviourally
+  in a throwaway git repository — clean baseline exits 0, an untracked
+  non-ignored file and a modified tracked file both exit nonzero with the path on
+  stderr, and ignored `dist/`/`.release/` output still passes — rather than
+  asserting only on source text.

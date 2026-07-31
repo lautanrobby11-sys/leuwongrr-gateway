@@ -120,6 +120,22 @@ const keySchema = z
 // Shared with the operator CLI: two writers of the same table must not disagree
 // about what a plan may contain.
 const planSchema = planInputSchema;
+/**
+ * `z.number()` already refuses NaN, and `.int()` refuses ±Infinity, but a JSON
+ * body cannot carry either: `JSON.stringify` renders both as `null`. The
+ * `finite()` clause is what makes the rejection explicit at the boundary rather
+ * than an accident of encoding, and `tenant_limits` is enforcement state — a
+ * non-finite value that reached SQLite would write a float or a NULL into a
+ * column the request path reads as units.
+ */
+const limitsSchema = z
+  .object({
+    tenantId: z.string().min(1).max(64),
+    dailyBudgetUnits: z.number().finite().int().min(0).max(1_000_000_000_000),
+    maxConcurrent: z.number().finite().int().min(1).max(64),
+    rateLimitRpm: z.number().finite().int().min(1).max(100000)
+  })
+  .strict();
 const topupSchema = z
   .object({ planId: z.string().min(1).max(32), amountCents: z.number().int().min(100).max(1_000_000) })
   .strict();
@@ -623,14 +639,20 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
       const admin = await requireAdmin(req);
       const parsed = planSchema.safeParse(req.body);
       if (!parsed.success) return fail(reply, 400, 'invalid_request', 'Plan payload invalid', req.id);
-      const plan = billing.upsertPlan(parsed.data);
-      db.audit({
-        tenantId: admin.tenantId,
-        actorType: 'admin',
-        event: 'console.plan.upserted',
-        traceId: req.id,
-        metadata: { plan: plan.id }
-      });
+      // A plan is live enforcement state: `applyPlanLimits` copies it into
+      // `tenant_limits`. Writing the row and its audit record in one transaction
+      // keeps a persisted envelope change from ever losing its explanation.
+      const plan = db.db.transaction(() => {
+        const written = billing.upsertPlan(parsed.data);
+        db.audit({
+          tenantId: admin.tenantId,
+          actorType: 'admin',
+          event: 'console.plan.upserted',
+          traceId: req.id,
+          metadata: { plan: written.id }
+        });
+        return written;
+      })();
       return reply.send({ plan });
     } catch (error) {
       return handle(error, reply, req.id);
@@ -680,7 +702,15 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
       await requireAdmin(req);
       const list = accounts.list(200).map((account) => ({
         ...account,
-        billing: billing.summary(account.id, account.tenantId)
+        billing: billing.summary(account.id, account.tenantId),
+        // The enforced envelope, not the plan's copy of it. A direct limit edit
+        // leaves the plan describing values that are no longer in force, so an
+        // editor seeded from the plan would write them back on save.
+        limits: db.tenants.effectiveLimits(account.tenantId, {
+          dailyBudgetUnits: config.DAILY_BUDGET_UNITS,
+          maxConcurrent: config.TENANT_MAX_CONCURRENT,
+          rateLimitRpm: config.RATE_LIMIT_RPM
+        })
       }));
       return reply.send({ accounts: list });
     } catch (error) {
@@ -691,15 +721,7 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
   app.post('/console/api/admin/accounts/limits', async (req, reply) => {
     try {
       await requireAdmin(req);
-      const parsed = z
-        .object({
-          tenantId: z.string().min(1).max(64),
-          dailyBudgetUnits: z.number().int().min(0),
-          maxConcurrent: z.number().int().min(1).max(64),
-          rateLimitRpm: z.number().int().min(1).max(100000)
-        })
-        .strict()
-        .safeParse(req.body);
+      const parsed = limitsSchema.safeParse(req.body);
       if (!parsed.success) return fail(reply, 400, 'invalid_request', 'Limits invalid', req.id);
       db.tenants.setLimits(parsed.data.tenantId, {
         dailyBudgetUnits: parsed.data.dailyBudgetUnits,

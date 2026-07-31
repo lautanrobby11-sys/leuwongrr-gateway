@@ -171,4 +171,60 @@ describe('per-tenant limits', () => {
     expect(db.tenants.limits('globex')).toBeNull();
     expect(db.reserveBudget('globex', 'req-1', 5, 10)).toBeTruthy();
   });
+
+  /**
+   * The admin editor seeds itself from this, so it must report the stored row
+   * rather than the plan: a plan records what `applyPlanLimits` copied in when
+   * the subscription started, and an editor seeded from it wrote those values
+   * back and silently reverted every later limit edit.
+   */
+  it('reports the stored envelope as effective once a row exists', () => {
+    const defaults = { dailyBudgetUnits: 100_000, maxConcurrent: 2, rateLimitRpm: 120 };
+    expect(db.tenants.effectiveLimits('globex', defaults)).toEqual({ ...defaults, stored: false });
+
+    db.tenants.setLimits('globex', {
+      dailyBudgetUnits: 25,
+      maxConcurrent: 7,
+      rateLimitRpm: 9
+    });
+
+    expect(db.tenants.effectiveLimits('globex', defaults)).toEqual({
+      dailyBudgetUnits: 25,
+      maxConcurrent: 7,
+      rateLimitRpm: 9,
+      stored: true
+    });
+  });
+
+  /**
+   * NaN fails `<` in both directions, so the range check alone accepted it and
+   * SQLite stored the result in a NOT NULL integer column the request path then
+   * read as a concurrency ceiling.
+   */
+  it.each([
+    ['dailyBudgetUnits', Number.NaN],
+    ['dailyBudgetUnits', Number.POSITIVE_INFINITY],
+    ['maxConcurrent', Number.NaN],
+    ['maxConcurrent', Number.NEGATIVE_INFINITY],
+    ['rateLimitRpm', Number.NaN],
+    ['rateLimitRpm', 12.5]
+  ])('refuses a non-finite or fractional %s', (field, value) => {
+    const base = { dailyBudgetUnits: 10, maxConcurrent: 2, rateLimitRpm: 60 };
+    expect(() => db.tenants.setLimits('globex', { ...base, [field]: value })).toThrow(
+      TenantStoreError
+    );
+    expect(db.tenants.limits('globex')).toBeNull();
+  });
+
+  it('still refuses an in-range violation after the finiteness check', () => {
+    expect(() =>
+      db.tenants.setLimits('globex', { dailyBudgetUnits: -1, maxConcurrent: 2, rateLimitRpm: 60 })
+    ).toThrow(TenantStoreError);
+    expect(() =>
+      db.tenants.setLimits('globex', { dailyBudgetUnits: 10, maxConcurrent: 0, rateLimitRpm: 60 })
+    ).toThrow(TenantStoreError);
+    expect(() =>
+      db.tenants.setLimits('globex', { dailyBudgetUnits: 10, maxConcurrent: 2, rateLimitRpm: 0 })
+    ).toThrow(TenantStoreError);
+  });
 });

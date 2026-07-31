@@ -47,6 +47,21 @@ function withDatabase<T>(path: string, work: (db: GatewayDatabase) => T): T {
   }
 }
 
+/**
+ * Makes the audit insert fail for real, inside the same connection the command
+ * uses, without touching the command's own code path. A trigger is the only
+ * seam available here: the CLI runs as a separate process, so no module can be
+ * stubbed, and the failure has to originate in SQLite for the surrounding
+ * transaction to roll back the way a disk or constraint error would.
+ */
+function breakAuditLog(path: string): void {
+  withDatabase(path, (db) =>
+    db.db.exec(
+      "CREATE TRIGGER audit_logs_unavailable BEFORE INSERT ON audit_logs BEGIN SELECT RAISE(ABORT, 'audit_unavailable'); END"
+    )
+  );
+}
+
 describe('operator CLI account:role', () => {
   it('promotes an existing account and persists the role', () => {
     const path = databasePath();
@@ -106,6 +121,32 @@ describe('operator CLI account:role', () => {
       previous_role: 'member',
       role: 'admin'
     });
+  });
+
+  /**
+   * The promotion and its audit record share one transaction. Without that, a
+   * failing audit insert left an owner in `accounts` with nothing recording who
+   * granted it — the one thing the audit row exists to prevent.
+   */
+  it('rolls the role back when the audit insert fails', () => {
+    const path = databasePath();
+    const email = `operator-${randomUUID()}@example.com`;
+    const accountId = withDatabase(
+      path,
+      (db) => new AccountStore(db.db, testConfig.API_KEY_PEPPER).create({ email }).id
+    );
+    breakAuditLog(path);
+
+    const result = run(path, ['account:role', '--email', email, '--role', 'owner']);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('audit_unavailable');
+    expect(
+      withDatabase(
+        path,
+        (db) => new AccountStore(db.db, testConfig.API_KEY_PEPPER).findById(accountId)?.role
+      )
+    ).toBe('member');
   });
 });
 
@@ -201,5 +242,37 @@ describe('operator CLI plan:upsert', () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(`invalid plan: ${field}`);
     expect(withDatabase(path, (db) => new BillingService(db.db).listPlans(true))).toEqual([]);
+  });
+
+  /**
+   * A plan is live enforcement state: `applyPlanLimits` copies it into
+   * `tenant_limits`. A stored envelope change whose audit insert failed would
+   * leave no record of who widened it, so the two share one transaction.
+   */
+  it('rolls the plan back when the audit insert fails', () => {
+    const path = databasePath();
+    breakAuditLog(path);
+
+    const result = run(path, PLAN_ARGS);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('audit_unavailable');
+    expect(withDatabase(path, (db) => new BillingService(db.db).listPlans())).toEqual([]);
+  });
+
+  it('leaves an existing plan unchanged when the audit insert fails', () => {
+    const path = databasePath();
+
+    expect(run(path, PLAN_ARGS).status).toBe(0);
+    breakAuditLog(path);
+
+    const result = run(path, [...PLAN_ARGS, '--rpm', '99']);
+
+    expect(result.status).toBe(1);
+    // The upsert would have overwritten rate_limit_rpm in place. Rolling back is
+    // what keeps the enforced value and the audit trail describing the same row.
+    expect(
+      withDatabase(path, (db) => new BillingService(db.db).getPlan('starter')?.rateLimitRpm)
+    ).toBe(10);
   });
 });

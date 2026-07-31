@@ -27,7 +27,9 @@ import {
 } from '../components/ui';
 import { dateTime, money, tokens } from '../lib/format';
 import {
+  formatLimitInput,
   limitsSaveDisabled,
+  parseLimitInput,
   DAILY_BUDGET_UNITS,
   MAX_CONCURRENT,
   RATE_LIMIT_RPM
@@ -549,9 +551,9 @@ function Admin() {
                     type="number"
                     min={DAILY_BUDGET_UNITS.min}
                     max={DAILY_BUDGET_UNITS.max}
-                    value={limits.dailyBudgetUnits}
+                    value={formatLimitInput(limits.dailyBudgetUnits)}
                     onChange={(event) =>
-                      setLimits({ ...limits, dailyBudgetUnits: Number(event.target.value) })
+                      setLimits({ ...limits, dailyBudgetUnits: parseLimitInput(event.target.value) })
                     }
                   />
                 </Field>
@@ -561,9 +563,9 @@ function Admin() {
                     type="number"
                     min={MAX_CONCURRENT.min}
                     max={MAX_CONCURRENT.max}
-                    value={limits.maxConcurrent}
+                    value={formatLimitInput(limits.maxConcurrent)}
                     onChange={(event) =>
-                      setLimits({ ...limits, maxConcurrent: Number(event.target.value) })
+                      setLimits({ ...limits, maxConcurrent: parseLimitInput(event.target.value) })
                     }
                   />
                 </Field>
@@ -573,9 +575,9 @@ function Admin() {
                     type="number"
                     min={RATE_LIMIT_RPM.min}
                     max={RATE_LIMIT_RPM.max}
-                    value={limits.rateLimitRpm}
+                    value={formatLimitInput(limits.rateLimitRpm)}
                     onChange={(event) =>
-                      setLimits({ ...limits, rateLimitRpm: Number(event.target.value) })
+                      setLimits({ ...limits, rateLimitRpm: parseLimitInput(event.target.value) })
                     }
                   />
                 </Field>

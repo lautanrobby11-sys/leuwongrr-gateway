@@ -26,6 +26,7 @@ import {
   type NavItem
 } from '../components/ui';
 import { dateTime, money, tokens } from '../lib/format';
+import { limitsSaveDisabled } from './limits-validation';
 import '../styles.css';
 
 const NAV: NavItem[] = [
@@ -576,19 +577,7 @@ function Admin() {
                   className="w-full"
                   icon="gauge"
                   busy={busy}
-                  disabled={
-                    // A cleared or non-numeric number input yields NaN, and NaN
-                    // fails every comparison below, so a range check alone left
-                    // the button enabled and the request was rejected with a 400.
-                    !Number.isInteger(limits.dailyBudgetUnits) ||
-                    !Number.isInteger(limits.maxConcurrent) ||
-                    !Number.isInteger(limits.rateLimitRpm) ||
-                    limits.dailyBudgetUnits < 0 ||
-                    limits.maxConcurrent < 1 ||
-                    limits.maxConcurrent > 64 ||
-                    limits.rateLimitRpm < 1 ||
-                    limits.rateLimitRpm > 100000
-                  }
+                  disabled={limitsSaveDisabled(limits)}
                   onClick={() => void saveLimits()}
                 >
                   Save limits

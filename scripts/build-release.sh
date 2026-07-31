@@ -3,6 +3,11 @@ set -Eeuo pipefail
 umask 022
 SHA=${1:-$(git rev-parse HEAD)}
 [[ $SHA =~ ^[0-9a-f]{40}$ ]] || { echo 'full git SHA required' >&2; exit 1; }
+HEAD_SHA=$(git rev-parse HEAD)
+[[ $SHA == "$HEAD_SHA" ]] || {
+  echo "requested SHA $SHA does not match checked-out HEAD $HEAD_SHA" >&2
+  exit 1
+}
 # Resolved from this file so the assertion comes from the same checkout as the
 # build being run, the same reason backup.sh resolves its own ping script.
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)

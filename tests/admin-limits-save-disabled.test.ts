@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  formatLimitInput,
   limitsSaveDisabled,
+  parseLimitInput,
   DAILY_BUDGET_UNITS,
   MAX_CONCURRENT,
   RATE_LIMIT_RPM
@@ -14,7 +16,8 @@ import { planInputSchema } from '../src/billing/plan-input.js';
  *
  * Zero stays legal on purpose: the field's own hint documents it as "blocks the
  * tenant for the rest of the day", so rejecting it would be a regression, not a
- * stricter check.
+ * stricter check. That is also why the form must not manufacture a zero on its
+ * own, which is what the parseLimitInput cases below defend.
  */
 
 const valid = { dailyBudgetUnits: 100_000, maxConcurrent: 2, rateLimitRpm: 120 };
@@ -34,9 +37,11 @@ describe('limitsSaveDisabled', () => {
     expect(limitsSaveDisabled({ ...valid, dailyBudgetUnits: 0 })).toBe(false);
   });
 
-  // Table-driven across all three fields: the daily budget was the field that
-  // actually shipped unbounded, but a per-field test is what keeps the next
-  // bound change from reintroducing the same class of gap on a different field.
+  // Table-driven across all three fields. The daily budget was the field that
+  // actually shipped unbounded, and the upper bounds on the other two were
+  // enforced but never asserted; driving all three from the shared bound objects
+  // is what keeps the next bound change from reintroducing the same class of gap
+  // on a different field.
   it.each(bounds)('allows exactly the maximum for $field', ({ field, bound }) => {
     expect(limitsSaveDisabled({ ...valid, [field]: bound.max })).toBe(false);
   });
@@ -95,5 +100,59 @@ describe('browser bounds agree with the server schema', () => {
       const accepted = planInputSchema.safeParse({ ...plan, [field]: value }).success;
       expect(limitsSaveDisabled({ ...valid, [field]: value })).toBe(!accepted);
     }
+  });
+});
+
+/**
+ * These cases are the form's own conversion, not the predicate's. The modal
+ * reads every limit with parseLimitInput(event.target.value); the previous suite
+ * only ever fed the predicate Number.NaN directly, so the one conversion that
+ * could fabricate a value - Number('') === 0 - went untested.
+ */
+describe('parseLimitInput', () => {
+  it('does not turn a cleared field into zero', () => {
+    expect(parseLimitInput('')).toBeNaN();
+    expect(Number('')).toBe(0);
+  });
+
+  it('does not turn a whitespace-only field into zero', () => {
+    expect(parseLimitInput('   ')).toBeNaN();
+  });
+
+  it('keeps a cleared field from enabling Save', () => {
+    expect(limitsSaveDisabled({ ...valid, dailyBudgetUnits: parseLimitInput('') })).toBe(true);
+  });
+
+  it('keeps a typed zero, which is a real operating value', () => {
+    expect(parseLimitInput('0')).toBe(0);
+    expect(limitsSaveDisabled({ ...valid, dailyBudgetUnits: parseLimitInput('0') })).toBe(false);
+  });
+
+  it('passes ordinary values through unchanged', () => {
+    expect(parseLimitInput('100000')).toBe(100_000);
+  });
+
+  it('leaves non-numeric text invalid rather than zero', () => {
+    expect(parseLimitInput('abc')).toBeNaN();
+  });
+
+  it('leaves a fractional value fractional so the integer check rejects it', () => {
+    expect(parseLimitInput('1.5')).toBe(1.5);
+    expect(limitsSaveDisabled({ ...valid, dailyBudgetUnits: parseLimitInput('1.5') })).toBe(true);
+  });
+});
+
+describe('formatLimitInput', () => {
+  it('renders a cleared field as an empty box, not the word NaN', () => {
+    expect(formatLimitInput(Number.NaN)).toBe('');
+    expect(String(Number.NaN)).toBe('NaN');
+  });
+
+  it('renders zero, so a quarantined tenant does not look like an empty field', () => {
+    expect(formatLimitInput(0)).toBe('0');
+  });
+
+  it('renders ordinary values unchanged', () => {
+    expect(formatLimitInput(100_000)).toBe('100000');
   });
 });

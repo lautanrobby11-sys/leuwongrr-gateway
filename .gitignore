@@ -1,7 +1,11 @@
 node_modules/
 dist/
 .release/
+# Every dotenv variant, not just the bare .env: .env.local and .env.production
+# carry live gateway credentials. .env.example is the one tracked exception.
 .env
+.env.*
+!.env.example
 *.db
 *.db-shm
 *.db-wal

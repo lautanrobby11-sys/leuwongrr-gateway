@@ -40,7 +40,18 @@ git status --short
 
 Acceptance:
 
-- `git status --short` is empty before and after validation.
+- `git status --short` is empty before and after validation. Untracked files
+  count: packaging stages from the working tree, so an untracked file under
+  `src/`, `scripts/` or `web/` would be built into the artifact while being
+  absent from the commit the evidence names. Commit it or delete it — never hide
+  it from the check by broadening `.gitignore`.
+- The check is not manual only. `scripts/assert-clean-tree.sh` is the one
+  canonical implementation, and `npm run ci:local` runs it twice through
+  `scripts/build-release.sh`: as a preflight before the build, and again after
+  packaging and checksumming. The second run is the evidence that building and
+  packaging mutated nothing. The `clean` step in GitHub Actions invokes the same
+  file, so workstation and CI enforce identical semantics. A failure prints the
+  offending paths.
 - `SHA` is a full 40-character commit present in the private mirror.
 - Both lockfiles are present and `npm ci` is used; no floating install is accepted.
 - `npm run ci:local` succeeds: conventions, secret scan, lint, typecheck, tests, backend and console build, shell syntax, immutable package, manifest verification.

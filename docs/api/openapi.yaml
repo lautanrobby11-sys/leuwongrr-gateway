@@ -363,11 +363,17 @@ paths:
   /console/api/admin/accounts:
     get:
       summary: List accounts
+      description: >-
+        Each entry carries `limits`, the envelope the gateway enforces for that
+        tenant. `limits.stored` is false when no `tenant_limits` row exists yet
+        and the values are the process defaults. The plan under `billing` records
+        what was applied when the subscription started and may be stale after a
+        direct limit edit, so the admin editor reads `limits`.
       security:
         - accessAssertion: []
       responses:
         '200':
-          description: Accounts with status and balance.
+          description: Accounts with status, balance, and enforced limits.
   /console/api/admin/payments:
     get:
       summary: List payments
@@ -379,12 +385,17 @@ paths:
   /console/api/admin/accounts/limits:
     post:
       summary: Set an account's rate and concurrency limits
-      description: Requires an allowed Origin.
+      description: >-
+        Requires an allowed Origin. Every numeric field must be a finite integer
+        within its range; a non-finite or fractional value is rejected with 400
+        rather than written to `tenant_limits`.
       security:
         - accessAssertion: []
       responses:
         '200':
           description: Limits written.
+        '400':
+          description: A limit was missing, non-finite, fractional, or out of range.
         '403':
           description: Origin is not allowed, or the Access assertion failed.
   /console/api/admin/accounts/credit:

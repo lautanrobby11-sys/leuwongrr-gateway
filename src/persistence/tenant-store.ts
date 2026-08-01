@@ -36,6 +36,19 @@ export interface TenantLimits {
   rateLimitRpm: number;
 }
 
+/**
+ * What the request path will actually enforce for a tenant, plus whether a
+ * stored `tenant_limits` row supplied it.
+ *
+ * The admin editor needs this rather than the subscribed plan: a plan is only
+ * the value `applyPlanLimits` last copied in, so after any direct limit edit the
+ * plan no longer describes what is enforced, and an editor seeded from the plan
+ * silently reverts that edit on save.
+ */
+export interface EffectiveTenantLimits extends TenantLimits {
+  stored: boolean;
+}
+
 export interface IssueInput {
   tenantId: string;
   name: string;
@@ -241,8 +254,27 @@ export class TenantStore {
     };
   }
 
+  /**
+   * The stored row when one exists, otherwise the process defaults the request
+   * path falls back to. Returned verbatim rather than clamped: an editor seeded
+   * with a clamped value would write the clamp back and lower the row on save.
+   * `reserveBudget` still applies the `DAILY_BUDGET_UNITS` ceiling at spend time.
+   */
+  effectiveLimits(tenantId: string, defaults: TenantLimits): EffectiveTenantLimits {
+    const stored = this.limits(tenantId);
+    return stored ? { ...stored, stored: true } : { ...defaults, stored: false };
+  }
+
   setLimits(tenantId: string, limits: TenantLimits): void {
     if (!this.tenantExists(tenantId)) throw new TenantStoreError(`unknown tenant: ${tenantId}`);
+    // NaN fails every `<` comparison, so a range check alone accepted it and
+    // SQLite then stored NULL in a NOT NULL column, or a float where the
+    // enforcement path expects units. Finiteness and integrality come first.
+    for (const [field, value] of Object.entries(limits)) {
+      if (!Number.isInteger(value)) {
+        throw new TenantStoreError(`${field} must be a finite integer`);
+      }
+    }
     if (limits.dailyBudgetUnits < 0 || limits.maxConcurrent < 1 || limits.rateLimitRpm < 1) {
       throw new TenantStoreError('limits must be non-negative with positive concurrency and rate');
     }

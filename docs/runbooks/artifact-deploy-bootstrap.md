@@ -51,9 +51,12 @@ ACTUAL=$(sha256sum "$ENTRYPOINT" | awk '{ print $1 }')
 ```
 
 The `sub(/^\*/, ...)` is not cosmetic: `sha256sum` defaults to binary mode on
-Windows, so an artifact packaged on a Windows workstation records ` *./path`
-where a Linux build records `  ./path`. A plain `$2 ==` comparison silently
-finds nothing and the guard then fails on an artifact that is actually intact.
+Windows, so an artifact packaged on a Windows workstation writes one space and
+then `*./path`, where a Linux build writes two spaces and then `./path`. `awk`
+collapses runs of whitespace, so `$2` is `*./path` in the first case and
+`./path` in the second; the marker travels with the field. A plain `$2 ==`
+comparison silently finds nothing and the guard then fails on an artifact that
+is actually intact.
 
 Prove Linux syntax and line endings before root executes anything:
 
@@ -130,8 +133,10 @@ done
 ```
 
 The `sub(/^\*/, ...)` strips the binary-mode marker `sha256sum` writes when the
-artifact was packaged on Windows (` *./path` instead of `  ./path`). Without it
-the lookup returns nothing and the guard rejects an intact artifact.
+artifact was packaged on Windows: one space and then `*./path`, instead of the
+two spaces and then `./path` a Linux build writes. The separator is whitespace
+either way, so `awk` hands the marker to `$2` along with the path. Without the
+`sub` the lookup returns nothing and the guard rejects an intact artifact.
 
 Prove Linux syntax and line endings before root executes anything:
 

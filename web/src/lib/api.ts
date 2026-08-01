@@ -34,6 +34,21 @@ export interface BillingSummary {
   projectedDaysLeft: number | null;
 }
 
+export interface TenantLimits {
+  dailyBudgetUnits: number;
+  maxConcurrent: number;
+  rateLimitRpm: number;
+}
+
+/**
+ * What the gateway will actually enforce for a tenant. `stored` is false when no
+ * `tenant_limits` row exists yet and the values are the process defaults, so the
+ * editor can say which it is showing.
+ */
+export interface EffectiveTenantLimits extends TenantLimits {
+  stored: boolean;
+}
+
 export interface LedgerEntry {
   id: string;
   kind: string;
@@ -197,6 +212,7 @@ export const api = {
           status: string;
           tenantId: string;
           billing: BillingSummary;
+          limits: EffectiveTenantLimits;
         }>;
       }>('/console/api/admin/accounts'),
     setLimits: (input: {

@@ -217,17 +217,21 @@ try {
       const accounts = new AccountStore(db.db, pepper);
       const account = accounts.findByEmail(email);
       if (!account) fail('no account with that email; the member must sign in once first');
-      accounts.setRole(account.id, role as AccountRole);
       // Privilege granted outside any HTTP surface still leaves a trail: the
       // console exposes no role-change route, so this command is the only path
       // to `admin`, and an unlogged promotion would be invisible afterwards.
-      db.audit({
-        tenantId: account.tenantId,
-        actorType: 'system',
-        event: 'operator.account.role',
-        traceId: `cli-${randomUUID()}`,
-        metadata: { account_id: account.id, previous_role: account.role, role }
-      });
+      // The grant and its record therefore share one transaction: a failed audit
+      // insert must not leave an owner in the table with nothing explaining it.
+      db.db.transaction(() => {
+        accounts.setRole(account.id, role as AccountRole);
+        db.audit({
+          tenantId: account.tenantId,
+          actorType: 'system',
+          event: 'operator.account.role',
+          traceId: `cli-${randomUUID()}`,
+          metadata: { account_id: account.id, previous_role: account.role, role }
+        });
+      })();
       emit({ account_id: account.id, email: account.email, role });
       console.error(
         'Role updated. Admin console routes still require a verified Cloudflare Access assertion.'
@@ -256,14 +260,20 @@ try {
         const first = candidate.error.issues[0];
         fail(`invalid plan: ${first?.path.join('.') ?? 'input'}: ${first?.message ?? 'rejected'}`);
       }
-      const stored = billing.upsertPlan(candidate.data);
-      db.audit({
-        tenantId: null,
-        actorType: 'system',
-        event: 'operator.plan.upserted',
-        traceId: `cli-${randomUUID()}`,
-        metadata: { plan: stored.id, active: stored.active }
-      });
+      const stored = db.db.transaction(() => {
+        const plan = billing.upsertPlan(candidate.data);
+        // The stored row and its audit record share one transaction: a plan is
+        // live enforcement state, so a persisted change whose audit insert
+        // failed would leave no explanation of who widened the envelope.
+        db.audit({
+          tenantId: null,
+          actorType: 'system',
+          event: 'operator.plan.upserted',
+          traceId: `cli-${randomUUID()}`,
+          metadata: { plan: plan.id, active: plan.active }
+        });
+        return plan;
+      })();
       emit(stored);
       break;
     }

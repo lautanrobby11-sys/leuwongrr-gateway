@@ -26,10 +26,12 @@ required gate means no merge, no deploy, no DONE status.
 | `shell` (`bash -n scripts/*.sh`) | |
 | `package` (`scripts/build-release.sh <sha>`) | |
 | `checksum` (`sha256sum -c` inside `.release/`) | |
-| `clean` (`git status --porcelain --untracked-files=no` empty after packaging) | |
+| `clean` (`scripts/assert-clean-tree.sh` after packaging: `git status --porcelain` empty, untracked files included) | |
 
 Green GitHub Actions is **not** production authorization. Record the workstation
-gate separately:
+gate separately. `npm run ci:local` runs the same canonical assertion twice —
+before the build and again after packaging and checksumming — so it also proves
+that building and packaging mutated nothing:
 
 | Workstation gate | Result |
 | --- | --- |

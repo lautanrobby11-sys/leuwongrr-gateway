@@ -43,8 +43,12 @@ if [[ ! -f $ROOT/config/gateway.env ]]; then
   # remaining task is substituting real values: an incomplete seed used to leave
   # loadConfig() rejecting production on OTP_DELIVERY, or main.ts exiting on a
   # missing OMNIROUTE_API_KEY, long after the operator believed host prep was
-  # done. Secrets are the literal REPLACE_ME, which is too short to satisfy its
-  # own validation rule, so an unedited file refuses to boot and names the field.
+  # done. Every field needing a real value is the literal REPLACE_ME, with no
+  # exceptions, because the message printed below and the README both tell the
+  # operator to substitute exactly that string: a field spelled any other way was
+  # outside the list they are given and shipped as a live example value. For a
+  # secret REPLACE_ME is also too short to satisfy its own validation rule, so an
+  # unedited file refuses to boot and names the field.
   cat > "$ROOT/config/gateway.env" <<'EOF'
 NODE_ENV=production
 GATEWAY_HOST=127.0.0.1
@@ -71,7 +75,7 @@ RETENTION_DAYS=90
 MAINTENANCE_INTERVAL_MS=3600000
 TRUST_PROXY=true
 TRUSTED_CLIENT_IP_HEADER=cf-connecting-ip
-AGE_RECIPIENT=replace-with-public-age-recipient
+AGE_RECIPIENT=REPLACE_ME
 BACKUP_KEEP=14
 METRICS_ENABLED=false
 CONSOLE_ENABLED=true
@@ -82,10 +86,10 @@ OTP_TTL_MINUTES=10
 OTP_MAX_ATTEMPTS=5
 OTP_RESEND_SECONDS=60
 OTP_DELIVERY=webhook
-OTP_WEBHOOK_URL=https://mail-relay.example.com/send
+OTP_WEBHOOK_URL=REPLACE_ME
 OTP_WEBHOOK_TOKEN=REPLACE_ME
-ACCESS_TEAM_DOMAIN=your-team.cloudflareaccess.com
-ACCESS_AUD=replace-with-access-application-audience-tag
+ACCESS_TEAM_DOMAIN=REPLACE_ME
+ACCESS_AUD=REPLACE_ME
 CRYPTOMUS_API_URL=https://api.cryptomus.com
 CRYPTOMUS_TIMEOUT_MS=15000
 # Optional keys, commented so the seed boots without them. Listed here because an
@@ -94,16 +98,20 @@ CRYPTOMUS_TIMEOUT_MS=15000
 # to read src/config.ts to learn the spelling. Each group is all-or-nothing;
 # loadConfig() rejects a half-configured pair at startup.
 # CONSOLE_ALLOWED_ORIGINS=https://console.leuwongrr.cloud
-# INTERNAL_METRICS_TOKEN=REPLACE_ME     # required when METRICS_ENABLED=true, and
-                                        # must differ from INTERNAL_READY_TOKEN
+# Required when METRICS_ENABLED=true, and must differ from INTERNAL_READY_TOKEN.
+# The explanation stays on its own line: systemd EnvironmentFile does not treat
+# a trailing `#` as a comment, so uncommenting a KEY=VALUE line that carried one
+# would make the whole remainder part of the token and the comparison in
+# src/http/app.ts would never match.
+# INTERNAL_METRICS_TOKEN=REPLACE_ME
 # SNAPSHOT_HEALTHCHECK_URL=https://external-deadman.example/ping-id
-# GOOGLE_CLIENT_ID=
-# GOOGLE_CLIENT_SECRET=
-# DISCORD_CLIENT_ID=
-# DISCORD_CLIENT_SECRET=
+# GOOGLE_CLIENT_ID=REPLACE_ME
+# GOOGLE_CLIENT_SECRET=REPLACE_ME
+# DISCORD_CLIENT_ID=REPLACE_ME
+# DISCORD_CLIENT_SECRET=REPLACE_ME
 # TELEGRAM_BOT_TOKEN=REPLACE_ME
-# TELEGRAM_BOT_USERNAME=
-# CRYPTOMUS_MERCHANT_ID=
+# TELEGRAM_BOT_USERNAME=REPLACE_ME
+# CRYPTOMUS_MERCHANT_ID=REPLACE_ME
 # CRYPTOMUS_PAYMENT_API_KEY=REPLACE_ME
 EOF
   echo "$ROOT/config/gateway.env created with mode 600; every REPLACE_ME must be substituted before deploy" >&2

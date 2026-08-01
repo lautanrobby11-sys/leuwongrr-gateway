@@ -26,7 +26,14 @@ import {
   type NavItem
 } from '../components/ui';
 import { dateTime, money, tokens } from '../lib/format';
-import { limitsSaveDisabled } from './limits-validation';
+import {
+  formatLimitInput,
+  limitsSaveDisabled,
+  parseLimitInput,
+  DAILY_BUDGET_UNITS,
+  MAX_CONCURRENT,
+  RATE_LIMIT_RPM
+} from './limits-validation';
 import '../styles.css';
 
 const NAV: NavItem[] = [
@@ -542,10 +549,11 @@ function Admin() {
                   <input
                     className={inputClass}
                     type="number"
-                    min={0}
-                    value={limits.dailyBudgetUnits}
+                    min={DAILY_BUDGET_UNITS.min}
+                    max={DAILY_BUDGET_UNITS.max}
+                    value={formatLimitInput(limits.dailyBudgetUnits)}
                     onChange={(event) =>
-                      setLimits({ ...limits, dailyBudgetUnits: Number(event.target.value) })
+                      setLimits({ ...limits, dailyBudgetUnits: parseLimitInput(event.target.value) })
                     }
                   />
                 </Field>
@@ -553,11 +561,11 @@ function Admin() {
                   <input
                     className={inputClass}
                     type="number"
-                    min={1}
-                    max={64}
-                    value={limits.maxConcurrent}
+                    min={MAX_CONCURRENT.min}
+                    max={MAX_CONCURRENT.max}
+                    value={formatLimitInput(limits.maxConcurrent)}
                     onChange={(event) =>
-                      setLimits({ ...limits, maxConcurrent: Number(event.target.value) })
+                      setLimits({ ...limits, maxConcurrent: parseLimitInput(event.target.value) })
                     }
                   />
                 </Field>
@@ -565,11 +573,11 @@ function Admin() {
                   <input
                     className={inputClass}
                     type="number"
-                    min={1}
-                    max={100000}
-                    value={limits.rateLimitRpm}
+                    min={RATE_LIMIT_RPM.min}
+                    max={RATE_LIMIT_RPM.max}
+                    value={formatLimitInput(limits.rateLimitRpm)}
                     onChange={(event) =>
-                      setLimits({ ...limits, rateLimitRpm: Number(event.target.value) })
+                      setLimits({ ...limits, rateLimitRpm: parseLimitInput(event.target.value) })
                     }
                   />
                 </Field>

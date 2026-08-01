@@ -3,10 +3,11 @@ import {
   formatLimitInput,
   limitsSaveDisabled,
   parseLimitInput,
+  DAILY_BUDGET_UNITS,
   MAX_CONCURRENT,
-  MAX_DAILY_BUDGET_UNITS,
-  MAX_RATE_LIMIT_RPM
+  RATE_LIMIT_RPM
 } from '../web/src/admin/limits-validation.js';
+import { planInputSchema } from '../src/billing/plan-input.js';
 
 /**
  * The admin limits form mirrored every server bound except the daily budget
@@ -21,6 +22,12 @@ import {
 
 const valid = { dailyBudgetUnits: 100_000, maxConcurrent: 2, rateLimitRpm: 120 };
 
+const bounds = [
+  { field: 'dailyBudgetUnits', bound: DAILY_BUDGET_UNITS },
+  { field: 'maxConcurrent', bound: MAX_CONCURRENT },
+  { field: 'rateLimitRpm', bound: RATE_LIMIT_RPM }
+] as const;
+
 describe('limitsSaveDisabled', () => {
   it('enables Save for in-range values', () => {
     expect(limitsSaveDisabled(valid)).toBe(false);
@@ -30,50 +37,70 @@ describe('limitsSaveDisabled', () => {
     expect(limitsSaveDisabled({ ...valid, dailyBudgetUnits: 0 })).toBe(false);
   });
 
-  it('disables Save above the server maximum', () => {
-    expect(
-      limitsSaveDisabled({ ...valid, dailyBudgetUnits: MAX_DAILY_BUDGET_UNITS + 1 })
-    ).toBe(true);
+  // Table-driven across all three fields. The daily budget was the field that
+  // actually shipped unbounded, and the upper bounds on the other two were
+  // enforced but never asserted; driving all three from the shared bound objects
+  // is what keeps the next bound change from reintroducing the same class of gap
+  // on a different field.
+  it.each(bounds)('allows exactly the maximum for $field', ({ field, bound }) => {
+    expect(limitsSaveDisabled({ ...valid, [field]: bound.max })).toBe(false);
   });
 
-  it('allows exactly the server maximum', () => {
-    expect(
-      limitsSaveDisabled({ ...valid, dailyBudgetUnits: MAX_DAILY_BUDGET_UNITS })
-    ).toBe(false);
+  it.each(bounds)('disables Save above the maximum for $field', ({ field, bound }) => {
+    expect(limitsSaveDisabled({ ...valid, [field]: bound.max + 1 })).toBe(true);
   });
 
-  it('disables Save for a negative budget', () => {
-    expect(limitsSaveDisabled({ ...valid, dailyBudgetUnits: -1 })).toBe(true);
+  it.each(bounds)('allows exactly the minimum for $field', ({ field, bound }) => {
+    expect(limitsSaveDisabled({ ...valid, [field]: bound.min })).toBe(false);
   });
 
-  it('disables Save for a cleared, non-integer input', () => {
-    expect(limitsSaveDisabled({ ...valid, dailyBudgetUnits: Number.NaN })).toBe(true);
+  it.each(bounds)('disables Save below the minimum for $field', ({ field, bound }) => {
+    expect(limitsSaveDisabled({ ...valid, [field]: bound.min - 1 })).toBe(true);
   });
 
-  // The upper bounds on these two were enforced but never asserted, so a later
-  // edit could have relaxed either one without a single test turning red.
-  const boundedFields = [
-    { field: 'maxConcurrent' as const, max: MAX_CONCURRENT },
-    { field: 'rateLimitRpm' as const, max: MAX_RATE_LIMIT_RPM }
-  ];
+  it.each(bounds)('disables Save for a cleared, non-integer $field', ({ field }) => {
+    expect(limitsSaveDisabled({ ...valid, [field]: Number.NaN })).toBe(true);
+  });
 
-  for (const { field, max } of boundedFields) {
-    it(`allows exactly the server maximum for ${field}`, () => {
-      expect(limitsSaveDisabled({ ...valid, [field]: max })).toBe(false);
-    });
+  it.each(bounds)('disables Save for a fractional $field', ({ field, bound }) => {
+    expect(limitsSaveDisabled({ ...valid, [field]: bound.min + 0.5 })).toBe(true);
+  });
+});
 
-    it(`disables Save above the server maximum for ${field}`, () => {
-      expect(limitsSaveDisabled({ ...valid, [field]: max + 1 })).toBe(true);
-    });
+/**
+ * The point of a shared bounds module is that the form and the route cannot
+ * drift. Asserting the constants alone would not prove that: the form could
+ * import them and the schema could still carry its own literals. So the schema
+ * itself is driven, at each boundary value, and asked to agree with the
+ * predicate.
+ */
+describe('browser bounds agree with the server schema', () => {
+  const plan = {
+    id: 'bounds-probe',
+    name: 'Bounds probe',
+    monthlyPriceCents: 0,
+    includedTokens: 0,
+    overageCentsPerMillion: 0,
+    models: ['gpt-4o-mini'],
+    ...valid
+  };
 
-    it(`disables Save below one for ${field}`, () => {
-      expect(limitsSaveDisabled({ ...valid, [field]: 0 })).toBe(true);
-    });
+  it.each(bounds)('$field: the schema accepts min and max', ({ field, bound }) => {
+    expect(planInputSchema.safeParse({ ...plan, [field]: bound.min }).success).toBe(true);
+    expect(planInputSchema.safeParse({ ...plan, [field]: bound.max }).success).toBe(true);
+  });
 
-    it(`disables Save for a fractional ${field}`, () => {
-      expect(limitsSaveDisabled({ ...valid, [field]: 1.5 })).toBe(true);
-    });
-  }
+  it.each(bounds)('$field: the schema rejects just outside min and max', ({ field, bound }) => {
+    expect(planInputSchema.safeParse({ ...plan, [field]: bound.min - 1 }).success).toBe(false);
+    expect(planInputSchema.safeParse({ ...plan, [field]: bound.max + 1 }).success).toBe(false);
+  });
+
+  it.each(bounds)('$field: Save is enabled exactly when the schema accepts', ({ field, bound }) => {
+    for (const value of [bound.min - 1, bound.min, bound.max, bound.max + 1]) {
+      const accepted = planInputSchema.safeParse({ ...plan, [field]: value }).success;
+      expect(limitsSaveDisabled({ ...valid, [field]: value })).toBe(!accepted);
+    }
+  });
 });
 
 /**
@@ -93,16 +120,12 @@ describe('parseLimitInput', () => {
   });
 
   it('keeps a cleared field from enabling Save', () => {
-    expect(
-      limitsSaveDisabled({ ...valid, dailyBudgetUnits: parseLimitInput('') })
-    ).toBe(true);
+    expect(limitsSaveDisabled({ ...valid, dailyBudgetUnits: parseLimitInput('') })).toBe(true);
   });
 
   it('keeps a typed zero, which is a real operating value', () => {
     expect(parseLimitInput('0')).toBe(0);
-    expect(limitsSaveDisabled({ ...valid, dailyBudgetUnits: parseLimitInput('0') })).toBe(
-      false
-    );
+    expect(limitsSaveDisabled({ ...valid, dailyBudgetUnits: parseLimitInput('0') })).toBe(false);
   });
 
   it('passes ordinary values through unchanged', () => {
@@ -115,9 +138,7 @@ describe('parseLimitInput', () => {
 
   it('leaves a fractional value fractional so the integer check rejects it', () => {
     expect(parseLimitInput('1.5')).toBe(1.5);
-    expect(limitsSaveDisabled({ ...valid, dailyBudgetUnits: parseLimitInput('1.5') })).toBe(
-      true
-    );
+    expect(limitsSaveDisabled({ ...valid, dailyBudgetUnits: parseLimitInput('1.5') })).toBe(true);
   });
 });
 

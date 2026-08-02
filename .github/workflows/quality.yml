@@ -6,9 +6,13 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# A10: third-party actions are pinned to immutable commit SHAs below, so a
+# retagged v4/v7 cannot silently change what runs against repository secrets.
+# A11: actions:write was never exercised by any step. The only writes are the
+# diagnostics comment (issues/pull-requests) and artifact upload, which needs
+# no extra scope, so the token no longer carries workflow-mutating rights.
 permissions:
   contents: read
-  actions: write
   issues: write
   pull-requests: write
 
@@ -28,13 +32,13 @@ jobs:
     steps:
       - name: Checkout
         id: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 1
 
       - name: Setup Node 22
         id: node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22"
           check-latest: false
@@ -161,7 +165,7 @@ jobs:
 
       - name: Publish gate diagnostics
         if: always() && github.event_name == 'pull_request'
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
             const fs = require('fs');
@@ -196,6 +200,8 @@ jobs:
               redRequired.length === 0
                 ? '**Merge/deploy gate: GREEN** — required PR gates are success.'
                 : '**Merge/deploy gate: RED — do not merge or deploy.** Fix required gates first.',
+              '',
+              'This comment is diagnostics only. The authority is the `validate` check itself, which fails on any failed step including steps absent from this table.',
               '',
               '| Gate | Outcome |',
               '| --- | --- |',
@@ -266,7 +272,7 @@ jobs:
 
       - name: Upload immutable artifact
         if: success()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: gateway-${{ github.sha }}
           path: |

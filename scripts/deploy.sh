@@ -11,13 +11,8 @@ ACTIVATED=0
 readonly HEALTH_REQUEST_TIMEOUT_SECONDS=5
 readonly HEALTH_STARTUP_DEADLINE_SECONDS=90
 readonly HEALTH_RETRY_INTERVAL_SECONDS=1
+readonly NPM_INSTALL_PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-# readlink -f canonicalises a path even when the final component does not
-# exist, so it happily returns "$ROOT/current" when nothing is deployed yet.
-# Feeding that value back into `ln -s` produces a symlink pointing at itself
-# and every later start fails with ELOOP. -e resolves only when the whole
-# chain exists, and the explicit -L test keeps a dangling link from counting
-# as a usable previous release.
 resolve_current() {
   [[ -L $ROOT/current ]] || return 0
   local resolved
@@ -42,10 +37,6 @@ fail() {
   exit 1
 }
 
-# The unit file ships inside the artifact, so the running service definition
-# is part of the release contract rather than something an operator has to
-# remember to copy by hand. A release whose code and unit disagree can crash
-# loop for reasons no amount of application debugging will explain.
 sync_unit() {
   local src="$1/infra/systemd/$SERVICE.service"
   local dst="/etc/systemd/system/$SERVICE.service"
@@ -60,28 +51,16 @@ sync_unit() {
 check_health() {
   local status
   local rc
-
-  if status=$(curl -sS -o /dev/null -w '%{http_code}' \
-    --max-time "$HEALTH_REQUEST_TIMEOUT_SECONDS" \
-    http://127.0.0.1:2080/health/live); then
-    if [[ $status != 200 ]]; then
-      echo "health probe: liveness returned HTTP $status" >&2
-      return 1
-    fi
+  if status=$(curl -sS -o /dev/null -w '%{http_code}' --max-time "$HEALTH_REQUEST_TIMEOUT_SECONDS" http://127.0.0.1:2080/health/live); then
+    [[ $status == 200 ]] || { echo "health probe: liveness returned HTTP $status" >&2; return 1; }
   else
     rc=$?
     echo "health probe: liveness transport failure rc=$rc" >&2
     return 1
   fi
-
   if status=$(printf 'x-internal-ready-token: %s\n' "$INTERNAL_READY_TOKEN" |
-    curl -sS -o /dev/null -w '%{http_code}' \
-      --max-time "$HEALTH_REQUEST_TIMEOUT_SECONDS" -H @- \
-      http://127.0.0.1:2080/health/ready); then
-    if [[ $status != 200 ]]; then
-      echo "health probe: readiness returned HTTP $status" >&2
-      return 1
-    fi
+    curl -sS -o /dev/null -w '%{http_code}' --max-time "$HEALTH_REQUEST_TIMEOUT_SECONDS" -H @- http://127.0.0.1:2080/health/ready); then
+    [[ $status == 200 ]] || { echo "health probe: readiness returned HTTP $status" >&2; return 1; }
   else
     rc=$?
     echo "health probe: readiness transport failure rc=$rc" >&2
@@ -103,12 +82,49 @@ wait_for_health() {
   echo "health gate passed after ${retries} failed probes"
 }
 
-# Preflight runs from inside the candidate release so any relative path it
-# resolves matches what systemd will use once the symlink moves.
 run_preflight() {
-  runuser --preserve-environment -u "$SERVICE" -- \
-    bash -c 'cd "$1" && exec node dist/preflight.js' _ "$1"
+  runuser --preserve-environment -u "$SERVICE" -- bash -c 'cd "$1" && exec node dist/preflight.js' _ "$1"
 }
+
+# Install scripts are required for better-sqlite3, but they must neither run as
+# root nor inherit deploy credentials or root-owned npm state. Parameters after
+# service are fixed production dependencies at the call site; tests substitute
+# disposable binaries to exercise this exact function without root privileges.
+install_production_dependencies() {
+  local release=$1
+  local service=$2
+  local install_path=$3
+  local runuser_bin=$4
+  local chown_bin=$5
+  local npm_home="$release/.npm-home"
+  local npm_cache="$release/.npm-cache"
+  local rc=0
+
+  "$chown_bin" -R root:"$service" "$release"
+  chmod -R u=rwX,g=rwX,o= "$release"
+
+  "$runuser_bin" -u "$service" -- /usr/bin/env -i \
+    PATH="$install_path" \
+    HOME="$npm_home" \
+    npm_config_cache="$npm_cache" \
+    npm_config_userconfig=/dev/null \
+    npm_config_globalconfig=/dev/null \
+    npm_config_update_notifier=false \
+    /usr/bin/bash -c \
+      'mkdir -p "$2" "$3"; cd "$1"; exec npm ci --omit=dev --ignore-scripts=false --no-audit --no-fund' \
+      _ "$release" "$npm_home" "$npm_cache" || rc=$?
+
+  rm -rf -- "$npm_home" "$npm_cache"
+  "$chown_bin" -R root:"$service" "$release"
+  chmod -R u=rwX,g=rX,o= "$release"
+  return "$rc"
+}
+
+# Tests source the real functions and invoke install_production_dependencies
+# with disposable command stubs. Executing this file can never take this path.
+if [[ ${BASH_SOURCE[0]} != "$0" ]]; then
+  return 0
+fi
 
 [[ $EUID -eq 0 ]] || fail 'deploy must run as root'
 [[ $SHA =~ ^[0-9a-f]{40}$ ]] || fail 'full git SHA required'
@@ -121,11 +137,8 @@ run_preflight() {
 
 id "$SERVICE" >/dev/null 2>&1 || fail 'service user is missing'
 install -d -o root -g "$SERVICE" -m 0750 "$ROOT" "$ROOT/releases" "$ROOT/config"
-install -d -o "$SERVICE" -g "$SERVICE" -m 0750 \
-  "$ROOT/data" "$ROOT/data/attachments" "$ROOT/data/backups" "$ROOT/logs" "$ROOT/runtime"
+install -d -o "$SERVICE" -g "$SERVICE" -m 0750 "$ROOT/data" "$ROOT/data/attachments" "$ROOT/data/backups" "$ROOT/logs" "$ROOT/runtime"
 
-# A self-referential or dangling current link is unusable and would otherwise
-# survive into the next deploy, so clear it before anything depends on it.
 if [[ -L $ROOT/current && -z $(resolve_current) ]]; then
   echo 'removing unusable current symlink' >&2
   rm -f "$ROOT/current"
@@ -147,27 +160,11 @@ tar --extract --file "$ARTIFACT" --directory "$RELEASE" --no-same-owner --no-sam
 
 [[ -f $RELEASE/package-lock.json ]] || fail 'package-lock.json is required for deterministic production deploy'
 [[ -f $RELEASE/infra/systemd/$SERVICE.service ]] || fail 'systemd unit missing from release'
-
-# A release without the console would still pass health checks, so the dashboards
-# are verified as part of the artifact contract rather than discovered by a user.
 for page in admin member chat login; do
   [[ -f $RELEASE/dist/public/$page.html ]] || fail "console entry missing from release: $page.html"
 done
 
-# better-sqlite3 ships an install script that compiles a native binding, so
-# `npm ci` executes package lifecycle code. Running that as root would grant
-# any dependency arbitrary code execution with full privileges during deploy.
-# Hand the install to the same unprivileged service user the preflight uses:
-# the binding still builds, but no dependency script ever touches root. The
-# release tree is owned by the service group and group-writable for this one
-# step so npm can populate node_modules; ownership is locked down again below.
-chown -R root:"$SERVICE" "$RELEASE"
-chmod -R u=rwX,g=rwX,o= "$RELEASE"
-runuser --preserve-environment -u "$SERVICE" -- \
-  bash -c 'cd "$1" && exec npm ci --omit=dev --ignore-scripts=false --no-audit --no-fund' _ "$RELEASE"
-
-chown -R root:"$SERVICE" "$RELEASE"
-chmod -R u=rwX,g=rX,o= "$RELEASE"
+install_production_dependencies "$RELEASE" "$SERVICE" "$NPM_INSTALL_PATH" /usr/sbin/runuser /usr/bin/chown
 
 set -a
 # shellcheck disable=SC1090
@@ -183,9 +180,6 @@ ln -s "$RELEASE" "$CANDIDATE_LINK"
 mv -Tf "$CANDIDATE_LINK" "$ROOT/current"
 
 sync_unit "$RELEASE"
-# A crash loop from an earlier attempt can exhaust StartLimitBurst, and then
-# systemctl restart refuses to start the service at all. Clearing that state
-# keeps a good release from being blocked by a bad one.
 systemctl reset-failed "$SERVICE" 2>/dev/null || true
 
 if ! systemctl restart "$SERVICE" || ! wait_for_health; then

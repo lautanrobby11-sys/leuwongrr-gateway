@@ -116,3 +116,51 @@ reclaim jangka panjang; **tidak** mengubah batas container/compose OmniRoute.
 - `npm run validate` **tidak** diperlukan untuk perubahan ops host (di luar
   scope repo). Spec repo: commit + push ke `main` dengan pesan deskriptif.
 - Evidence akhir: output perintah di atas + catatan Notion.
+
+## 8. Hasil eksekusi (2 Agustus 2026)
+
+### 8.1 Sampling baseline 60 menit (CSV `2026-08-02-omni-sample.csv`)
+- 60 sampel `memory.current` OmniRoute: **min 1318 MiB, max 1400 MiB,
+  rata-rata 1357 MiB** (plafon 1400m = 1367 MiB, ~96–97%).
+- `memory.events max` bertambah dari `0` (pasca-restart 13:51:30Z) menjadi
+  **2784** selama jendela; `sock_throttled` naik ke **152**.
+- `memory.swap.current` stabil ≈ **363–380 MiB** — sebagian besar anon
+  OmniRoute tinggal di swap host.
+- Host `available` ≈ 147–283 MiB; load1 < 1 sepanjang jendela.
+- Kesimpulan: tekanan bersifat **memori (cgroup plafon), bukan CPU**. CPU
+  container jarang throttle (1,6% period) dan load host rendah.
+
+### 8.2 Perubahan yang diterapkan (reversibel, sudah berjalan)
+- `/etc/sysctl.d/99-sysctl-leuwongrr-stability.conf` (root, 234 byte):
+  `vm.swappiness = 20`, `vm.zone_reclaim_mode = 0`.
+- `sysctl --system` → nilai aktif `vm.swappiness = 20`,
+  `vm.zone_reclaim_mode = 0`; bertahan (verifikasi ulang 22:03 WIB).
+- Tidak ada perubahan compose/env/secret OmniRoute; tidak ada restart
+  container; gateway tidak disentuh.
+
+### 8.3 Sampling pasca-perubahan (5 menit, `omni-post-20260802.csv`)
+- `memory.current` ≈ 1429–1444 MiB; `max` naik tipis 2784 → **2827**
+  (cgroup tetap menyentuh plafon; swappiness tidak mengubah footprint anon).
+- `sock_throttled` datar di **152**; swap ≈ 363–368 MiB; host `available`
+  ≈ 202–222 MiB. Tidak ada gejolak.
+
+### 8.4 SIGTERM anonim 13:51:28Z (restart count 0 → 1)
+- Log container: `Received SIGTERM. Draining 0 request(s)…` → `Bye.`,
+  exit 0, `oom=false`, `manualRestart=false`, restart policy `unless-stopped`.
+- Bukan operator: tidak ada `docker stop/restart` di `auth.log`/sudo journal
+  20:50–20:51 WIB; hanya sesi SSH penulis menjalankan `docker inspect`.
+- Bukan OOM kernel (dmesg bersih), bukan restart dockerd (`NRestarts=0`),
+  bukan healthcheck (semua `exit 0`, tidak pernah `unhealthy`).
+- Ini kejadian kedua (pertama: 02:32Z 31 Juli). **Pengirim belum
+  teridentifikasi** — rekomendasi: pasang `auditd` (watch syscall `kill`)
+  sebelum kejadian berikutnya.
+
+### 8.5 Status akhir
+- Gateway `api.leuwongrr.cloud`: `/health/live` 200, `/health/ready` 404,
+  `/v1/models` 401 — tidak berubah.
+- OmniRoute `router.leuwongrr.cloud`: `health=healthy`, `RestartCount=1`
+  (sejak 13:51:30Z), `/api/monitoring/health` 200.
+- `journald` sudah `SystemMaxUse=100M`; disk log 65 MB.
+- Perbaikan struktural (naikkan `mem_limit` 1400m→1600m) **tetap ditunda**
+  — host `available` hanya ±200 MiB dan soak Gateway belum ditutup; risiko
+  dialihkan ke OOM killer kernel.

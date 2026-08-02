@@ -11,9 +11,6 @@ fail() {
   exit 1
 }
 
-# Mirrors deploy.sh. readlink -f returns the link path itself when the target
-# is missing, which makes a broken link look like a usable release and can end
-# with current pointing at itself.
 resolve_current() {
   [[ -L $ROOT/current ]] || return 0
   local resolved
@@ -22,8 +19,6 @@ resolve_current() {
   printf '%s\n' "$resolved"
 }
 
-# The unit ships with each release, so the active release and the running unit
-# stay in step even when moving backwards.
 sync_unit() {
   local src="$1/infra/systemd/$SERVICE.service"
   local dst="/etc/systemd/system/$SERVICE.service"
@@ -54,6 +49,29 @@ run_preflight() {
     bash -c 'cd "$1" && exec node dist/preflight.js' _ "$1"
 }
 
+# A release can decay after its first successful deployment. Rollback must not
+# trust directory existence alone: verify the same inner manifest deploy.sh
+# accepted before moving the active symlink or loading code from the target.
+verify_release_manifest() {
+  local target=$1
+  [[ -f $target/manifest.sha256 ]] || {
+    echo 'rollback target manifest.sha256 is missing' >&2
+    return 1
+  }
+  (
+    cd "$target"
+    sha256sum -c manifest.sha256 --quiet
+  ) || {
+    echo 'rollback target manifest verification failed' >&2
+    return 1
+  }
+}
+
+# Tests source and execute the real verifier against disposable release trees.
+if [[ ${BASH_SOURCE[0]} != "$0" ]]; then
+  return 0
+fi
+
 [[ $EUID -eq 0 ]] || fail 'rollback must run as root'
 [[ $SHA =~ ^[0-9a-f]{40}$ ]] || fail 'full release SHA required'
 TARGET="$ROOT/releases/$SHA"
@@ -61,6 +79,10 @@ TARGET="$ROOT/releases/$SHA"
 CURRENT=$(resolve_current)
 [[ -n $CURRENT && -d $CURRENT ]] || fail 'current release is missing'
 [[ $CURRENT != "$TARGET" ]] || { echo 'target already active'; exit 0; }
+
+# This gate intentionally precedes env loading, preflight, symlink changes and
+# systemd operations. A corrupt release is rejected without touching runtime.
+verify_release_manifest "$TARGET" || fail 'rollback target failed integrity verification'
 
 ENV_FILE="$ROOT/config/gateway.env"
 [[ -f $ENV_FILE && $(stat -c %a "$ENV_FILE") == 600 ]] || fail 'valid gateway.env is required'

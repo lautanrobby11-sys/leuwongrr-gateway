@@ -28,36 +28,23 @@ function runInstall(npmExit = 0) {
 
   const runuser = join(bin, 'runuser');
   const chown = join(bin, 'chown');
-  executable(
-    runuser,
-    `#!/usr/bin/env bash\nset -Eeuo pipefail\nprintf '%s\\n' "$*" > ${JSON.stringify(join(trace, 'runuser-args'))}\n[[ $1 == -u && $2 == "$(id -un)" && $3 == -- ]]\nshift 3\nexec "$@"\n`,
-  );
+  executable(runuser, `#!/usr/bin/env bash\nset -Eeuo pipefail\nprintf '%s\\n' "$*" > ${JSON.stringify(join(trace, 'runuser-args'))}\n[[ $1 == -u && $2 == "$(id -un)" && $3 == -- ]]\nshift 3\nexec "$@"\n`);
   executable(chown, '#!/usr/bin/env bash\nexit 0\n');
-  executable(
-    join(bin, 'npm'),
-    `#!/usr/bin/env bash\nset -Eeuo pipefail\nprintf '%s\\n' "$*" > ${JSON.stringify(join(trace, 'npm-args'))}\nid -u > ${JSON.stringify(join(trace, 'npm-euid'))}\nstat -c %a . > ${JSON.stringify(join(trace, 'mode-during-install'))}\nenv | sort > ${JSON.stringify(join(trace, 'npm-env'))}\ntouch .lifecycle-ran\nexit ${npmExit}\n`,
-  );
+  executable(join(bin, 'npm'), `#!/usr/bin/env bash\nset -Eeuo pipefail\nprintf '%s\\n' "$*" > ${JSON.stringify(join(trace, 'npm-args'))}\nid -u > ${JSON.stringify(join(trace, 'npm-euid'))}\nstat -c %a . > ${JSON.stringify(join(trace, 'mode-during-install'))}\nenv | sort > ${JSON.stringify(join(trace, 'npm-env'))}\ntouch .lifecycle-ran\nexit ${npmExit}\n`);
 
-  const result = spawnSync(
-    '/usr/bin/bash',
-    [
-      '-c',
-      'source scripts/deploy.sh; install_production_dependencies "$RELEASE" "$(id -un)" "$INSTALL_PATH" "$RUNUSER" "$CHOWN"',
-    ],
-    {
-      cwd: process.cwd(),
-      encoding: 'utf8',
-      env: {
-        ...process.env,
-        RELEASE: release,
-        INSTALL_PATH: `${bin}:/usr/bin:/bin`,
-        RUNUSER: runuser,
-        CHOWN: chown,
-        SECRET_SENTINEL: 'must-not-reach-lifecycle',
-        NPM_CONFIG_REGISTRY: 'https://credential.invalid/',
-      },
+  const result = spawnSync('/usr/bin/bash', ['-c', 'source scripts/deploy.sh; install_production_dependencies "$TARGET_RELEASE" "$(id -un)" "$INSTALL_PATH" "$RUNUSER" "$CHOWN"'], {
+    cwd: process.cwd(),
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      TARGET_RELEASE: release,
+      INSTALL_PATH: `${bin}:/usr/bin:/bin`,
+      RUNUSER: runuser,
+      CHOWN: chown,
+      SECRET_SENTINEL: 'must-not-reach-lifecycle',
+      NPM_CONFIG_REGISTRY: 'https://credential.invalid/',
     },
-  );
+  });
 
   return { result, release, trace };
 }
@@ -67,11 +54,9 @@ describe('deploy dependency install privilege (A15)', () => {
     const { result, release, trace } = runInstall();
     expect(result.status, result.stderr).toBe(0);
     expect(readFileSync(join(trace, 'runuser-args'), 'utf8')).toContain(`-u ${process.env.USER ?? ''} --`);
-    expect(readFileSync(join(trace, 'npm-args'), 'utf8').trim()).toBe(
-      'ci --omit=dev --ignore-scripts=false --no-audit --no-fund',
-    );
+    expect(readFileSync(join(trace, 'npm-args'), 'utf8').trim()).toBe('ci --omit=dev --ignore-scripts=false --no-audit --no-fund');
     expect(Number(readFileSync(join(trace, 'npm-euid'), 'utf8').trim())).toBe(process.getuid?.());
-    expect(readFileSync(join(trace, 'mode-during-install'), 'utf8').trim()).toMatch(/7[0-7]0/);
+    expect(readFileSync(join(trace, 'mode-during-install'), 'utf8').trim()).toBe('770');
     const environment = readFileSync(join(trace, 'npm-env'), 'utf8');
     expect(environment).not.toContain('SECRET_SENTINEL');
     expect(environment).not.toContain('NPM_CONFIG_REGISTRY');

@@ -19,6 +19,7 @@ afterEach(() => {
  * scripts/ci-shell-gates.mjs.
  */
 function resolveBash(): string {
+  if (process.platform === 'darwin') return '/bin/bash';
   if (process.platform !== 'win32') return '/usr/bin/bash';
   const gitExecPath = spawnSync('git', ['--exec-path'], { encoding: 'utf8' }).stdout.trim();
   return join(gitExecPath, '..', '..', '..', 'usr', 'bin', 'bash.exe');

@@ -19,6 +19,7 @@ afterEach(() => {
  * scripts/ci-shell-gates.mjs.
  */
 function resolveBash(): string {
+  if (process.platform === 'darwin') return '/bin/bash';
   if (process.platform !== 'win32') return '/usr/bin/bash';
   const gitExecPath = spawnSync('git', ['--exec-path'], { encoding: 'utf8' }).stdout.trim();
   // Git-for-Windows ships its own MSYS bash under usr/bin; that is the only
@@ -72,7 +73,7 @@ describe('deploy dependency install privilege (A15)', () => {
   it('runs lifecycle install once as the delegated user with an empty allowlisted environment', () => {
     const { result, release, trace } = runInstall();
     expect(result.status, result.stderr).toBe(0);
-    const user = spawnSync('id', ['-un'], { encoding: 'utf8' }).stdout.trim() || process.env.USER;
+    const user = spawnSync(resolveBash(), ['-c', 'id -un'], { encoding: 'utf8' }).stdout.trim() || process.env.USER;
     expect(readFileSync(join(trace, 'runuser-args'), 'utf8')).toContain(`-u ${user} --`);
     expect(readFileSync(join(trace, 'npm-args'), 'utf8').trim()).toBe('ci --omit=dev --ignore-scripts=false --no-audit --no-fund');
     expect(Number(readFileSync(join(trace, 'npm-euid'), 'utf8').trim())).toBeGreaterThan(0);

@@ -59,14 +59,12 @@ describe('budget settlement overshoot and audit gaps (#47)', () => {
     expect(overshoots).toHaveLength(1);
     expect(overshoots[0]?.units).toBe(4500);
     expect(overshoots[0]?.limit).toBe(3000);
-    // The reservation (estimate + overhead) is already counted in `used`, so
-    // remaining = limit - reserved, and overshoot = actual - remaining. The
-    // invariant is what matters, not the exact estimate arithmetic.
-    const remaining = overshoots[0]?.remaining as number;
-    const overshoot = overshoots[0]?.overshoot as number;
-    expect(remaining).toBeGreaterThan(0);
-    expect(remaining).toBeLessThan(3000);
-    expect(overshoot).toBe(4500 - remaining);
+    // With no other usage that day, `remaining` before this settlement is the
+    // full limit (the reservation's own row is excluded from `used`), so the
+    // concrete overshoot is actual - limit = 1500 - not inflated by the
+    // reservation's own estimate.
+    expect(overshoots[0]?.remaining).toBe(3000);
+    expect(overshoots[0]?.overshoot).toBe(1500);
   });
 
   it('emits an estimate-fallback warning when upstream reports no usage', async () => {

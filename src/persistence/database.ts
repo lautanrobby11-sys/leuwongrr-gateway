@@ -161,9 +161,10 @@ export class GatewayDatabase {
     const used = this.db
       .prepare(
         "SELECT COALESCE(SUM(units),0) AS total FROM usage_events " +
-          "WHERE tenant_id=? AND day=? AND state IN ('reserved','settled')"
+          "WHERE tenant_id=? AND day=? AND state IN ('reserved','settled') AND id != ?"
       )
-      .get(tenantId, day) as { total: number };    const remaining = Math.max(0, effectiveLimit - used.total);
+      .get(tenantId, day, id) as { total: number };
+    const remaining = Math.max(0, effectiveLimit - used.total);
     this.db
       .prepare(
         "UPDATE usage_events SET units=?, state='settled' WHERE id=? AND tenant_id=? AND state='reserved'"

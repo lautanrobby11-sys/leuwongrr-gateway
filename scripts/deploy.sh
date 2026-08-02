@@ -154,10 +154,17 @@ for page in admin member chat login; do
   [[ -f $RELEASE/dist/public/$page.html ]] || fail "console entry missing from release: $page.html"
 done
 
-(
-  cd "$RELEASE"
-  npm ci --omit=dev --ignore-scripts=false --no-audit --no-fund
-)
+# better-sqlite3 ships an install script that compiles a native binding, so
+# `npm ci` executes package lifecycle code. Running that as root would grant
+# any dependency arbitrary code execution with full privileges during deploy.
+# Hand the install to the same unprivileged service user the preflight uses:
+# the binding still builds, but no dependency script ever touches root. The
+# release tree is owned by the service group and group-writable for this one
+# step so npm can populate node_modules; ownership is locked down again below.
+chown -R root:"$SERVICE" "$RELEASE"
+chmod -R u=rwX,g=rwX,o= "$RELEASE"
+runuser --preserve-environment -u "$SERVICE" -- \
+  bash -c 'cd "$1" && exec npm ci --omit=dev --ignore-scripts=false --no-audit --no-fund' _ "$RELEASE"
 
 chown -R root:"$SERVICE" "$RELEASE"
 chmod -R u=rwX,g=rX,o= "$RELEASE"

@@ -81,6 +81,14 @@ export function createUpstreamExecutor(deps: ExecutorDeps) {
       }, aborter.signal);
       if (call.stream) {
         if (!upstream.ok || !upstream.body) {
+          // OmniRouteClient releases its permit only when the body ends, is
+          // cancelled, or errors. Returning here without touching the body leaked
+          // one permit per failed streaming request, and UPSTREAM_CONCURRENCY
+          // defaults to 4, so a handful of upstream errors wedged every later
+          // call - including the readiness probe, which shares this semaphore.
+          // The non-streaming path below is safe precisely because it always
+          // awaits upstream.json() before it inspects upstream.ok.
+          await upstream.text().catch(() => undefined);
           deps.db.releaseBudget(reservation, key.tenantId);
           return sendProtocolError(reply, dialect, 502, 'upstream_error', 'Upstream rejected request', req.id, true);
         }

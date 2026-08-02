@@ -64,6 +64,13 @@ export function createUpstreamExecutor(deps: ExecutorDeps) {
     const releaseTenantSlot = deps.tenantConcurrency.tryAcquire(key.tenantId, tenantLimits?.maxConcurrent ?? deps.config.TENANT_MAX_CONCURRENT);
     if (!releaseTenantSlot) {
       deps.db.releaseBudget(reservation, key.tenantId);
+      deps.db.audit(key.tenantId, call.auditEvent, req.id, {
+        model: call.model,
+        stream: call.stream,
+        status: 503,
+        estimate: call.estimateUnits,
+        rejected: 'tenant_overloaded'
+      });
       if (idem) abandon(deps.db, key.tenantId, idem, requestHash);
       reply.header('retry-after', '1');
       return sendProtocolError(reply, dialect, 503, 'tenant_overloaded', 'Tenant concurrency limit reached', req.id, true);
@@ -90,6 +97,9 @@ export function createUpstreamExecutor(deps: ExecutorDeps) {
           // awaits upstream.json() before it inspects upstream.ok.
           await upstream.text().catch(() => undefined);
           deps.db.releaseBudget(reservation, key.tenantId);
+          deps.db.audit(key.tenantId, call.auditEvent, req.id, {
+            model: call.model, stream: true, status: upstream.status, estimate: call.estimateUnits
+          });
           return sendProtocolError(reply, dialect, 502, 'upstream_error', 'Upstream rejected request', req.id, true);
         }
         reply.hijack();
@@ -116,8 +126,25 @@ export function createUpstreamExecutor(deps: ExecutorDeps) {
           clearIdle();
           releaseTenantSlot();
           const reported = meter.units();
-          deps.db.settleBudget(reservation, key.tenantId, reported ?? call.estimateUnits);
-          deps.db.audit(key.tenantId, call.auditStreamEvent, req.id, { model: call.model, stream: true, estimate: call.estimateUnits, actual: reported ?? call.estimateUnits, reconciled: reported !== null });
+          const actual = reported ?? call.estimateUnits;
+          const settled = deps.db.settleBudget(reservation, key.tenantId, actual, deps.config.DAILY_BUDGET_UNITS);
+          deps.db.audit(key.tenantId, call.auditStreamEvent, req.id, {
+            model: call.model, stream: true, estimate: call.estimateUnits, actual, reconciled: reported !== null
+          });
+          if (settled.overshoot > 0) {
+            deps.db.audit(key.tenantId, 'budget.overshoot', req.id, {
+              model: call.model,
+              units: actual,
+              limit: settled.limit,
+              remaining: settled.remaining,
+              overshoot: settled.overshoot
+            });
+          }
+          if (reported === null) {
+            deps.db.audit(key.tenantId, 'budget.estimate_fallback', req.id, {
+              model: call.model, estimate: call.estimateUnits, actual
+            });
+          }
         };
         const closeStream = (reason: string) => {
           finalizeFailure();
@@ -148,16 +175,48 @@ export function createUpstreamExecutor(deps: ExecutorDeps) {
         stream.pipe(reply.raw);
         return reply;
       }
-      const body = (await upstream.json()) as unknown;
-      if (!upstream.ok) {
+      // A non-2xx response whose body is not JSON used to fall into the catch
+      // below without writing an audit event, hiding the failure from the
+      // audit trail (issue #47 finding 6). Parsing defensively keeps the
+      // status available so the 502 path is observable either way.
+      const body = await upstream.json().catch(() => null) as unknown;
+      if (body === null || !upstream.ok) {
+        // Upstream failure still releases the reservation and writes a
+        // sanitized audit event (no prompt, response, or credential) so the
+        // failure rate is visible from the audit trail - issue #47.
         deps.db.releaseBudget(reservation, key.tenantId);
+        deps.db.audit(key.tenantId, call.auditEvent, req.id, {
+          model: call.model, stream: false, status: upstream.status, estimate: call.estimateUnits
+        });
         if (idem) abandon(deps.db, key.tenantId, idem, requestHash);
         return sendProtocolError(reply, dialect, 502, 'upstream_error', 'Upstream rejected request', req.id, upstream.status >= 500);
       }
       meter.observe(body);
       const reported = meter.units();
-      deps.db.settleBudget(reservation, key.tenantId, reported ?? call.estimateUnits);
-      deps.db.audit(key.tenantId, call.auditEvent, req.id, { model: call.model, stream: false, status: upstream.status, estimate: call.estimateUnits, actual: reported ?? call.estimateUnits, reconciled: reported !== null });
+      const actual = reported ?? call.estimateUnits;
+      const settled = deps.db.settleBudget(reservation, key.tenantId, actual, deps.config.DAILY_BUDGET_UNITS);
+      deps.db.audit(key.tenantId, call.auditEvent, req.id, {
+        model: call.model,
+        stream: false,
+        status: upstream.status,
+        estimate: call.estimateUnits,
+        actual,
+        reconciled: reported !== null
+      });
+      if (settled.overshoot > 0) {
+        deps.db.audit(key.tenantId, 'budget.overshoot', req.id, {
+          model: call.model,
+          units: actual,
+          limit: settled.limit,
+          remaining: settled.remaining,
+          overshoot: settled.overshoot
+        });
+      }
+      if (reported === null) {
+        deps.db.audit(key.tenantId, 'budget.estimate_fallback', req.id, {
+          model: call.model, estimate: call.estimateUnits, actual
+        });
+      }
       if (idem) complete(deps.db, key.tenantId, idem, requestHash, upstream.status, body);
       return reply.code(upstream.status).send(body);
     } catch (error) {

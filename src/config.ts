@@ -37,6 +37,12 @@ const schema = z.object({
   UPSTREAM_CONCURRENCY: z.coerce.number().int().min(1).max(64).default(4),
   REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1000).max(300000).default(120000),
   DAILY_BUDGET_UNITS: z.coerce.number().int().positive().default(100000),
+  // Issue #47: the measured upstream context overhead on a one-word prompt was
+  // 2209 units (estimate 25 vs actual 2234). OmniRoute injects a large system
+  // context beyond the caller's payload, so the reservation estimate must carry
+  // this overhead term or the first request of a day silently bypasses a small
+  // daily limit. Default chosen conservatively above the 2209-unit observation.
+  UPSTREAM_CONTEXT_OVERHEAD_UNITS: z.coerce.number().int().min(0).max(1000000).default(2200),
   RATE_LIMIT_RPM: z.coerce.number().int().min(1).max(100000).default(120),
   RATE_LIMIT_BURST: z.coerce.number().int().min(1).max(100000).default(30),
   RATE_LIMIT_MAX_ENTRIES: z.coerce.number().int().min(64).max(100000).default(2048),

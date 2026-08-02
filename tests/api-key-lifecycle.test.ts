@@ -167,9 +167,16 @@ describe('per-tenant limits', () => {
     expect(() => db.reserveBudget('acme', 'req-1', 50, 20)).toThrow('daily_budget_exceeded');
   });
 
-  it('falls back to the deployment default when unset', () => {
-    expect(db.tenants.limits('globex')).toBeNull();
-    expect(db.reserveBudget('globex', 'req-1', 5, 10)).toBeTruthy();
+  it('creates an explicit tenant_limits row instead of silently falling back to the global default', () => {
+    // Issue #47: a tenant without a row inherited the 100000-unit global
+    // default. Every tenant now gets an explicit conservative row on create.
+    const row = db.db
+      .prepare('SELECT daily_budget_units FROM tenant_limits WHERE tenant_id=?')
+      .get('globex') as { daily_budget_units: number } | undefined;
+    expect(row).toBeDefined();
+    expect(row!.daily_budget_units).toBeLessThan(100_000);
+    expect(db.tenants.limits('globex')).not.toBeNull();
+    expect(() => db.reserveBudget('globex', 'req-1', 5000, 10_000)).toThrow('daily_budget_exceeded');
   });
 
   /**
@@ -180,7 +187,14 @@ describe('per-tenant limits', () => {
    */
   it('reports the stored envelope as effective once a row exists', () => {
     const defaults = { dailyBudgetUnits: 100_000, maxConcurrent: 2, rateLimitRpm: 120 };
-    expect(db.tenants.effectiveLimits('globex', defaults)).toEqual({ ...defaults, stored: false });
+    // The row exists from creation (issue #47), so the stored row wins over
+    // the process defaults from the very start.
+    expect(db.tenants.effectiveLimits('globex', defaults)).toEqual({
+      dailyBudgetUnits: 1000,
+      maxConcurrent: 2,
+      rateLimitRpm: 60,
+      stored: true
+    });
 
     db.tenants.setLimits('globex', {
       dailyBudgetUnits: 25,
@@ -213,7 +227,13 @@ describe('per-tenant limits', () => {
     expect(() => db.tenants.setLimits('globex', { ...base, [field]: value })).toThrow(
       TenantStoreError
     );
-    expect(db.tenants.limits('globex')).toBeNull();
+    // The failed write must not mutate the row that already exists (created
+    // with conservative defaults per issue #47).
+    expect(db.tenants.limits('globex')).toEqual({
+      dailyBudgetUnits: 1000,
+      maxConcurrent: 2,
+      rateLimitRpm: 60
+    });
   });
 
   it('still refuses an in-range violation after the finiteness check', () => {

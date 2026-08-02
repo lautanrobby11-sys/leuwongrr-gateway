@@ -11,17 +11,30 @@ afterEach(() => {
   release = undefined;
 });
 
+/**
+ * The release gate must not inherit whatever `bash` PATH happens to offer:
+ * on Windows that is the WSL launcher, which answers "no installed
+ * distributions" and exits before any script runs. Use the Git Bash shipped
+ * beside the Git executable the checkout already depends on, mirroring
+ * scripts/ci-shell-gates.mjs.
+ */
+function resolveBash(): string {
+  if (process.platform !== 'win32') return '/usr/bin/bash';
+  const gitExecPath = spawnSync('git', ['--exec-path'], { encoding: 'utf8' }).stdout.trim();
+  return join(gitExecPath, '..', '..', '..', 'usr', 'bin', 'bash.exe');
+}
+
 function createRelease(): string {
   release = mkdtempSync(join(tmpdir(), 'lwrr-rollback-manifest-'));
   writeFileSync(join(release, 'app.js'), 'trusted release\n');
-  const digest = spawnSync('sha256sum', ['app.js'], { cwd: release, encoding: 'utf8' });
+  const digest = spawnSync(resolveBash(), ['-c', 'sha256sum app.js'], { cwd: release, encoding: 'utf8' });
   expect(digest.status, digest.stderr).toBe(0);
   writeFileSync(join(release, 'manifest.sha256'), digest.stdout);
   return release;
 }
 
 function verify(target: string) {
-  return spawnSync('/usr/bin/bash', ['-c', 'source scripts/rollback.sh; verify_release_manifest "$TARGET"'], {
+  return spawnSync(resolveBash(), ['-c', 'source scripts/rollback.sh; verify_release_manifest "$TARGET"'], {
     cwd: process.cwd(),
     encoding: 'utf8',
     env: { ...process.env, TARGET: target },

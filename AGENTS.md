@@ -2,6 +2,8 @@
 
 Baca file ini, `README.md`, dan ADR terkait sebelum mengubah repository.
 
+> **Audit repo terakhir: `docs/audits/2026-08-01-repo-audit.md`** (1 Agustus 2026, `main` = `d260ad58bb512c9a1192b143f1ce26d3a6b017cb`). Wajib dibaca sebelum menyentuh `.github/workflows/` atau menghapus cabang: dua defect CI di sana hanya menyala pada kondisi tertentu, dan bagian "Batas audit" mencatat apa yang **tidak** diverifikasi.
+
 ## Batas sistem
 - Repository ini hanya memiliki LeuwongRR LLM Gateway: `127.0.0.1:2080`.
 - OmniRoute terpisah di `127.0.0.1:20128`; komunikasi hanya HTTP loopback.
@@ -39,6 +41,7 @@ Dilarang membuat source/config dengan suffix `-new`, `-final`, `-final2`, `-fix`
 | OmniRoute client | `src/upstream.ts` |
 | Deploy/rollback | `scripts/`, `infra/` |
 | Release authority tanpa branch protection | `docs/adr/ADR-012-local-release-authority.md`, `docs/runbooks/operator-release-authority.md` |
+| Kondisi repo dan gerbang tata kelola terbuka | `docs/audits/2026-08-01-repo-audit.md` |
 
 ## Security invariants
 - Bind non-loopback ditolak saat startup.

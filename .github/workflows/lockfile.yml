@@ -64,13 +64,22 @@ jobs:
           set -Eeuo pipefail
           test -f package-lock.json
           test -f web/package-lock.json
-          BRANCH="chore/materialize-lockfiles-${GITHUB_SHA:0:7}"
+          # A SHA-keyed branch name created a brand new branch and a brand new
+          # pull request on every push to main while a lockfile was missing,
+          # which is how several chore/materialize-lockfile* branches piled up
+          # instead of converging on one. One stable branch means a re-run
+          # refreshes the single open pull request.
+          BRANCH='chore/materialize-lockfiles'
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git checkout -b "$BRANCH"
           git add package-lock.json web/package-lock.json
           git commit -m 'chore: materialize package-lock.json for deterministic installs'
-          git push --force-with-lease origin "$BRANCH"
+          # Not --force-with-lease: fetch-depth 1 plus a locally created branch
+          # leaves no remote-tracking ref for the lease to compare against, so
+          # the lease fails with stale info as soon as the branch exists on the
+          # remote. This branch is bot-owned and regenerated in full each run.
+          git push --force origin "HEAD:refs/heads/$BRANCH"
           gh pr create \
             --base "$GITHUB_REF_NAME" \
             --head "$BRANCH" \

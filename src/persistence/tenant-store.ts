@@ -103,11 +103,24 @@ export class TenantStore {
     if (!/^[a-z0-9][a-z0-9_-]{1,63}$/i.test(id)) {
       throw new TenantStoreError('tenant id must be 2-64 chars of letters, digits, dash, underscore');
     }
-    this.db
-      .prepare(
-        'INSERT INTO tenants(id,name,created_at) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name'
-      )
-      .run(id, name || id, new Date().toISOString());
+    this.db.transaction(() => {
+      this.db
+        .prepare(
+          'INSERT INTO tenants(id,name,created_at) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name'
+        )
+        .run(id, name || id, new Date().toISOString());
+      // Issue #47: every tenant must carry an explicit tenant_limits row.
+      // Previously a tenant without one silently inherited the 100000-unit
+      // global default - a hundred times the operator limit - which made
+      // quarantine tenants rely solely on key revocation. A new tenant gets
+      // an explicit conservative row (well below the global default) so the
+      // operator must consciously raise it with limits:set.
+      this.db
+        .prepare(
+          'INSERT OR IGNORE INTO tenant_limits(tenant_id,daily_budget_units,max_concurrent,rate_limit_rpm,updated_at) VALUES(?,1000,2,60,?)'
+        )
+        .run(id, new Date().toISOString());
+    })();
   }
 
   tenantExists(id: string): boolean {

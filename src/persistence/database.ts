@@ -142,12 +142,35 @@ export class GatewayDatabase {
     return id;
   }
 
-  settleBudget(id: string, tenantId: string, actual: number): void {
+  /**
+   * Settles a reservation with the actual usage. Returns the effective daily
+   * limit and the budget remaining before this settlement, so the caller can
+   * record an explicit overshoot event when actual usage exceeds the remaining
+   * budget - issue #47: previously the limit was only checked at reservation,
+   * and the first request of a day could silently exceed a small limit.
+   */
+  settleBudget(
+    id: string,
+    tenantId: string,
+    actual: number,
+    dailyLimit = Number.MAX_SAFE_INTEGER
+  ): { limit: number; remaining: number; overshoot: number } {
+    const day = new Date().toISOString().slice(0, 10);
+    const tenantLimit = this.tenants.limits(tenantId)?.dailyBudgetUnits ?? dailyLimit;
+    const effectiveLimit = Math.min(dailyLimit, tenantLimit);
+    const used = this.db
+      .prepare(
+        "SELECT COALESCE(SUM(units),0) AS total FROM usage_events " +
+          "WHERE tenant_id=? AND day=? AND state IN ('reserved','settled') AND id != ?"
+      )
+      .get(tenantId, day, id) as { total: number };
+    const remaining = Math.max(0, effectiveLimit - used.total);
     this.db
       .prepare(
         "UPDATE usage_events SET units=?, state='settled' WHERE id=? AND tenant_id=? AND state='reserved'"
       )
       .run(actual, id, tenantId);
+    return { limit: effectiveLimit, remaining, overshoot: Math.max(0, actual - remaining) };
   }
 
   releaseBudget(id: string, tenantId: string): void {

@@ -27,6 +27,7 @@ export const testConfig: Config = {
   UPSTREAM_CONCURRENCY: 2,
   REQUEST_TIMEOUT_MS: 1000,
   DAILY_BUDGET_UNITS: 10000,
+  UPSTREAM_CONTEXT_OVERHEAD_UNITS: 2200,
   RATE_LIMIT_RPM: 120,
   RATE_LIMIT_BURST: 30,
   RATE_LIMIT_MAX_ENTRIES: 256,
@@ -77,9 +78,26 @@ export function createTempDatabase(): { db: GatewayDatabase; dispose: () => void
   };
 }
 
-/** Provisions through the canonical store so tests exercise the real path. */
-export function seedTenant(db: GatewayDatabase, tenantId: string, scopes: Scope[]): string {
+/**
+ * Provisions through the canonical store so tests exercise the real path.
+ * Issue #47: a tenant now gets an explicit conservative row on creation, so
+ * the harness must act like an operator who raises the limit to the fixture
+ * value; otherwise the 1000-unit default rejects every metered request.
+ * `overrides` lets tests that override concurrency/budget in the config keep
+ * the stored row aligned with the config they exercise.
+ */
+export function seedTenant(
+  db: GatewayDatabase,
+  tenantId: string,
+  scopes: Scope[],
+  limits: { dailyBudgetUnits: number; maxConcurrent: number; rateLimitRpm: number } = {
+    dailyBudgetUnits: testConfig.DAILY_BUDGET_UNITS,
+    maxConcurrent: testConfig.TENANT_MAX_CONCURRENT,
+    rateLimitRpm: testConfig.RATE_LIMIT_RPM
+  }
+): string {
   db.tenants.upsertTenant(tenantId, tenantId);
+  db.tenants.setLimits(tenantId, limits);
   return db.tenants.issue({ tenantId, name: 'harness', scopes }).plaintext;
 }
 
@@ -92,7 +110,11 @@ export function createHarness(
   const db = new GatewayDatabase(join(root, 'gateway.db'), config.API_KEY_PEPPER, {
     cacheKib: config.SQLITE_CACHE_KIB
   });
-  const token = seedTenant(db, 'tenant-a', ['models:read', 'chat:write']);
+  const token = seedTenant(db, 'tenant-a', ['models:read', 'chat:write'], {
+    dailyBudgetUnits: config.DAILY_BUDGET_UNITS,
+    maxConcurrent: config.TENANT_MAX_CONCURRENT,
+    rateLimitRpm: config.RATE_LIMIT_RPM
+  });
   db.tenants.setModelPolicy('tenant-a', 'lwrr-text', true);
   const fetcher = vi.fn(async () => respond());
   const upstream = new OmniRouteClient(

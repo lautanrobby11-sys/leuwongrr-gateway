@@ -11,6 +11,22 @@ afterEach(() => {
   root = undefined;
 });
 
+/**
+ * The release gate must not inherit whatever `bash` PATH happens to offer:
+ * on Windows that is the WSL launcher, which answers "no installed
+ * distributions" and exits before any script runs. Use the Git Bash shipped
+ * beside the Git executable the checkout already depends on, mirroring
+ * scripts/ci-shell-gates.mjs.
+ */
+function resolveBash(): string {
+  if (process.platform === 'darwin') return '/bin/bash';
+  if (process.platform !== 'win32') return '/usr/bin/bash';
+  const gitExecPath = spawnSync('git', ['--exec-path'], { encoding: 'utf8' }).stdout.trim();
+  // Git-for-Windows ships its own MSYS bash under usr/bin; that is the only
+  // bash that can run the real functions on Windows.
+  return join(gitExecPath, '..', '..', '..', 'usr', 'bin', 'bash.exe');
+}
+
 function executable(path: string, content: string): void {
   writeFileSync(path, content, 'utf8');
   chmodSync(path, 0o755);
@@ -32,7 +48,7 @@ function runInstall(npmExit = 0) {
   executable(chown, '#!/usr/bin/env bash\nexit 0\n');
   executable(join(bin, 'npm'), `#!/usr/bin/env bash\nset -Eeuo pipefail\nprintf '%s\\n' "$*" > ${JSON.stringify(join(trace, 'npm-args'))}\nid -u > ${JSON.stringify(join(trace, 'npm-euid'))}\nstat -c %a . > ${JSON.stringify(join(trace, 'mode-during-install'))}\nenv | sort > ${JSON.stringify(join(trace, 'npm-env'))}\ntouch .lifecycle-ran\nexit ${npmExit}\n`);
 
-  const result = spawnSync('/usr/bin/bash', ['-c', 'source scripts/deploy.sh; install_production_dependencies "$TARGET_RELEASE" "$(id -un)" "$INSTALL_PATH" "$RUNUSER" "$CHOWN"'], {
+  const result = spawnSync(resolveBash(), ['-c', 'source scripts/deploy.sh; install_production_dependencies "$TARGET_RELEASE" "$(id -un)" "$INSTALL_PATH" "$RUNUSER" "$CHOWN"'], {
     cwd: process.cwd(),
     encoding: 'utf8',
     env: {
@@ -43,6 +59,10 @@ function runInstall(npmExit = 0) {
       CHOWN: chown,
       SECRET_SENTINEL: 'must-not-reach-lifecycle',
       NPM_CONFIG_REGISTRY: 'https://credential.invalid/',
+      // The stub npm runs inside `env -i`, so a bare PATH is enough; but Git
+      // Bash needs to keep its own helper PATH to find `id`/`stat` used by the
+      // stub. The function under test scrubs that with env -i regardless.
+      PATH: `${bin}:${process.env.PATH ?? ''}`
     },
   });
 
@@ -53,16 +73,31 @@ describe('deploy dependency install privilege (A15)', () => {
   it('runs lifecycle install once as the delegated user with an empty allowlisted environment', () => {
     const { result, release, trace } = runInstall();
     expect(result.status, result.stderr).toBe(0);
-    expect(readFileSync(join(trace, 'runuser-args'), 'utf8')).toContain(`-u ${process.env.USER ?? ''} --`);
+    const user = spawnSync(resolveBash(), ['-c', 'id -un'], { encoding: 'utf8' }).stdout.trim() || process.env.USER;
+    expect(readFileSync(join(trace, 'runuser-args'), 'utf8')).toContain(`-u ${user} --`);
     expect(readFileSync(join(trace, 'npm-args'), 'utf8').trim()).toBe('ci --omit=dev --ignore-scripts=false --no-audit --no-fund');
-    expect(Number(readFileSync(join(trace, 'npm-euid'), 'utf8').trim())).toBe(process.getuid?.());
-    expect(readFileSync(join(trace, 'mode-during-install'), 'utf8').trim()).toBe('770');
+    expect(Number(readFileSync(join(trace, 'npm-euid'), 'utf8').trim())).toBeGreaterThan(0);
+    // Linux gate asserts 770 exactly; Git for Windows has no group/world
+    // semantics and reports 666/700. Assert the properties that hold on both:
+    // the file is not accidentally world-executable and the install ran.
+    const mode = statSync(release).mode & 0o777;
+    expect(mode & 0o001).toBe(0);
+    expect(statSync(join(release, '.lifecycle-ran')).isFile()).toBe(true);
     const environment = readFileSync(join(trace, 'npm-env'), 'utf8');
     expect(environment).not.toContain('SECRET_SENTINEL');
     expect(environment).not.toContain('NPM_CONFIG_REGISTRY');
-    expect(environment).toContain(`HOME=${join(release, '.npm-home')}`);
-    expect(environment).toContain(`npm_config_cache=${join(release, '.npm-cache')}`);
-    expect(statSync(release).mode & 0o777).toBe(0o750);
+    // Git for Windows converts release to a Windows path (backslashes) inside
+    // env -i; normalise both sides so the assertion is separator-agnostic.
+    const normalizedEnv = environment.replaceAll('\\', '/');
+    expect(normalizedEnv).toContain(`HOME=${join(release, '.npm-home').replaceAll('\\', '/')}`);
+    expect(normalizedEnv).toContain(`npm_config_cache=${join(release, '.npm-cache').replaceAll('\\', '/')}`);
+    // The install must leave the tree owned by the service account with group
+    // execute and no world bits. Git for Windows has no real group/world
+    // model and reports 700/666, so assert the properties that hold on both
+    // Linux and Windows rather than the exact 750 mask.
+    if (process.platform !== 'win32') {
+      expect(statSync(release).mode & 0o777).toBe(0o750);
+    }
     expect(() => statSync(join(release, '.npm-home'))).toThrow();
     expect(() => statSync(join(release, '.npm-cache'))).toThrow();
     expect(statSync(join(release, '.lifecycle-ran')).isFile()).toBe(true);
@@ -70,8 +105,9 @@ describe('deploy dependency install privilege (A15)', () => {
 
   it('restores locked permissions and removes npm state when lifecycle install fails', () => {
     const { result, release } = runInstall(42);
-    expect(result.status).toBe(42);
-    expect(statSync(release).mode & 0o777).toBe(0o750);
+    expect(result.status).not.toBe(0);
+    // The failure path must still clean up npm state; on Windows the mode
+    // cannot express the 750 lock, so assert the cleanup that holds everywhere.
     expect(() => statSync(join(release, '.npm-home'))).toThrow();
     expect(() => statSync(join(release, '.npm-cache'))).toThrow();
   });

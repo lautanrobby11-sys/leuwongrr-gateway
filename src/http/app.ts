@@ -381,7 +381,9 @@ export function buildApp(deps: AppDeps) {
       },
       stream: parsed.data.stream,
       model: parsed.data.model,
-      estimateUnits: Math.ceil(maxTokens + JSON.stringify(parsed.data.messages).length / 4),
+      estimateUnits:
+        Math.ceil(maxTokens + JSON.stringify(parsed.data.messages).length / 4) +
+        deps.config.UPSTREAM_CONTEXT_OVERHEAD_UNITS,
       auditEvent: 'llm.request',
       auditStreamEvent: 'llm.stream.completed'
     });
@@ -414,9 +416,9 @@ export function buildApp(deps: AppDeps) {
       body: { ...parsed.data, model: model.upstreamModel, max_output_tokens: maxTokens },
       stream: parsed.data.stream,
       model: parsed.data.model,
-      estimateUnits: Math.ceil(
-        maxTokens + (textLength(parsed.data.input) + textLength(parsed.data.instructions)) / 4
-      ),
+      estimateUnits:
+        Math.ceil(maxTokens + (textLength(parsed.data.input) + textLength(parsed.data.instructions)) / 4) +
+        deps.config.UPSTREAM_CONTEXT_OVERHEAD_UNITS,
       auditEvent: 'llm.responses.request',
       auditStreamEvent: 'llm.responses.stream.completed'
     });
@@ -449,9 +451,9 @@ export function buildApp(deps: AppDeps) {
       body: { ...parsed.data, model: model.upstreamModel, max_tokens: maxTokens },
       stream: parsed.data.stream,
       model: parsed.data.model,
-      estimateUnits: Math.ceil(
-        maxTokens + (JSON.stringify(parsed.data.messages).length + textLength(parsed.data.system)) / 4
-      ),
+      estimateUnits:
+        Math.ceil(maxTokens + (JSON.stringify(parsed.data.messages).length + textLength(parsed.data.system)) / 4) +
+        deps.config.UPSTREAM_CONTEXT_OVERHEAD_UNITS,
       auditEvent: 'llm.messages.request',
       auditStreamEvent: 'llm.messages.stream.completed'
     });

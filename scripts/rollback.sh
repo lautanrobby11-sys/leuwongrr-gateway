@@ -5,6 +5,9 @@ umask 077
 ROOT=/opt/leuwongrr-gateway
 SERVICE=leuwongrr-gateway
 SHA=${1:-}
+readonly HEALTH_REQUEST_TIMEOUT_SECONDS=5
+readonly HEALTH_STARTUP_DEADLINE_SECONDS=90
+readonly HEALTH_RETRY_INTERVAL_SECONDS=1
 
 fail() {
   echo "$1" >&2
@@ -31,16 +34,16 @@ sync_unit() {
 }
 
 check_health() {
-  curl -fsS --max-time 2 http://127.0.0.1:2080/health/live >/dev/null &&
+  curl -fsS --max-time "$HEALTH_REQUEST_TIMEOUT_SECONDS" http://127.0.0.1:2080/health/live >/dev/null &&
     printf 'x-internal-ready-token: %s\n' "$INTERNAL_READY_TOKEN" |
-      curl -fsS --max-time 2 -H @- http://127.0.0.1:2080/health/ready >/dev/null
+      curl -fsS --max-time "$HEALTH_REQUEST_TIMEOUT_SECONDS" -H @- http://127.0.0.1:2080/health/ready >/dev/null
 }
 
 wait_for_health() {
-  local deadline=$((SECONDS + 30))
+  local deadline=$((SECONDS + HEALTH_STARTUP_DEADLINE_SECONDS))
   until check_health 2>/dev/null; do
     (( SECONDS >= deadline )) && return 1
-    sleep 1
+    sleep "$HEALTH_RETRY_INTERVAL_SECONDS"
   done
 }
 
@@ -49,9 +52,6 @@ run_preflight() {
     bash -c 'cd "$1" && exec node dist/preflight.js' _ "$1"
 }
 
-# A release can decay after its first successful deployment. Rollback must not
-# trust directory existence alone: verify the same inner manifest deploy.sh
-# accepted before moving the active symlink or loading code from the target.
 verify_release_manifest() {
   local target=$1
   [[ -f $target/manifest.sha256 ]] || {
@@ -67,7 +67,6 @@ verify_release_manifest() {
   }
 }
 
-# Tests source and execute the real verifier against disposable release trees.
 if [[ ${BASH_SOURCE[0]} != "$0" ]]; then
   return 0
 fi
@@ -80,8 +79,6 @@ CURRENT=$(resolve_current)
 [[ -n $CURRENT && -d $CURRENT ]] || fail 'current release is missing'
 [[ $CURRENT != "$TARGET" ]] || { echo 'target already active'; exit 0; }
 
-# This gate intentionally precedes env loading, preflight, symlink changes and
-# systemd operations. A corrupt release is rejected without touching runtime.
 verify_release_manifest "$TARGET" || fail 'rollback target failed integrity verification'
 
 ENV_FILE="$ROOT/config/gateway.env"

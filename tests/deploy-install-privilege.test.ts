@@ -46,7 +46,23 @@ function runInstall(npmExit = 0) {
   const chown = join(bin, 'chown');
   executable(runuser, `#!/usr/bin/env bash\nset -Eeuo pipefail\nprintf '%s\\n' "$*" > ${JSON.stringify(join(trace, 'runuser-args'))}\n[[ $1 == -u && $2 == "$(id -un)" && $3 == -- ]]\nshift 3\nexec "$@"\n`);
   executable(chown, '#!/usr/bin/env bash\nexit 0\n');
-  executable(join(bin, 'npm'), `#!/usr/bin/env bash\nset -Eeuo pipefail\nprintf '%s\\n' "$*" > ${JSON.stringify(join(trace, 'npm-args'))}\nid -u > ${JSON.stringify(join(trace, 'npm-euid'))}\nstat -c %a . > ${JSON.stringify(join(trace, 'mode-during-install'))}\nenv | sort > ${JSON.stringify(join(trace, 'npm-env'))}\ntouch .lifecycle-ran\nexit ${npmExit}\n`);
+  executable(join(bin, 'npm'), `#!/usr/bin/env bash
+set -Eeuo pipefail
+# Mirror real npm >= 9: a user and global config resolving to the same path is
+# rejected before any install step ("double-loading config ... as global,
+# previously loaded as user").
+if [[ $npm_config_userconfig == $npm_config_globalconfig ]]; then
+  echo 'double-loading config' >&2
+  exit 1
+fi
+printf '%s\\n' "$*" > ${JSON.stringify(join(trace, 'npm-args'))}
+id -u > ${JSON.stringify(join(trace, 'npm-euid'))}
+stat -c %a . > ${JSON.stringify(join(trace, 'mode-during-install'))}
+env | sort > ${JSON.stringify(join(trace, 'npm-env'))}
+[[ -f $npm_config_userconfig && -f $npm_config_globalconfig ]] && touch .npmrc-files-present
+touch .lifecycle-ran
+exit ${npmExit}
+`);
 
   const result = spawnSync(resolveBash(), ['-c', 'source scripts/deploy.sh; install_production_dependencies "$TARGET_RELEASE" "$(id -un)" "$INSTALL_PATH" "$RUNUSER" "$CHOWN"'], {
     cwd: process.cwd(),
@@ -91,6 +107,10 @@ describe('deploy dependency install privilege (A15)', () => {
     const normalizedEnv = environment.replaceAll('\\', '/');
     expect(normalizedEnv).toContain(`HOME=${join(release, '.npm-home').replaceAll('\\', '/')}`);
     expect(normalizedEnv).toContain(`npm_config_cache=${join(release, '.npm-cache').replaceAll('\\', '/')}`);
+    // npm >= 9 refuses to start when user and global config point at the same
+    // path; the two must stay distinct and isolated under the disposable home.
+    expect(normalizedEnv).toContain(`npm_config_userconfig=${join(release, '.npm-home', 'npmrc-user').replaceAll('\\', '/')}`);
+    expect(normalizedEnv).toContain(`npm_config_globalconfig=${join(release, '.npm-home', 'npmrc-global').replaceAll('\\', '/')}`);
     // The install must leave the tree owned by the service account with group
     // execute and no world bits. Git for Windows has no real group/world
     // model and reports 700/666, so assert the properties that hold on both
@@ -101,6 +121,9 @@ describe('deploy dependency install privilege (A15)', () => {
     expect(() => statSync(join(release, '.npm-home'))).toThrow();
     expect(() => statSync(join(release, '.npm-cache'))).toThrow();
     expect(statSync(join(release, '.lifecycle-ran')).isFile()).toBe(true);
+    // The two pinned npmrc files must exist before npm starts (npm reads them
+    // at startup) and are removed with the rest of the disposable home.
+    expect(statSync(join(release, '.npmrc-files-present')).isFile()).toBe(true);
   });
 
   it('restores locked permissions and removes npm state when lifecycle install fails', () => {

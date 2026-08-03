@@ -87,9 +87,12 @@ run_preflight() {
 }
 
 # Install scripts are required for better-sqlite3, but they must neither run as
-# root nor inherit deploy credentials or root-owned npm state. Parameters after
-# service are fixed production dependencies at the call site; tests substitute
-# disposable binaries to exercise this exact function without root privileges.
+# root nor inherit deploy credentials or root-owned npm state. The user and
+# global npm configs are pinned to two DISTINCT empty files under the isolated
+# home: npm >= 9 aborts when both resolve to the same path ("double-loading
+# config"). Parameters after service are fixed production dependencies at the
+# call site; tests substitute disposable binaries to exercise this exact
+# function without root privileges.
 install_production_dependencies() {
   local release=$1
   local service=$2
@@ -107,11 +110,11 @@ install_production_dependencies() {
     PATH="$install_path" \
     HOME="$npm_home" \
     npm_config_cache="$npm_cache" \
-    npm_config_userconfig=/dev/null \
-    npm_config_globalconfig=/dev/null \
+    npm_config_userconfig="$npm_home/npmrc-user" \
+    npm_config_globalconfig="$npm_home/npmrc-global" \
     npm_config_update_notifier=false \
     /usr/bin/bash -c \
-      'mkdir -p "$2" "$3"; cd "$1"; exec npm ci --omit=dev --ignore-scripts=false --no-audit --no-fund' \
+      'mkdir -p "$2" "$3"; : > "$2/npmrc-user"; : > "$2/npmrc-global"; cd "$1"; exec npm ci --omit=dev --ignore-scripts=false --no-audit --no-fund' \
       _ "$release" "$npm_home" "$npm_cache" || rc=$?
 
   rm -rf -- "$npm_home" "$npm_cache"

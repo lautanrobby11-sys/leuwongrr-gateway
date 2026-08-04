@@ -20,20 +20,23 @@ import { describe, expect, it } from 'vitest';
  * Issue #51 owns the behavioural DOM coverage that would replace this file's
  * guesswork with a rendered modal, and it stays open. Until that dependency and
  * Vitest environment work can be done on a workstation with npm access, the
- * structural block below narrows three of the four blind spots the issue
- * enumerates, still without rendering anything:
+ * structural block below closes three gaps that had no coverage at all, still
+ * without rendering anything:
  *
- *   - a handler bound to the wrong field, which the plain string checks cannot
- *     see because they never ask which field block they matched inside;
+ *   - a box wired to another field's state key, which the plain string checks
+ *     cannot see because they only ask whether each spelling exists somewhere in
+ *     the file, never which field block it appeared inside, so swapping two
+ *     bindings leaves every one of them satisfied;
  *   - `disabled={limitsSaveDisabled(limits)}` drifting onto an element that is
- *     not the button which calls `saveLimits`;
- *   - `formatLimitInput` being called with its result discarded.
+ *     not the button which calls `saveLimits`, or being duplicated;
+ *   - the `min` and `max` a box advertises drifting away from the shared route
+ *     constants they are supposed to mirror.
  *
- * The fourth blind spot — a cleared box whose uncommitted intermediate state
- * leaves Save clickable — is a runtime state question that no source assertion
- * can answer. It stays with issue #51. Nothing here is a substitute for it, and
- * growing this file further would rebuild the false confidence that issue exists
- * to remove.
+ * The blind spot that remains — a cleared box whose uncommitted intermediate
+ * state leaves Save clickable — is a runtime state question that no source
+ * assertion can answer. It stays with issue #51. Nothing here is a substitute for
+ * it, and growing this file further would rebuild the false confidence that issue
+ * exists to remove.
  */
 const source = readFileSync('web/src/admin/main.tsx', 'utf8');
 

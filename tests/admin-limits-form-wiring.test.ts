@@ -16,6 +16,27 @@ import { describe, expect, it } from 'vitest';
  * assertions cannot prove the handler behaves correctly at runtime; they prove
  * the raw conversion is not present, which is the regression that actually
  * happened.
+ *
+ * Issue #51 owns the behavioural DOM coverage that would replace this file's
+ * guesswork with a rendered modal, and it stays open. Until that dependency and
+ * Vitest environment work can be done on a workstation with npm access, the
+ * structural block below closes three gaps that had no coverage at all, still
+ * without rendering anything:
+ *
+ *   - a box wired to another field's state key, which the plain string checks
+ *     cannot see because they only ask whether each spelling exists somewhere in
+ *     the file, never which field block it appeared inside, so swapping two
+ *     bindings leaves every one of them satisfied;
+ *   - `disabled={limitsSaveDisabled(limits)}` drifting onto an element that is
+ *     not the button which calls `saveLimits`, or being duplicated;
+ *   - the `min` and `max` a box advertises drifting away from the shared route
+ *     constants they are supposed to mirror.
+ *
+ * The blind spot that remains — a cleared box whose uncommitted intermediate
+ * state leaves Save clickable — is a runtime state question that no source
+ * assertion can answer. It stays with issue #51. Nothing here is a substitute for
+ * it, and growing this file further would rebuild the false confidence that issue
+ * exists to remove.
  */
 const source = readFileSync('web/src/admin/main.tsx', 'utf8');
 
@@ -36,5 +57,83 @@ describe('admin limits form conversion', () => {
     expect(source).toContain('formatLimitInput');
     expect(source).not.toMatch(/function\s+parseLimitInput/);
     expect(source).not.toMatch(/function\s+formatLimitInput/);
+  });
+});
+
+/**
+ * Every structural assertion below is scoped to the limits modal. The plan
+ * editor converts its own inputs with `Number(event.target.value)` on purpose,
+ * so a file-wide ban on that expression would be wrong while a modal-wide ban is
+ * exactly the guard this form needs.
+ *
+ * Drift throws instead of asserting, so a rename fails the whole file with the
+ * marker that moved rather than reporting a misleading per-field failure.
+ */
+function sliceBetween(text: string, open: string, close: string): string {
+  const start = text.indexOf(open);
+  if (start === -1) {
+    throw new Error(`web/src/admin/main.tsx no longer contains "${open}"`);
+  }
+  const end = text.indexOf(close, start);
+  if (end === -1) {
+    throw new Error(`web/src/admin/main.tsx has no "${close}" after "${open}"`);
+  }
+  return text.slice(start, end + close.length);
+}
+
+const limitsModal = sliceBetween(source, '<Modal open={limitsFor !== null}', '</Modal>');
+
+function enclosingBlock(open: string, needle: string, close: string): string {
+  const at = limitsModal.indexOf(needle);
+  if (at === -1) {
+    throw new Error(`the limits modal no longer contains "${needle}"`);
+  }
+  const start = limitsModal.lastIndexOf(open, at);
+  if (start === -1) {
+    throw new Error(`"${needle}" is no longer inside a "${open}" element`);
+  }
+  const end = limitsModal.indexOf(close, at);
+  if (end === -1) {
+    throw new Error(`the "${open}" element holding "${needle}" is not closed`);
+  }
+  return limitsModal.slice(start, end);
+}
+
+function fieldBlock(field: string): string {
+  return enclosingBlock('<Field ', `value={formatLimitInput(limits.${field})}`, '</Field>');
+}
+
+describe('admin limits modal structure', () => {
+  it.each(limitFields)('keeps the %s box bound to its own state key', (field) => {
+    const block = fieldBlock(field);
+    expect(block).toContain(`${field}: parseLimitInput(event.target.value)`);
+    const others = limitFields.filter((candidate) => candidate !== field);
+    for (const other of others) {
+      expect(block).not.toContain(`limits.${other}`);
+      expect(block).not.toContain(`${other}:`);
+    }
+  });
+
+  it.each([
+    ['dailyBudgetUnits', 'DAILY_BUDGET_UNITS'],
+    ['maxConcurrent', 'MAX_CONCURRENT'],
+    ['rateLimitRpm', 'RATE_LIMIT_RPM']
+  ])('bounds the %s box with the shared %s constants', (field, bound) => {
+    const block = fieldBlock(field);
+    expect(block).toContain('type="number"');
+    expect(block).toContain(`min={${bound}.min}`);
+    expect(block).toContain(`max={${bound}.max}`);
+  });
+
+  it('keeps the raw numeric conversion out of the entire limits modal', () => {
+    expect(limitsModal).not.toContain('Number(event.target.value)');
+  });
+
+  it('leaves the save guard on the button that calls saveLimits', () => {
+    const guard = 'disabled={limitsSaveDisabled(limits)}';
+    expect(limitsModal.split(guard)).toHaveLength(2);
+    const button = enclosingBlock('<Button', guard, '</Button>');
+    expect(button).toContain('onClick={() => void saveLimits()}');
+    expect(button).toContain('Save limits');
   });
 });

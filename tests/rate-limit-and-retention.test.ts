@@ -53,7 +53,9 @@ describe('token bucket limiter', () => {
     const limiter = new TokenBucketLimiter(1, 1, 2, 120_000, () => now);
     expect(limiter.consume('tenant-a').allowed).toBe(true);
     expect(limiter.consume('tenant-b').allowed).toBe(true);
-    expect(limiter.consume('rotated-key').allowed).toBe(false);
+    const refused = limiter.consume('rotated-key');
+    expect(refused.allowed).toBe(false);
+    expect(refused.retryAfterSeconds).toBe(120);
     expect(limiter.size).toBe(2);
     expect(limiter.consume('tenant-a').allowed).toBe(false);
     now += 120_001;

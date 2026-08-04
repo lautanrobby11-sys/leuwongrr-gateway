@@ -31,13 +31,18 @@ function privateIpv4(address: string): boolean {
   if (octets.length !== 4 || octets.some((o) => !Number.isInteger(o) || o < 0 || o > 255)) {
     return true;
   }
-  const [a, b] = octets as [number, number, number, number];
+  const [a, b, c, d] = octets as [number, number, number, number];
   if (a === 0 || a === 10 || a === 127) return true;
   if (a === 169 && b === 254) return true;
   if (a === 172 && b >= 16 && b <= 31) return true;
-  if (a === 192 && (b === 168 || b === 0)) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 192 && b === 0 && c === 0 && d !== 9 && d !== 10) return true;
+  if (a === 192 && b === 0 && c === 2) return true;
+  if (a === 192 && b === 88 && c === 99) return true;
   if (a === 100 && b >= 64 && b <= 127) return true;
   if (a === 198 && (b === 18 || b === 19)) return true;
+  if (a === 198 && b === 51 && c === 100) return true;
+  if (a === 203 && b === 0 && c === 113) return true;
   if (a >= 224) return true;
   return false;
 }
@@ -66,6 +71,8 @@ function privateIpv6(address: string): boolean {
   if (value.startsWith('ff')) return true;
   if (value.startsWith('64:ff9b')) return true;
   if (value.startsWith('2002:')) return true;
+  if (/^2001:(?:0{1,4}:|:)/.test(value)) return true;
+  if (/^2001:0?db8:/.test(value)) return true;
   return false;
 }
 

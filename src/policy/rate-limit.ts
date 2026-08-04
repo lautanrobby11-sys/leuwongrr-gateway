@@ -12,8 +12,9 @@ interface Bucket {
  * Memory-bounded token bucket limiter.
  *
  * The gateway runs on a small VPS shared with OmniRoute, so the limiter must
- * never grow without bound. Entries are kept in insertion order and the least
- * recently used entries are evicted once the configured ceiling is reached.
+ * never grow without bound. Entries are kept in least-recently-used order.
+ * Active buckets are never evicted to admit a new key because that would reset
+ * both the victim and the newly admitted caller to a full burst.
  */
 export class TokenBucketLimiter {
   private readonly buckets = new Map<string, Bucket>();
@@ -49,7 +50,10 @@ export class TokenBucketLimiter {
         updatedAt: now
       };
     } else {
-      this.evictIfNeeded(now);
+      this.evictIdle(now);
+      if (this.buckets.size >= this.maxEntries) {
+        return { allowed: false, retryAfterSeconds: this.capacityRetryAfter(now) };
+      }
       bucket = { tokens: this.burst, updatedAt: now };
     }
 
@@ -66,16 +70,17 @@ export class TokenBucketLimiter {
     return { allowed: false, retryAfterSeconds: Math.max(1, Math.ceil(waitMs / 1000)) };
   }
 
-  private evictIfNeeded(now: number): void {
-    if (this.buckets.size < this.maxEntries) return;
+  private evictIdle(now: number): void {
     for (const [key, bucket] of this.buckets) {
       if (now - bucket.updatedAt > this.idleEvictionMs) this.buckets.delete(key);
     }
-    while (this.buckets.size >= this.maxEntries) {
-      const oldest = this.buckets.keys().next();
-      if (oldest.done) break;
-      this.buckets.delete(oldest.value);
-    }
+  }
+
+  private capacityRetryAfter(now: number): number {
+    const oldest = this.buckets.values().next();
+    if (oldest.done) return 1;
+    const waitMs = Math.max(1000, this.idleEvictionMs - Math.max(0, now - oldest.value.updatedAt));
+    return Math.ceil(waitMs / 1000);
   }
 }
 

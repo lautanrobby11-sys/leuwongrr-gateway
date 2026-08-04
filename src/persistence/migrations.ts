@@ -155,7 +155,7 @@ CREATE TABLE billing_cursors (
 -- Issue #47: existing tenants created before the explicit-tenant_limits rule
 -- have no row and silently fall back to the 100000-unit global default.
 -- Backfill a conservative row for every tenant still missing one. Forward-only
--- and idempotent: INSERT OR IGNORE never overwrites an existing row.
+-- and idempotent: the NOT IN predicate never overwrites an existing row.
 INSERT INTO tenant_limits(tenant_id, daily_budget_units, max_concurrent, rate_limit_rpm, updated_at)
 SELECT id, 1000, 2, 60, datetime('now')
 FROM tenants WHERE id NOT IN (SELECT tenant_id FROM tenant_limits);

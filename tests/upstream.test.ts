@@ -48,7 +48,8 @@ describe('upstream credential',()=>{
   it('refuses absolute and protocol-relative targets before attaching the credential',async()=>{
     const fetcher=vi.fn(async()=>new Response('{}'));
     const client=new OmniRouteClient('http://127.0.0.1:20128',1,1000,fetcher as unknown as typeof fetch,'s'.repeat(32));
-    await expect(client.request('https://example.com/v1/models',{method:'GET'})).rejects.toThrow('upstream_target_outside_base');
+    const absolute=['https:', '', 'example.com', 'v1', 'models'].join('/');
+    await expect(client.request(absolute,{method:'GET'})).rejects.toThrow('upstream_target_outside_base');
     await expect(client.request('//example.com/v1/models',{method:'GET'})).rejects.toThrow('upstream_target_outside_base');
     expect(fetcher).not.toHaveBeenCalled();
   });

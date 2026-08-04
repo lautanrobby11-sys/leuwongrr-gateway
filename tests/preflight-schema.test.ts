@@ -3,18 +3,15 @@ import { verifyDatabasePreflight } from '../src/persistence/preflight-check.js';
 import { createTempDatabase } from './support/harness.js';
 import type { GatewayDatabase } from '../src/persistence/database.js';
 
-let db: GatewayDatabase | null = null;
 let dispose: (() => void) | null = null;
 
 afterEach(() => {
   if (dispose) dispose();
-  db = null;
   dispose = null;
 });
 
 function openDatabase(): GatewayDatabase {
   const created = createTempDatabase();
-  db = created.db;
   dispose = created.dispose;
   return created.db;
 }

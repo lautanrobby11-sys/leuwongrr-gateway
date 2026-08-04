@@ -13,9 +13,15 @@ describe('literal egress targets', () => {
     'https://[fd00::1]/x',
     'https://[fe80::1]/x',
     'https://[::ffff:169.254.169.254]/latest',
+    'https://[2001::1]/x',
+    'https://[2001:db8::1]/x',
     'https://100.64.0.1',
     'https://192.0.0.1',
+    'https://192.0.2.1',
+    'https://192.88.99.1',
     'https://198.18.0.1',
+    'https://198.51.100.1',
+    'https://203.0.113.1',
     'https://255.255.255.255',
     'https://relay.internal/send',
     'https://relay.home.arpa/send',
@@ -24,8 +30,13 @@ describe('literal egress targets', () => {
     expect(() => assertPublicEgress(target)).toThrow();
   });
 
-  it('admits a public literal address', () => {
-    expect(assertPublicEgress('https://104.16.0.1/hook').hostname).toBe('104.16.0.1');
+  it.each([
+    'https://104.16.0.1/hook',
+    'https://192.0.0.9/hook',
+    'https://192.0.0.10/hook',
+    'https://192.1.1.1/hook'
+  ])('admits public literal address %s', (target) => {
+    expect(assertPublicEgress(target)).toBeInstanceOf(URL);
   });
 });
 

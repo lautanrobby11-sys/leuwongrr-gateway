@@ -74,6 +74,10 @@ jobs:
           # instead of converging on one. One stable branch means a re-run
           # refreshes the single open pull request.
           BRANCH='chore/materialize-lockfiles'
+          [[ "$BRANCH" == 'chore/materialize-lockfiles' ]] || {
+            echo 'refusing to force-push outside the dedicated lockfile branch' >&2
+            exit 1
+          }
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git checkout -b "$BRANCH"

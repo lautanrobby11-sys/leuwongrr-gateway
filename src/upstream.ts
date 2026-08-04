@@ -14,12 +14,20 @@ export class OmniRouteClient {
     headers.set('authorization',`Bearer ${this.apiKey}`);
     return {...init,headers};
   }
+  private target(path:string): URL {
+    if(!path.startsWith('/') || path.startsWith('//')) throw new Error('upstream_target_outside_base');
+    const base=new URL(this.baseUrl);
+    const target=new URL(path,base);
+    if(target.origin!==base.origin) throw new Error('upstream_target_outside_base');
+    return target;
+  }
   async request(path:string, init:RequestInit, clientSignal?:AbortSignal): Promise<Response> {
+    const target=this.target(path);
     const release=this.semaphore.acquire();
     try {
       const timeout=AbortSignal.timeout(this.timeoutMs);
       const signal=clientSignal?AbortSignal.any([clientSignal,timeout]):timeout;
-      const response=await this.fetcher(new URL(path,this.baseUrl),{...this.authenticate(init),signal,redirect:'error'});
+      const response=await this.fetcher(target,{...this.authenticate(init),signal,redirect:'error'});
       if(!response.body){ release(); return response; }
       const reader=response.body.getReader();
       const body=new ReadableStream<Uint8Array>({

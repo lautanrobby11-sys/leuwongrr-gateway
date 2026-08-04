@@ -45,6 +45,13 @@ describe('upstream credential',()=>{
     if(!seen)throw new Error('expected captured headers');
     expect((seen as Headers).has('authorization')).toBe(false);
   });
+  it('refuses absolute and protocol-relative targets before attaching the credential',async()=>{
+    const fetcher=vi.fn(async()=>new Response('{}'));
+    const client=new OmniRouteClient('http://127.0.0.1:20128',1,1000,fetcher as unknown as typeof fetch,'s'.repeat(32));
+    await expect(client.request('https://example.com/v1/models',{method:'GET'})).rejects.toThrow('upstream_target_outside_base');
+    await expect(client.request('//example.com/v1/models',{method:'GET'})).rejects.toThrow('upstream_target_outside_base');
+    expect(fetcher).not.toHaveBeenCalled();
+  });
   it('does not append the credential to propagated fetch errors',async()=>{
     const credential='s'.repeat(32);
     const fetcher=vi.fn().mockRejectedValue(new Error('network'));

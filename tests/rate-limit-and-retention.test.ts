@@ -47,6 +47,19 @@ describe('token bucket limiter', () => {
     }
     expect(limiter.size).toBeLessThanOrEqual(4);
   });
+
+  it('does not reset active callers when the key registry is full', () => {
+    let now = 0;
+    const limiter = new TokenBucketLimiter(1, 1, 2, 120_000, () => now);
+    expect(limiter.consume('tenant-a').allowed).toBe(true);
+    expect(limiter.consume('tenant-b').allowed).toBe(true);
+    expect(limiter.consume('rotated-key').allowed).toBe(false);
+    expect(limiter.size).toBe(2);
+    expect(limiter.consume('tenant-a').allowed).toBe(false);
+    now += 120_001;
+    expect(limiter.consume('rotated-key').allowed).toBe(true);
+    expect(limiter.size).toBeLessThanOrEqual(2);
+  });
 });
 
 describe('request rate limiting', () => {

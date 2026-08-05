@@ -260,8 +260,12 @@ Streaming is server-sent events on all three protocols.
 - Filenames may not carry `-new`, `-final`, `-fix`, `-backup`, `-old`, `-temp`
   and similar suffixes; `npm run check:conventions` enforces this.
 - Prompts and completions are never logged; see `src/observability.ts`.
-- Dependabot is restricted to minor and patch updates. Major upgrades change the
-  toolchain and must be piloted on a branch with a green `quality` run.
+- Dependabot is restricted to minor and patch updates and runs monthly. Major
+  upgrades change the toolchain and must be piloted on a branch with a green
+  `quality` run. The monthly cadence is deliberate: a production or console bump
+  ships in the release artifact, so deploying it restarts the 24h VPS soak from
+  zero; batching routine bumps keeps that reset to at most once per cycle.
+  Security updates are still opened immediately, independent of the schedule.
 
 Architecture decisions live in `docs/decisions/` (ADR-001 to ADR-008) and
 `docs/adr/ADR-009-console-accounts-and-billing.md`. Operational procedures live

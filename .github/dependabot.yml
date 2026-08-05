@@ -2,8 +2,16 @@ version: 2
 updates:
   - package-ecosystem: npm
     directory: "/"
+    # Monthly, not weekly. Every production dependency that lands on main becomes
+    # a new release artifact, and deploying it restarts the mandatory 24h VPS
+    # soak from zero (exactly what #59's fastify bump forced). Weekly routine
+    # bumps across three ecosystems meant a runtime-affecting change arrived
+    # often enough that the soak was rarely allowed to close - the "soak
+    # berkelanjutan" problem. Monthly batches routine churn to at most one soak
+    # reset per cycle. Dependabot still opens security updates immediately,
+    # regardless of this schedule, so urgent fixes are not delayed.
     schedule:
-      interval: weekly
+      interval: monthly
     open-pull-requests-limit: 5
     groups:
       production:
@@ -19,8 +27,10 @@ updates:
 
   - package-ecosystem: npm
     directory: "/web"
+    # Monthly for the same reason: the console bundle ships inside the release
+    # artifact, so a console bump is also a runtime change that resets the soak.
     schedule:
-      interval: weekly
+      interval: monthly
     open-pull-requests-limit: 3
     groups:
       console:
@@ -31,8 +41,10 @@ updates:
 
   - package-ecosystem: github-actions
     directory: "/"
+    # Monthly to keep the CI-only churn on the same cadence as the rest; these
+    # never ship to the VPS, but batching keeps the PR queue quiet between soaks.
     schedule:
-      interval: weekly
+      interval: monthly
     open-pull-requests-limit: 3
     ignore:
       # actions/checkout v7 and actions/setup-node v7 do not exist; a major

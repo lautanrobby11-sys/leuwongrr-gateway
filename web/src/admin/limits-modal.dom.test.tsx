@@ -121,6 +121,14 @@ describe('admin limits modal — behavioural DOM coverage', () => {
     }
   });
 
+  // Vacuous against a happy-dom number input: happy-dom clamps an invalid
+  // `value="NaN"` to '', exactly as real browsers do, so this assertion passes
+  // even if the box were bound to `String(value)` instead of formatLimitInput.
+  // It is kept because it documents the user-visible property in real browsers
+  // and it turns red the day the test environment stops clamping (jsdom or an
+  // upgraded happy-dom would show the word NaN). The regressions this suite can
+  // actually see in happy-dom are the state ones asserted around it: Save must
+  // follow the cleared/typed boxes, and the min/max envelope must hold.
   it('shows an empty box, not the word NaN, when a field is cleared', async () => {
     const { user, inputs } = await openLimitsModal();
     const daily = inputs[0]!;

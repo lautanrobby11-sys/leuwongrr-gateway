@@ -156,7 +156,7 @@ function PlanEditor({
   );
 }
 
-function Admin() {
+export function Admin() {
   const toast = useToast();
   const [tab, setTab] = useState('overview');
   const [loading, setLoading] = useState(true);
@@ -599,10 +599,16 @@ function Admin() {
   );
 }
 
-createRoot(document.getElementById('root') as HTMLElement).render(
-  <StrictMode>
-    <ToastHost>
-      <Admin />
-    </ToastHost>
-  </StrictMode>
-);
+// Guard the mount so importing this module has no side effect off the page:
+// the DOM behavioural tests import `Admin` directly and there is no #root then,
+// while admin.html always provides one in the browser.
+const rootElement = document.getElementById('root');
+if (rootElement) {
+  createRoot(rootElement).render(
+    <StrictMode>
+      <ToastHost>
+        <Admin />
+      </ToastHost>
+    </StrictMode>
+  );
+}

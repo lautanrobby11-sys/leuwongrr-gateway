@@ -75,12 +75,17 @@ chmod 0755 "$STAGE/scripts/"*.sh
 # checksums: it changed the RELEASE bytes, which changed the RELEASE entry in
 # manifest.sha256, which changed the archive. The commit's own committer date
 # carries the same "when" without that drift, so it replaces it under a name that
-# says what it actually is. `node` stays because the deploy installs against it
-# and the operator needs to see it, and it is stable for a pinned toolchain.
+# says what it actually is. The node line is a function of the commit too: it is
+# the major from package.json's committed `engines.node`, not `node --version`,
+# which is the building machine speaking and would give one commit two checksums
+# as soon as an operator rebuilt on a different patch level (the current VPS is
+# already one patch behind the workstation toolchain).
 SOURCE_DATE_EPOCH=$(git log -1 --format=%ct "$SHA")
 [[ $SOURCE_DATE_EPOCH =~ ^[0-9]+$ ]] || { echo "cannot resolve committer date for $SHA" >&2; exit 1; }
-printf 'git_sha=%s\ncommitted_at=%s\nnode=%s\nconsole=admin,member,chat,login\n' \
-  "$SHA" "$(date -u -d "@$SOURCE_DATE_EPOCH" +%Y-%m-%dT%H:%M:%SZ)" "$(node --version)" > "$STAGE/RELEASE"
+NODE_ENGINE_MAJOR=$(sed -n 's/.*"node"[[:space:]]*:[[:space:]]*">=[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$STAGE/package.json" | head -n1)
+[[ -n $NODE_ENGINE_MAJOR ]] || { echo 'cannot read engines.node from package.json' >&2; exit 1; }
+printf 'git_sha=%s\ncommitted_at=%s\nnode=v%s\nconsole=admin,member,chat,login\n' \
+  "$SHA" "$(date -u -d "@$SOURCE_DATE_EPOCH" +%Y-%m-%dT%H:%M:%SZ)" "$NODE_ENGINE_MAJOR" > "$STAGE/RELEASE"
 # Normalize the staged modes before anything hashes or archives them. A checkout
 # under a different umask would otherwise ship the same bytes under different
 # permission bits and produce a different archive. deploy.sh extracts with

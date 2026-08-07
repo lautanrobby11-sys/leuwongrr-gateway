@@ -79,7 +79,7 @@ describe('release artifact reproducibility (A14)', () => {
     await mkdir(path.join(stage, 'scripts'), { recursive: true });
     await writeFile(path.join(stage, 'dist', 'cli', 'keys.js'), 'export const keys = 1;\n');
     await writeFile(path.join(stage, 'dist', 'entry.js'), 'export const entry = 2;\n');
-    await writeFile(path.join(stage, 'package.json'), '{"name":"fixture"}\n');
+    await writeFile(path.join(stage, 'package.json'), '{"name":"fixture","engines":{"node":">=22.0.0"}}\n');
     await writeFile(path.join(stage, 'scripts', 'deploy.sh'), '#!/usr/bin/env bash\ntrue\n');
     // Deliberately wrong modes so the normalization has something to correct.
     await chmod(path.join(stage, 'dist', 'entry.js'), 0o600);
@@ -167,6 +167,11 @@ describe('release artifact reproducibility (A14)', () => {
     const record = await readFile(path.join(extracted, 'RELEASE'), 'utf8');
     const expected = new Date(FIXED_EPOCH * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
     expect(record).toContain(`committed_at=${expected}`);
+    // The node line must come from the committed `engines.node` (A14: a function
+    // of the commit), not from `node --version` on the building machine.
+    const engines = JSON.parse(readFileSync('package.json', 'utf8')).engines as { node?: string };
+    const major = /^\s*(?:[<>=^~]*)(\d+)/.exec(engines.node ?? '')?.[1];
+    expect(record).toContain(`node=v${major}`);
     // The drifting field must be gone, not merely accompanied.
     expect(record).not.toContain('built_at=');
   });

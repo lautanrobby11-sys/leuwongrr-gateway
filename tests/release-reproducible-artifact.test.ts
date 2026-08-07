@@ -160,7 +160,7 @@ describe('release artifact reproducibility (A14)', () => {
     const untar = spawnSync(
       'tar',
       ['-C', bashPath(extracted), '-xzf', bashPath(path.join(workspace, 'release.tar.gz'))],
-      { encoding: 'utf8' }
+      { encoding: 'utf8', env: { ...process.env, MSYS_NO_PATHCONV: '1' } }
     );
     expect(untar.status).toBe(0);
 
@@ -182,7 +182,7 @@ describe('release artifact reproducibility (A14)', () => {
     const listing = spawnSync(
       'tar',
       ['-tvf', bashPath(path.join(workspace, 'metadata.tar.gz')), '--numeric-owner'],
-      { encoding: 'utf8' }
+      { encoding: 'utf8', env: { ...process.env, MSYS_NO_PATHCONV: '1' } }
     );
     expect(listing.status).toBe(0);
 
@@ -217,7 +217,8 @@ describe('release artifact reproducibility (A14)', () => {
     const { archive } = await pack('run-modes');
     await writeFile(path.join(workspace, 'modes.tar.gz'), archive);
     const listing = spawnSync('tar', ['-tvf', bashPath(path.join(workspace, 'modes.tar.gz'))], {
-      encoding: 'utf8'
+      encoding: 'utf8',
+      env: { ...process.env, MSYS_NO_PATHCONV: '1' }
     });
     expect(listing.status).toBe(0);
 

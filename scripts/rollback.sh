@@ -67,6 +67,41 @@ verify_release_manifest() {
   }
 }
 
+# A rollback is release evidence (ADR-012): it must be durable, not just echoed.
+# Runs as root and must never follow a symlink a compromised service could
+# plant, so it writes into a root-only evidence directory (0700) rather than
+# the service-owned logs/, and it refuses non-regular or symlink targets even
+# there. The whole block is non-fatal: a rollback that already succeeded must
+# not be aborted by a logs filesystem problem.
+record_rollback_evidence() {
+  local evidence_dir="$ROOT/evidence"
+  if [[ -e $evidence_dir && ! -d $evidence_dir ]]; then
+    echo 'warning: evidence path is not a directory' >&2
+    return 0
+  fi
+  if ! mkdir -p "$evidence_dir" 2>/dev/null; then
+    echo 'warning: could not create evidence directory' >&2
+    return 0
+  fi
+  chmod 0700 "$evidence_dir" 2>/dev/null || true
+  if [[ -e "$evidence_dir/rollback.log" && ! -f "$evidence_dir/rollback.log" ]]; then
+    echo 'warning: refusing to write non-regular rollback.log' >&2
+    return 0
+  fi
+  if [[ -L "$evidence_dir/rollback.log" ]]; then
+    echo 'warning: refusing to follow symlink rollback.log' >&2
+    return 0
+  fi
+  if {
+    echo "$(date -u -Is) rolled back from $(basename "$CURRENT") to $SHA"
+    printf '%s\n' '---'
+  } >> "$evidence_dir/rollback.log" 2>/dev/null; then
+    chmod 0640 "$evidence_dir/rollback.log" 2>/dev/null || true
+  else
+    echo 'warning: could not append rollback.log' >&2
+  fi
+}
+
 if [[ ${BASH_SOURCE[0]} != "$0" ]]; then
   return 0
 fi
@@ -108,16 +143,5 @@ fi
 printf '%s\n' "$SHA" > "$ROOT/runtime/active-sha"
 chown "$SERVICE:$SERVICE" "$ROOT/runtime/active-sha"
 chmod 0640 "$ROOT/runtime/active-sha"
-# A rollback is release evidence (ADR-012): it must be durable, not just echoed.
-# The logs directory is created by deploy.sh at 0750 root:leuwongrr-gateway, so
-# this append lands with the rest of the runtime evidence. A filesystem failure
-# must not abort a rollback that already succeeded.
-install -d -o root -g "$SERVICE" -m 0750 "$ROOT/logs"
-if printf '%s rolled back from %s to %s\n' "$(date -u -Is)" "$(basename "$CURRENT")" "$SHA" \
-  >> "$ROOT/logs/rollback.log" 2>/dev/null; then
-  chown "$SERVICE:$SERVICE" "$ROOT/logs/rollback.log"
-  chmod 0640 "$ROOT/logs/rollback.log"
-else
-  echo 'warning: could not append rollback.log' >&2
-fi
+record_rollback_evidence
 echo "rolled back from $CURRENT to $TARGET"

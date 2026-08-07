@@ -46,14 +46,18 @@ function run(): { status: number; stdout: string; stderr: string } {
 set -Eeuo pipefail
 source scripts/rollback.sh
 SERVICE=leuwongrr-gateway
-ROOT='${rootBash}'
+ROOT=$ROLLBACK_TEST_ROOT
 CURRENT='aaaa'
 TARGET='bbbb'
 SHA='bbbb'
 record_rollback_evidence
 echo "rolled back from $CURRENT to $TARGET"
 `;
-  const result = spawnSync(bash, ['-c', script], { cwd: process.cwd(), encoding: 'utf8' });
+  const result = spawnSync(bash, ['-c', script], {
+    cwd: process.cwd(),
+    encoding: 'utf8',
+    env: { ...process.env, ROLLBACK_TEST_ROOT: rootBash }
+  });
   return { status: result.status ?? 1, stdout: result.stdout, stderr: result.stderr };
 }
 
@@ -104,6 +108,25 @@ describe('rollback evidence (PR #69)', () => {
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain('rolled back from aaaa to bbbb');
     expect(result.stderr).toContain('warning');
+  });
+
+  it('refuses to use an evidence directory that is a symlink', () => {
+    const rootDir = makeRoot();
+    const realDir = join(rootDir, 'real');
+    mkdirSync(realDir, { recursive: true });
+    try {
+      symlinkSync(realDir, join(rootDir, 'evidence'));
+    } catch {
+      // Windows without symlink privilege: fall back to a regular file so the
+      // not-a-directory guard trips instead.
+      writeFileSync(join(rootDir, 'evidence'), 'x\n');
+    }
+
+    const result = run();
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toMatch(/refusing to use symlink evidence directory|not a directory/);
+    expect(result.stdout).toContain('rolled back from aaaa to bbbb');
+    expect(existsSync(join(realDir, 'rollback.log'))).toBe(false);
   });
 
   it('keeps the service logs directory out of the evidence path', () => {

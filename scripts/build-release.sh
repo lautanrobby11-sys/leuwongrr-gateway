@@ -69,16 +69,51 @@ chmod 0755 "$STAGE/scripts/"*.sh
 # The operator key CLI ships as part of dist so issuance always matches the
 # running service instead of a separate copy of the hashing rules.
 [[ -f $STAGE/dist/cli/keys.js ]] || { echo 'operator key CLI missing from build output' >&2; exit 1; }
-printf 'git_sha=%s\nbuilt_at=%s\nnode=%s\nconsole=admin,member,chat,login\n' \
-  "$SHA" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(node --version)" > "$STAGE/RELEASE"
+# A14: every value written here must be a function of the commit, never of the
+# machine or the moment. `built_at=$(date -u ...)` used to sit in this record and
+# was the reason two builds of one commit produced two different tarball
+# checksums: it changed the RELEASE bytes, which changed the RELEASE entry in
+# manifest.sha256, which changed the archive. The commit's own committer date
+# carries the same "when" without that drift, so it replaces it under a name that
+# says what it actually is. The node line is a function of the commit too: it is
+# the major from package.json's committed `engines.node`, not `node --version`,
+# which is the building machine speaking and would give one commit two checksums
+# as soon as an operator rebuilt on a different patch level (the current VPS is
+# already one patch behind the workstation toolchain).
+SOURCE_DATE_EPOCH=$(git log -1 --format=%ct "$SHA")
+[[ $SOURCE_DATE_EPOCH =~ ^[0-9]+$ ]] || { echo "cannot resolve committer date for $SHA" >&2; exit 1; }
+NODE_ENGINE_MAJOR=$(sed -n 's/.*"node"[[:space:]]*:[[:space:]]*">=[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$STAGE/package.json" | head -n1)
+[[ -n $NODE_ENGINE_MAJOR ]] || { echo 'cannot read engines.node from package.json' >&2; exit 1; }
+printf 'git_sha=%s\ncommitted_at=%s\nnode=v%s\nconsole=admin,member,chat,login\n' \
+  "$SHA" "$(date -u -d "@$SOURCE_DATE_EPOCH" +%Y-%m-%dT%H:%M:%SZ)" "$NODE_ENGINE_MAJOR" > "$STAGE/RELEASE"
+# Normalize the staged modes before anything hashes or archives them. A checkout
+# under a different umask would otherwise ship the same bytes under different
+# permission bits and produce a different archive. deploy.sh extracts with
+# --no-same-owner --no-same-permissions, so this cannot change what production
+# ends up running.
+find "$STAGE" -type d -exec chmod 0755 {} +
+find "$STAGE" -type f -exec chmod 0644 {} +
+chmod 0755 "$STAGE/scripts/"*.sh
 # The manifest must not list itself. Redirection creates and truncates
 # manifest.sha256 before find runs, so a self-entry records the checksum of an
 # empty file and deploy.sh then rejects every artifact with one mismatch.
+# LC_ALL=C so the sort order is the same on an operator workstation with any
+# locale as it is on the CI runner; a collating difference would reorder the
+# manifest lines and change its checksum without any file having changed.
 (
   cd "$STAGE"
-  find . -type f ! -path ./manifest.sha256 -print0 | sort -z | xargs -0 sha256sum > manifest.sha256
+  find . -type f ! -path ./manifest.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > manifest.sha256
 )
-tar -C "$STAGE" -czf ".release/$SHA.tar.gz" .
+# A14: --sort=name fixes member order, --owner/--group/--numeric-owner strip the
+# building account (it was recorded as the operator's own uid), --mtime pins every
+# timestamp to the commit, and gzip -n omits the name and timestamp that the
+# compressor would otherwise stamp into its own header. Without all four, one
+# commit had two checksums and the .sha256 file bound the artifact to nothing more
+# than the particular run that happened to produce it.
+tar --sort=name --format=gnu \
+  --owner=0 --group=0 --numeric-owner \
+  --mtime="@$SOURCE_DATE_EPOCH" \
+  -C "$STAGE" -cf - . | gzip -n -9 > ".release/$SHA.tar.gz"
 (
   cd .release
   sha256sum "$SHA.tar.gz" > "$SHA.tar.gz.sha256"

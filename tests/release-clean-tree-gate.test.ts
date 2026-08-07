@@ -177,7 +177,10 @@ describe('release clean-tree gate wiring', () => {
     expect(build).toContain('CLEAN_TREE="$SCRIPT_DIR/assert-clean-tree.sh"');
     const preflight = build.indexOf('bash "$CLEAN_TREE" preflight');
     const compile = build.indexOf('npm run build:all');
-    const tarball = build.indexOf('tar -C "$STAGE"');
+    // Matches the `-C "$STAGE"` operand rather than a whole `tar ...` prefix: the
+    // reproducible invocation (A14) puts --sort/--owner/--mtime flags ahead of
+    // -C, so anchoring on `tar -C` silently stopped locating the packaging step.
+    const tarball = build.indexOf('-C "$STAGE" -cf -');
     const checksum = build.indexOf('sha256sum "$SHA.tar.gz"');
     const post = build.indexOf(`bash "$CLEAN_TREE" 'after packaging'`);
     expect(preflight).toBeGreaterThan(-1);

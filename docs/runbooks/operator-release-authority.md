@@ -57,6 +57,17 @@ Acceptance:
 - `npm run ci:local` succeeds: conventions, secret scan, lint, typecheck, tests, backend and console build, shell syntax, immutable package, manifest verification.
 - Release-critical shell scripts and systemd units contain LF only; the build normalizes its staged copy and verifies the finished artifact again.
 - The artifact and checksum names exactly match the commit SHA.
+- The artifact is reproducible from the commit (A14, closed 7 August 2026). Every
+  value packaged is a function of the commit, not of the machine or the moment:
+  `RELEASE` carries `committed_at` from `git log -1 --format=%ct` instead of a
+  wall-clock `built_at`, staged modes are normalized, `manifest.sha256` is sorted
+  under `LC_ALL=C`, `tar` pins member order, owner and mtime with
+  `--sort=name`, `--owner=0`, `--group=0`, `--numeric-owner` and `--mtime`, and
+  `gzip -n` omits its own name and timestamp header. Before this, one commit had
+  many tarball checksums and the `.sha256` bound the artifact only to the run
+  that produced it. An operator can now rebuild the same SHA on another clean
+  checkout and expect the identical checksum; a mismatch is evidence that the
+  input differed, not build noise.
 - Matching PR quality diagnostics (if the SHA came from a PR) show required gates `success`.
 
 Do not put `.env`, API keys, backup identities, cookies, provider credentials, or Cloudflare credentials in the checkout, artifact, GitHub, screenshots, or release evidence.

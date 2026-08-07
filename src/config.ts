@@ -137,6 +137,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   ) {
     throw new Error('INTERNAL_METRICS_TOKEN must differ from INTERNAL_READY_TOKEN');
   }
+  // A20: an attacker who can set env can only hold all three secrets, but a
+  // misconfigured deployment that reuses the pepper for an internal token would
+  // let anyone with the loopback-only token hash traffic the pepper guards.
+  // Pepper is the root credential, so it must differ from both internal tokens.
+  if (config.API_KEY_PEPPER === config.INTERNAL_METRICS_TOKEN) {
+    throw new Error('API_KEY_PEPPER must differ from INTERNAL_METRICS_TOKEN');
+  }
+  if (config.API_KEY_PEPPER === config.INTERNAL_READY_TOKEN) {
+    throw new Error('API_KEY_PEPPER must differ from INTERNAL_READY_TOKEN');
+  }
   let origins: ReadonlySet<string>;
   try {
     origins = allowedConsoleOrigins(config);

@@ -83,6 +83,7 @@ verify_release_manifest "$TARGET" || fail 'rollback target failed integrity veri
 
 ENV_FILE="$ROOT/config/gateway.env"
 [[ -f $ENV_FILE && $(stat -c %a "$ENV_FILE") == 600 ]] || fail 'valid gateway.env is required'
+[[ $(stat -c %U:%G "$ENV_FILE") == root:root ]] || fail 'gateway.env must be owned by root:root'
 set -a
 # shellcheck disable=SC1090
 . "$ENV_FILE"
@@ -107,4 +108,16 @@ fi
 printf '%s\n' "$SHA" > "$ROOT/runtime/active-sha"
 chown "$SERVICE:$SERVICE" "$ROOT/runtime/active-sha"
 chmod 0640 "$ROOT/runtime/active-sha"
+# A rollback is release evidence (ADR-012): it must be durable, not just echoed.
+# The logs directory is created by deploy.sh at 0750 root:leuwongrr-gateway, so
+# this append lands with the rest of the runtime evidence. A filesystem failure
+# must not abort a rollback that already succeeded.
+install -d -o root -g "$SERVICE" -m 0750 "$ROOT/logs"
+if printf '%s rolled back from %s to %s\n' "$(date -u -Is)" "$(basename "$CURRENT")" "$SHA" \
+  >> "$ROOT/logs/rollback.log" 2>/dev/null; then
+  chown "$SERVICE:$SERVICE" "$ROOT/logs/rollback.log"
+  chmod 0640 "$ROOT/logs/rollback.log"
+else
+  echo 'warning: could not append rollback.log' >&2
+fi
 echo "rolled back from $CURRENT to $TARGET"

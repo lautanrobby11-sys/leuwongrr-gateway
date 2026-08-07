@@ -59,6 +59,31 @@ describe('configuration guardrails', () => {
         OTP_WEBHOOK_TOKEN: 'z'.repeat(32)
       }).OTP_DELIVERY
     ).toBe('webhook'));
+  it('rejects an API key pepper that reuses an internal token (A20)', () => {
+    expect(() =>
+      loadConfig({
+        ...base,
+        API_KEY_PEPPER: 'p'.repeat(32),
+        INTERNAL_READY_TOKEN: 'r'.repeat(32),
+        INTERNAL_METRICS_TOKEN: 'p'.repeat(32)
+      })
+    ).toThrow(/API_KEY_PEPPER must differ from INTERNAL_METRICS_TOKEN/);
+    expect(() =>
+      loadConfig({
+        ...base,
+        API_KEY_PEPPER: 'y'.repeat(32),
+        INTERNAL_METRICS_TOKEN: 'm'.repeat(32)
+      })
+    ).toThrow(/API_KEY_PEPPER must differ from INTERNAL_READY_TOKEN/);
+  });
+  it('accepts a pepper distinct from both internal tokens', () =>
+    expect(
+      loadConfig({
+        ...base,
+        INTERNAL_METRICS_TOKEN: 'm'.repeat(32),
+        INTERNAL_READY_TOKEN: 'r'.repeat(32)
+      }).API_KEY_PEPPER
+    ).toBe('x'.repeat(32)));
 });
 
 describe('explicit route and capability policy', () => {

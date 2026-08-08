@@ -12,8 +12,9 @@ An SHA whose deploy invocation already failed is abandoned. Build and transfer a
 ## Preconditions
 
 - The new SHA passed PR diagnostics and the full operator workstation release gate.
-- Only `<sha>.tar.gz` and `<sha>.tar.gz.sha256` were transferred to `/tmp`.
+- Only `<sha>.tar.gz`, `<sha>.tar.gz.sha256`, and `<sha>.tar.gz.sha256.sig` were transferred to `/tmp`.
 - `/opt/leuwongrr-gateway/config/gateway.env` remains root-owned mode 600.
+- `/opt/leuwongrr-gateway/config/release-signers` holds the operator's release-signer public key (seeded at first bootstrap, rotated directly on the host; see ADR-013).
 - No release directory exists for the new SHA.
 
 ## Verify and extract
@@ -34,10 +35,12 @@ Verify the transferred artifact before extracting executable content:
   cd /tmp
   sha256sum -c "$(basename "$CHECKSUM")"
 )
+ssh-keygen -Y verify -f /opt/leuwongrr-gateway/config/release-signers \
+  -I release-signer -n file -s "$CHECKSUM.sig" < "$CHECKSUM"
 sudo test ! -e "/opt/leuwongrr-gateway/releases/$SHA"
 ```
 
-If the checksum fails or the release directory exists, stop and abandon this SHA.
+If the checksum or the signature fails, or the release directory exists, stop and abandon this SHA.
 
 Extract only the canonical deploy entrypoint, then verify its bytes against the manifest inside the already-verified artifact:
 
@@ -92,15 +95,16 @@ The temporary entrypoint is executable staging, not configuration. It is deleted
 
 ## First deploy on a bare host
 
-Host preparation before any release exists. `scripts/vps-bootstrap.sh` is staged into the artifact for exactly this reason: copying the repository to the VPS is forbidden, so the artifact is the only path by which the documented host-prep script reaches the host. It creates `/opt/leuwongrr-gateway`, the service user, the directory tree, a mode-600 `gateway.env` seed, and installs the systemd unit. It does not start the service and does not deploy.
+Host preparation before any release exists. `scripts/vps-bootstrap.sh` is staged into the artifact for exactly this reason: copying the repository to the VPS is forbidden, so the artifact is the only path by which the documented host-prep script reaches the host. It creates `/opt/leuwongrr-gateway`, the service user, the directory tree, a mode-600 `gateway.env` seed, seeds the release-signers trust anchor from the artifact's `keys/release-signers`, and installs the systemd unit. It does not start the service and does not deploy.
 
-Preconditions: the SHA passed PR diagnostics and the full operator workstation release gate; only `<sha>.tar.gz` and `<sha>.tar.gz.sha256` were transferred to `/tmp`; `/opt/leuwongrr-gateway` does not exist yet.
+Preconditions: the SHA passed PR diagnostics and the full operator workstation release gate; only `<sha>.tar.gz`, `<sha>.tar.gz.sha256`, and `<sha>.tar.gz.sha256.sig` were transferred to `/tmp`; `/opt/leuwongrr-gateway` does not exist yet.
 
 ```bash
 SHA=<new-full-40-character-sha>
 ARTIFACT="/tmp/$SHA.tar.gz"
 BOOTSTRAP="/tmp/leuwongrr-bootstrap-$SHA.sh"
 UNIT="/tmp/leuwongrr-gateway-$SHA.service"
+SIGNERS="/tmp/leuwongrr-signers-$SHA"
 ```
 
 Verify the transferred artifact before extracting executable content:
@@ -120,9 +124,11 @@ Extract the bootstrap script and the unit it installs, then verify both against 
 ```bash
 tar -xOf "$ARTIFACT" ./scripts/vps-bootstrap.sh > "$BOOTSTRAP"
 tar -xOf "$ARTIFACT" ./infra/systemd/leuwongrr-gateway.service > "$UNIT"
+tar -xOf "$ARTIFACT" ./keys/release-signers > "$SIGNERS"
 chmod 0700 "$BOOTSTRAP"
 chmod 0600 "$UNIT"
-for pair in "./scripts/vps-bootstrap.sh:$BOOTSTRAP" "./infra/systemd/leuwongrr-gateway.service:$UNIT"; do
+chmod 0600 "$SIGNERS"
+for pair in "./scripts/vps-bootstrap.sh:$BOOTSTRAP" "./infra/systemd/leuwongrr-gateway.service:$UNIT" "./keys/release-signers:$SIGNERS"; do
   MEMBER=${pair%%:*}
   LOCAL=${pair#*:}
   EXPECTED=$(tar -xOf "$ARTIFACT" ./manifest.sha256 |
@@ -152,15 +158,17 @@ Expected output is `bootstrap_carriage_returns=0`.
 Run it once, passing the verified unit as its argument:
 
 ```bash
-sudo bash "$BOOTSTRAP" "$UNIT"
+sudo bash "$BOOTSTRAP" "$UNIT" "$SIGNERS"
 ```
 
 Then substitute secrets in place and remove the staging copies:
 
 ```bash
 sudo nano /opt/leuwongrr-gateway/config/gateway.env   # replace every REPLACE_ME
-rm -f "$BOOTSTRAP" "$UNIT"
+rm -f "$BOOTSTRAP" "$UNIT" "$SIGNERS"
 ```
+
+`/opt/leuwongrr-gateway/config/release-signers` was seeded by the bootstrap from the signers file passed above, which itself was extracted from the artifact and verified against `manifest.sha256`. The signature of the transferred `.sig` is **not** verified during first bootstrap: no trust anchor exists yet. The operator establishes that anchor out-of-band by confirming the seeded fingerprint matches the release-signer key: `ssh-keygen -lf /opt/leuwongrr-gateway/config/release-signers`. Rotation never overwrites an existing file: the operator updates the host file directly, in the same commit that changes `keys/release-signers` in the repository.
 
 The seed refuses to boot while any `REPLACE_ME` remains: each placeholder is shorter than the minimum its own schema rule enforces, so `loadConfig()` fails naming the field rather than starting in a half-configured state. Generate values with `openssl rand -hex 32`; never paste them into chat, Git, or Notion.
 

@@ -35,6 +35,9 @@ npm --prefix web ci --no-audit --no-fund
 npm run ci:local
 SHA=$(git rev-parse HEAD)
 sha256sum -c ".release/$SHA.tar.gz.sha256"
+bash scripts/sign-release.sh "$SHA"
+ssh-keygen -Y verify -f keys/release-signers -I release-signer -n file \
+  -s ".release/$SHA.tar.gz.sha256.sig" < ".release/$SHA.tar.gz.sha256"
 git status --short
 ```
 
@@ -57,6 +60,10 @@ Acceptance:
 - `npm run ci:local` succeeds: conventions, secret scan, lint, typecheck, tests, backend and console build, shell syntax, immutable package, manifest verification.
 - Release-critical shell scripts and systemd units contain LF only; the build normalizes its staged copy and verifies the finished artifact again.
 - The artifact and checksum names exactly match the commit SHA.
+- The artifact is signed (A16, closed 8 August 2026): `.release/$SHA.tar.gz.sha256.sig`
+  exists and verifies against `keys/release-signers` with the release-signer
+  principal. CI never signs: its artifacts are evidence, not deployable input
+  (ADR-013). The operator's private signing key never leaves the workstation.
 - The artifact is reproducible from the commit (A14, closed 7 August 2026). Every
   value packaged is a function of the commit, not of the machine or the moment:
   `RELEASE` carries `committed_at` from `git log -1 --format=%ct` instead of a
@@ -79,10 +86,12 @@ From the operator workstation, not from inside the VPS:
 ```bash
 SHA=$(git rev-parse HEAD)
 scp ".release/$SHA.tar.gz" ".release/$SHA.tar.gz.sha256" \
-  ubuntu@18.136.26.152:/tmp/
+  ".release/$SHA.tar.gz.sha256.sig" ubuntu@18.136.26.152:/tmp/
 ```
 
-The VPS receives only the artifact and checksum. Do not copy the repository, `.git`, `node_modules`, local environment files, or private keys.
+The VPS receives only the artifact, checksum, and signature. Do not copy the repository, `.git`, `node_modules`, local environment files, private keys, or the signing key.
+
+The host verifies the signature against its own trust anchor `/opt/leuwongrr-gateway/config/release-signers`, seeded once from the artifact's `keys/release-signers` (vps-bootstrap) and rotated directly by the operator (ADR-013).
 
 ## Activation
 
@@ -110,6 +119,7 @@ Record only sanitized facts:
 - release and previous full SHA;
 - local validation command outcomes;
 - artifact SHA-256;
+- signature verification result and signer fingerprint;
 - migration ID or `none`;
 - `active-sha`, `ActiveState`, `NRestarts`, and `MemoryCurrent`;
 - loopback listeners;

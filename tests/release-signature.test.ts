@@ -239,6 +239,11 @@ describe('release artifact signature (A16)', () => {
     const bootstrap = readFileSync(join(process.cwd(), 'scripts', 'vps-bootstrap.sh'), 'utf8');
     expect(bootstrap).toContain('config/release-signers');
     expect(bootstrap).toContain('already present; not overwriting');
+    // The bare-host runbook extracts only the script into /tmp, so the signers
+    // source must be an explicit argument, not a relative lookup from the
+    // staged copy (CodeRabbit on PR #70).
+    expect(bootstrap).toContain('SIGNERS_SRC=${2:-$SCRIPT_DIR/../keys/release-signers}');
+    expect(bootstrap).toContain('install -o root -g root -m 0644 "$SIGNERS_SRC"');
   });
 
   it('keys/release-signers holds only a public key and no private key block', () => {

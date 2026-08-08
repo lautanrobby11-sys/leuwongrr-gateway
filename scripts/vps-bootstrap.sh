@@ -8,6 +8,11 @@ ROOT=/opt/leuwongrr-gateway
 SERVICE_USER=leuwongrr-gateway
 UNIT_SRC=${1:-infra/systemd/leuwongrr-gateway.service}
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+# The bare-host runbook extracts only the bootstrap script into /tmp, so a
+# relative lookup from the staged copy would resolve to a nonexistent
+# /keys/release-signers. The runbook passes the verified signers file as the
+# second argument; the default covers running from a checkout or artifact tree.
+SIGNERS_SRC=${2:-$SCRIPT_DIR/../keys/release-signers}
 
 # Host prerequisites for backup, restore, and the external dead-man ping.
 # The gateway itself embeds SQLite through better-sqlite3 and never shells out
@@ -127,11 +132,11 @@ chown root:root "$ROOT/config/gateway.env"
 # authoritative over the copy inside whatever artifact bootstrapped this host.
 if [[ -f $ROOT/config/release-signers ]]; then
   echo "$ROOT/config/release-signers already present; not overwriting" >&2
-elif [[ -f $SCRIPT_DIR/../keys/release-signers ]]; then
-  install -o root -g root -m 0644 "$SCRIPT_DIR/../keys/release-signers" "$ROOT/config/release-signers"
-  echo "seeded $ROOT/config/release-signers from keys/release-signers" >&2
+elif [[ -f $SIGNERS_SRC ]]; then
+  install -o root -g root -m 0644 "$SIGNERS_SRC" "$ROOT/config/release-signers"
+  echo "seeded $ROOT/config/release-signers from $SIGNERS_SRC" >&2
 else
-  echo "keys/release-signers not found next to $SCRIPT_DIR; operator must install $ROOT/config/release-signers manually" >&2
+  echo "release signers source not found: $SIGNERS_SRC; operator must install $ROOT/config/release-signers manually" >&2
 fi
 
 if [[ -f $UNIT_SRC ]]; then

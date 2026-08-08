@@ -104,6 +104,7 @@ SHA=<new-full-40-character-sha>
 ARTIFACT="/tmp/$SHA.tar.gz"
 BOOTSTRAP="/tmp/leuwongrr-bootstrap-$SHA.sh"
 UNIT="/tmp/leuwongrr-gateway-$SHA.service"
+SIGNERS="/tmp/leuwongrr-signers-$SHA"
 ```
 
 Verify the transferred artifact before extracting executable content:
@@ -123,9 +124,11 @@ Extract the bootstrap script and the unit it installs, then verify both against 
 ```bash
 tar -xOf "$ARTIFACT" ./scripts/vps-bootstrap.sh > "$BOOTSTRAP"
 tar -xOf "$ARTIFACT" ./infra/systemd/leuwongrr-gateway.service > "$UNIT"
+tar -xOf "$ARTIFACT" ./keys/release-signers > "$SIGNERS"
 chmod 0700 "$BOOTSTRAP"
 chmod 0600 "$UNIT"
-for pair in "./scripts/vps-bootstrap.sh:$BOOTSTRAP" "./infra/systemd/leuwongrr-gateway.service:$UNIT"; do
+chmod 0600 "$SIGNERS"
+for pair in "./scripts/vps-bootstrap.sh:$BOOTSTRAP" "./infra/systemd/leuwongrr-gateway.service:$UNIT" "./keys/release-signers:$SIGNERS"; do
   MEMBER=${pair%%:*}
   LOCAL=${pair#*:}
   EXPECTED=$(tar -xOf "$ARTIFACT" ./manifest.sha256 |
@@ -155,17 +158,17 @@ Expected output is `bootstrap_carriage_returns=0`.
 Run it once, passing the verified unit as its argument:
 
 ```bash
-sudo bash "$BOOTSTRAP" "$UNIT"
+sudo bash "$BOOTSTRAP" "$UNIT" "$SIGNERS"
 ```
 
 Then substitute secrets in place and remove the staging copies:
 
 ```bash
 sudo nano /opt/leuwongrr-gateway/config/gateway.env   # replace every REPLACE_ME
-rm -f "$BOOTSTRAP" "$UNIT"
+rm -f "$BOOTSTRAP" "$UNIT" "$SIGNERS"
 ```
 
-`/opt/leuwongrr-gateway/config/release-signers` was seeded by the bootstrap from the artifact's `keys/release-signers`. Verify it matches the operator's key before any deploy: `ssh-keygen -lf /opt/leuwongrr-gateway/config/release-signers` should show the expected signer fingerprint. Rotation never overwrites an existing file: the operator updates the host file directly, in the same commit that changes `keys/release-signers` in the repository.
+`/opt/leuwongrr-gateway/config/release-signers` was seeded by the bootstrap from the signers file passed above, which itself was extracted from the artifact and verified against `manifest.sha256`. The signature of the transferred `.sig` is **not** verified during first bootstrap: no trust anchor exists yet. The operator establishes that anchor out-of-band by confirming the seeded fingerprint matches the release-signer key: `ssh-keygen -lf /opt/leuwongrr-gateway/config/release-signers`. Rotation never overwrites an existing file: the operator updates the host file directly, in the same commit that changes `keys/release-signers` in the repository.
 
 The seed refuses to boot while any `REPLACE_ME` remains: each placeholder is shorter than the minimum its own schema rule enforces, so `loadConfig()` fails naming the field rather than starting in a half-configured state. Generate values with `openssl rand -hex 32`; never paste them into chat, Git, or Notion.
 

@@ -37,7 +37,13 @@ ART="$SCRIPT_DIR/../.release/$SHA.tar.gz"
 }
 command -v ssh-keygen >/dev/null 2>&1 || { echo 'ssh-keygen required' >&2; exit 1; }
 
-ssh-keygen -Y sign -f "$SIGN_KEY" -n "$NAMESPACE" "$ART.sha256" >/dev/null 2>&1
+# Keep stderr visible: a failed sign must not fail silently under `set -e`.
+ssh-keygen -Y sign -f "$SIGN_KEY" -n "$NAMESPACE" "$ART.sha256" >/dev/null
 
-ssh-keygen -lf "$SIGN_KEY.pub"
+# Fingerprint evidence without assuming a .pub file sits beside the key.
+if [[ -f ${SIGN_KEY}.pub ]]; then
+  ssh-keygen -lf "${SIGN_KEY}.pub"
+else
+  ssh-keygen -y -f "$SIGN_KEY" | ssh-keygen -lf -
+fi
 echo "signed: $ART.sha256.sig"

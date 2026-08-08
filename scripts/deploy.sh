@@ -12,6 +12,9 @@ readonly HEALTH_REQUEST_TIMEOUT_SECONDS=5
 readonly HEALTH_STARTUP_DEADLINE_SECONDS=90
 readonly HEALTH_RETRY_INTERVAL_SECONDS=1
 readonly NPM_INSTALL_PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+readonly RELEASE_SIGNERS=/opt/leuwongrr-gateway/config/release-signers
+readonly SIGNER_PRINCIPAL=release-signer
+readonly SIGNATURE_NAMESPACE=file
 
 resolve_current() {
   [[ -L $ROOT/current ]] || return 0
@@ -35,6 +38,28 @@ trap cleanup_failed_release EXIT
 fail() {
   echo "$1" >&2
   exit 1
+}
+
+# A16: the checksum travels with the artifact, so it proves integrity but not
+# authenticity. The trust anchor is the host key list: a forged artifact fails
+# here because the attacker lacks the operator's private key. The signature
+# binds the .sha256 file, which in turn binds the tarball by content (A14).
+# OpenSSH 9.6/10.x -Y verify reads the message from stdin and ignores a
+# positional file argument, so the checksum is fed via redirection. The signers
+# path is a parameter defaulting to the host anchor so tests can source this
+# file and point it at a disposable key list.
+verify_artifact_signature() {
+  local artifact=$1
+  local signers=${2:-$RELEASE_SIGNERS}
+  local principal=${SIGNER_PRINCIPAL:-release-signer}
+  local ns=${SIGNATURE_NAMESPACE:-file}
+  [[ -f ${artifact}.sha256.sig ]] || fail 'artifact signature (.sha256.sig) missing; sign locally with scripts/sign-release.sh'
+  [[ -f $signers ]] || fail "release signers file missing: $signers (seed from the artifact's keys/ on bootstrap)"
+  command -v ssh-keygen >/dev/null 2>&1 || fail 'ssh-keygen required for artifact signature verification'
+  if ! ssh-keygen -Y verify -f "$signers" -I "$principal" -n "$ns" \
+    -s "${artifact}.sha256.sig" < "${artifact}.sha256" >/dev/null 2>&1; then
+    fail 'artifact signature verification failed'
+  fi
 }
 
 sync_unit() {
@@ -137,6 +162,8 @@ fi
   cd "$(dirname "$ARTIFACT")"
   sha256sum -c "$(basename "$ARTIFACT").sha256"
 )
+
+verify_artifact_signature "$ARTIFACT"
 
 id "$SERVICE" >/dev/null 2>&1 || fail 'service user is missing'
 install -d -o root -g "$SERVICE" -m 0750 "$ROOT" "$ROOT/releases" "$ROOT/config"

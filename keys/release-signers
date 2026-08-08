@@ -1,0 +1,5 @@
+# OpenSSH allowed_signers for release artifacts (A16). One line per authorized
+# signing key, format: [options] principal keytype base64 [comment]. This is the
+# PUBLIC half of the release-signer key; the private key lives only on the
+# operator workstation (see docs/adr/ADR-013-artifact-signing.md).
+release-signer ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINXO/rkQbgV1PbFFT9wFJaU0bQ5nB04pD3/JHm1cx+yH leuwongrr-release-signer

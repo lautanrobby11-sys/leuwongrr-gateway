@@ -53,6 +53,13 @@ for unit in leuwongrr-gateway.service leuwongrr-gateway-snapshot.service leuwong
   [[ -f infra/systemd/$unit ]] || { echo "unit missing from repository: infra/systemd/$unit" >&2; exit 1; }
   cp "infra/systemd/$unit" "$STAGE/infra/systemd/"
 done
+# A16: ship the current release signers so a bare-host bootstrap can seed
+# /opt/leuwongrr-gateway/config/release-signers from the artifact. The host file
+# is the trust anchor for deploy-time signature verification; the copy inside
+# the artifact only bootstraps that anchor on first install.
+[[ -f keys/release-signers ]] || { echo 'keys/release-signers missing from repository' >&2; exit 1; }
+mkdir -p "$STAGE/keys"
+cp keys/release-signers "$STAGE/keys/"
 
 # Git for Windows may expose CRLF in an existing checkout even after policy is
 # added. Normalize only the staged release copy, then reject any remaining CR

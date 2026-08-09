@@ -14,7 +14,11 @@ function resolveBash(): string {
 }
 
 describe('production configuration deploy guard', () => {
-  it('rejects active placeholders before release-side actions', () => {
+  it.each([
+    ['unquoted', 'OMNIROUTE_API_KEY=REPLACE_ME'],
+    ['single-quoted', "OMNIROUTE_API_KEY='REPLACE_ME'"],
+    ['double-quoted', 'OMNIROUTE_API_KEY="REPLACE_ME"'],
+  ])('rejects active placeholder in %s form before release-side actions', (_form, placeholderLine) => {
     const root = mkdtempSync(join(tmpdir(), 'lwrr-deploy-config-'));
     try {
       const envFile = join(root, 'gateway.env');
@@ -27,7 +31,7 @@ describe('production configuration deploy guard', () => {
           'GATEWAY_PORT=2080',
           'OMNIROUTE_URL=http://127.0.0.1:20128',
           'DATABASE_PATH=/opt/leuwongrr-gateway/data/gateway.db',
-          'OMNIROUTE_API_KEY=REPLACE_ME',
+          placeholderLine,
           `API_KEY_PEPPER=${'p'.repeat(32)}`,
           `INTERNAL_READY_TOKEN=${'r'.repeat(32)}`,
           'CONSOLE_ENABLED=false'

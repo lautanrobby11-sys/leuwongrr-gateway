@@ -52,7 +52,7 @@ validate_production_config() {
   for key in OMNIROUTE_API_KEY API_KEY_PEPPER INTERNAL_READY_TOKEN; do
     grep -Eq "^${key}=.+$" "$env_file" || fail "production config missing $key"
   done
-  if grep -Eq '(^|=)REPLACE_ME($|[[:space:]])' "$env_file"; then
+  if grep -Eq "(^|=)[\"']?REPLACE_ME[\"']?(\$|[[:space:]])" "$env_file"; then
     fail 'production config contains placeholder values'
   fi
 }

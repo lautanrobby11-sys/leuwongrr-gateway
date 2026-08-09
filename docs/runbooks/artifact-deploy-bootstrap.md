@@ -7,7 +7,7 @@ Two procedures share one rule: every script root executes on the host is extract
 
 Use the recovery path only when the deploy entrypoint in the active release fails `bash -n`. It does not authorize a host hotfix: the executed entrypoint is extracted from a newly merged, workstation-authorized immutable artifact and verified against both its outer checksum and inner manifest.
 
-An SHA whose deploy invocation already failed is abandoned. Build and transfer a new merged SHA before using this procedure.
+An SHA whose deploy invocation already failed is abandoned. The sole exception is a *configuration-only preflight refusal*: the invocation must stop at the initial production-config guard before a release directory is created or used, and sanitized release-authority evidence must prove no dependency install, application preflight, database mutation, activation, restart, health check, traffic, or public exposure. Without that explicit exception approval, build and transfer a new merged SHA before using this procedure.
 
 ## Preconditions
 

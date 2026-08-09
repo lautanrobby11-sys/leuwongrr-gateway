@@ -110,7 +110,7 @@ sudo bash /opt/leuwongrr-gateway/current/scripts/deploy.sh \
 
 If the active entrypoint itself fails syntax validation, do not edit it on the host and do not retry an already-attempted SHA. Create and authorize a new merged SHA, then follow `docs/runbooks/artifact-deploy-bootstrap.md` to verify and execute the deploy entrypoint contained in that new immutable artifact.
 
-Never retry a failed deployment with the same SHA after an invocation fails or an immutable release directory is created. Resolve the failure in source, create a new commit, rerun the workstation gate, and deploy the new SHA. The sole exception is a configuration-only preflight refusal: the exact artifact must have passed the workstation gate, checksum, signature, and manifest verification; the refusal must be exclusively missing or placeholder production configuration; and sanitized evidence must prove no release directory, dependency install, application preflight, database mutation, `current`/`active-sha` change, service restart, health request, traffic, or public exposure. The release owner must approve a single later canonical activation attempt. Any failure during that attempt permanently abandons the SHA and requires a new reviewed SHA.
+Never retry a failed deployment with the same SHA after an invocation fails or an immutable release directory is created. Resolve the failure in source, create a new commit, rerun the workstation gate, and deploy the new SHA. The sole exception is a configuration-only preflight refusal: the exact artifact must have passed the workstation gate, checksum, signature, and manifest verification; the refusal must be exclusively missing or placeholder production configuration; the original `API_KEY_PEPPER` must be present and unchanged for restored API-key hashes; and sanitized evidence must prove no release directory, dependency install, application preflight, database mutation, `current`/`active-sha` change, service restart, health request, traffic, or public exposure. A missing or changed pepper is NO-GO, not a configuration-only correction. The release authority must approve a single later canonical activation attempt. Any failure during that attempt permanently abandons the SHA and requires a new reviewed SHA.
 
 ## Required evidence
 
@@ -127,6 +127,11 @@ Record only sanitized facts:
 - negative auth checks relevant to the release;
 - backup age and latest verified restore evidence;
 - rollback target;
+- configuration-only refusal classification, if applicable;
+- release authority approval identity and timestamp, if applicable;
+- exact immutable artifact reuse confirmation, if applicable;
+- single permitted canonical activation outcome, if applicable;
+- sanitized original `API_KEY_PEPPER` compatibility result for restored databases, if applicable;
 - explicit confirmation that quality was green before merge and `ci:local` was green before deploy.
 
 Do not mark the release authorized if any item is missing. GitHub Actions green, by itself, is not production authorization.

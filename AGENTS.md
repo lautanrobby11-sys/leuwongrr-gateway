@@ -14,7 +14,7 @@ Baca file ini, `README.md`, dan ADR terkait sebelum mengubah repository.
 ## Gate merah = STOP (wajib)
 - **Jangan merge** PR bila quality gate GitHub merah, partial, skipped-on-failure, atau belum selesai.
 - **Jangan deploy** SHA bila `npm run ci:local` gagal, quality mirror merah, artifact/checksum tidak cocok, atau health gate gagal.
-- **Jangan retry deploy** SHA yang sudah gagal; buat commit baru, validasi ulang, deploy SHA baru.
+- **Jangan retry deploy** SHA yang sudah gagal. Pengecualian sempit hanya berlaku untuk *configuration-only preflight refusal*: deploy berhenti pada guard konfigurasi produksi sebelum release directory, instalasi dependency, application preflight, aktivasi, restart, health check, atau traffic; seluruh bukti artifact tetap valid; dan release authority menyetujui satu activation attempt secara eksplisit. Kegagalan apa pun setelah guard itu tetap memerlukan commit baru, validasi ulang, dan SHA baru.
 - Hijau di GitHub Actions **saja** tidak cukup untuk produksi: workstation `ci:local` + evidence di `docs/runbooks/operator-release-authority.md` tetap wajib.
 - Status Notion/DONE hanya setelah gate wajib lulus dengan bukti; kode yang “sudah dibuat” bukan izin merge/deploy.
 

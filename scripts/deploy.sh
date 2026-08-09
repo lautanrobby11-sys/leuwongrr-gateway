@@ -40,6 +40,23 @@ fail() {
   exit 1
 }
 
+validate_production_config() {
+  local env_file=$1
+  [[ -f $env_file ]] || fail 'missing config/gateway.env'
+  [[ $(stat -c %a "$env_file") == 600 ]] || fail 'gateway.env must be mode 600'
+  [[ $(stat -c %U:%G "$env_file") == root:root ]] || fail 'gateway.env must be owned by root:root'
+  grep -q '^GATEWAY_HOST=127.0.0.1$' "$env_file" || fail 'production origin must be 127.0.0.1:2080'
+  grep -q '^GATEWAY_PORT=2080$' "$env_file" || fail 'production origin must be 127.0.0.1:2080'
+  grep -q '^OMNIROUTE_URL=http://127.0.0.1:20128$' "$env_file" || fail 'production upstream must be local tunnel'
+  local key
+  for key in OMNIROUTE_API_KEY API_KEY_PEPPER INTERNAL_READY_TOKEN; do
+    grep -Eq "^${key}=.+$" "$env_file" || fail "production config missing $key"
+  done
+  if grep -Eq "(^|=)[\"']?REPLACE_ME[\"']?(\$|[[:space:]])" "$env_file"; then
+    fail 'production config contains placeholder values'
+  fi
+}
+
 # A16: the checksum travels with the artifact, so it proves integrity but not
 # authenticity. The trust anchor is the host key list: a forged artifact fails
 # here because the attacker lacks the operator's private key. The signature
@@ -166,6 +183,10 @@ fi
 verify_artifact_signature "$ARTIFACT"
 
 id "$SERVICE" >/dev/null 2>&1 || fail 'service user is missing'
+
+ENV_FILE="$ROOT/config/gateway.env"
+validate_production_config "$ENV_FILE"
+
 install -d -o root -g "$SERVICE" -m 0750 "$ROOT" "$ROOT/releases" "$ROOT/config"
 install -d -o "$SERVICE" -g "$SERVICE" -m 0750 "$ROOT/data" "$ROOT/data/attachments" "$ROOT/data/backups" "$ROOT/logs" "$ROOT/runtime"
 
@@ -173,11 +194,6 @@ if [[ -L $ROOT/current && -z $(resolve_current) ]]; then
   echo 'removing unusable current symlink' >&2
   rm -f "$ROOT/current"
 fi
-
-ENV_FILE="$ROOT/config/gateway.env"
-[[ -f $ENV_FILE ]] || fail 'missing config/gateway.env'
-[[ $(stat -c %a "$ENV_FILE") == 600 ]] || fail 'gateway.env must be mode 600'
-[[ $(stat -c %U:%G "$ENV_FILE") == root:root ]] || fail 'gateway.env must be owned by root:root'
 
 RELEASE="$ROOT/releases/$SHA"
 [[ ! -e $RELEASE ]] || fail 'immutable release already exists'
@@ -200,7 +216,6 @@ set -a
 # shellcheck disable=SC1090
 . "$ENV_FILE"
 set +a
-[[ ${GATEWAY_HOST:-} == 127.0.0.1 && ${GATEWAY_PORT:-} == 2080 ]] || fail 'production origin must be 127.0.0.1:2080'
 
 run_preflight "$RELEASE"
 

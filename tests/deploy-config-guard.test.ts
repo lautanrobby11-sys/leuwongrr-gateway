@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const deploy = readFileSync('scripts/deploy.sh', 'utf8');
@@ -46,7 +46,7 @@ describe('production configuration deploy guard', () => {
         {
           cwd: process.cwd(),
           encoding: 'utf8',
-          env: { ...process.env, PATH: `${bin};${process.env.PATH ?? ''}` }
+          env: { ...process.env, PATH: `${bin}${delimiter}${process.env.PATH ?? ''}` }
         }
       );
 

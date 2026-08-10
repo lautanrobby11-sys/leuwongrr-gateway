@@ -15,6 +15,7 @@ ExecStart=/usr/bin/autossh -M 0 -N \
   -o "ServerAliveCountMax 3" \
   -o "ExitOnForwardFailure yes" \
   -o "StrictHostKeyChecking accept-new" \
+  -i /opt/leuwongrr-tunnel/.ssh/id_ed25519 \
   -L 127.0.0.1:2080:127.0.0.1:2080 \
   omniroute-tunnel@47.130.108.143
 Restart=on-failure

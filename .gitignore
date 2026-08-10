@@ -15,3 +15,5 @@ runtime/
 coverage/
 *.log
 .DS_Store
+# Local MCP tooling config (not part of the repository)
+.mcp.json

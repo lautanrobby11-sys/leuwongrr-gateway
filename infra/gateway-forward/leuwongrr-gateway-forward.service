@@ -1,0 +1,29 @@
+[Unit]
+Description=LeuwongRR Gateway SSH forward (VPS#1 → VPS#2)
+Documentation=https://github.com/lautanrobby11-sys/leuwongrr-gateway/blob/main/docs/runbooks/gateway-forward-setup.md
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=omniroute-tunnel
+Group=omniroute-tunnel
+ExecStart=/usr/bin/autossh -M 0 -N \
+  -o "ServerAliveInterval 30" \
+  -o "ServerAliveCountMax 3" \
+  -o "ExitOnForwardFailure yes" \
+  -o "StrictHostKeyChecking accept-new" \
+  -L 127.0.0.1:2080:127.0.0.1:2080 \
+  omniroute-tunnel@47.130.108.143
+Restart=on-failure
+RestartSec=10s
+TimeoutStartSec=30
+TimeoutStopSec=20
+KillSignal=SIGTERM
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

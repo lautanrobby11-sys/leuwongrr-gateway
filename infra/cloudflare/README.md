@@ -9,4 +9,18 @@ Canonical record of the edge configuration. Dashboard/API changes are operator-o
 4. Do not publish ports 2080 or 20128 in the VPS firewall/security group.
 5. Verify negative cases: missing/forged/expired Access JWT; valid Access user without application role; `/v1` without interactive Access redirect.
 
+## Gateway forward (P0 fix — Aug 2026)
+
+After the VPS split, the Cloudflare Tunnel (`cloudflared`) still runs on VPS#1
+and points `api.leuwongrr.cloud` to `http://127.0.0.1:2080` (local to VPS#1).
+The Gateway now runs on VPS#2. To restore public access without moving the
+tunnel, an SSH forward on VPS#1 relays `127.0.0.1:2080` to VPS#2:2080 via
+`autossh` using the existing `omniroute-tunnel` user.
+
+- Unit: `infra/gateway-forward/leuwongrr-gateway-forward.service`
+- Runbook: `docs/runbooks/gateway-forward-setup.md`
+- VPS#2 Gateway stays at `127.0.0.1:2080` (loopback only) — never exposed.
+- This is a temporary overlay. The long-term fix is moving the Cloudflare
+  Tunnel to VPS#2 and removing this forward.
+
 Cloudflare Access identity headers are untrusted until the application verifies the JWT issuer, audience, signature, and expiry.

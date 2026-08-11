@@ -52,7 +52,7 @@ export const PUBLIC_ALLOWLIST: readonly AllowedRoute[] = Object.freeze([
   },
   {
     method: 'POST',
-    pattern: /^\/console\/api\/member\/(keys|keys\/revoke|topup|subscribe)$/,
+    pattern: /^\/console\/api\/member\/(keys|keys\/revoke|topup|subscribe|subscription\/reset)$/,
     id: 'console.member'
   },
   {
@@ -121,6 +121,7 @@ export const DOCUMENTED_OPERATIONS: readonly DocumentedOperation[] = Object.free
   { method: 'POST', path: '/console/api/member/keys/revoke', sample: '/console/api/member/keys/revoke', id: 'console.member' },
   { method: 'POST', path: '/console/api/member/topup', sample: '/console/api/member/topup', id: 'console.member' },
   { method: 'POST', path: '/console/api/member/subscribe', sample: '/console/api/member/subscribe', id: 'console.member' },
+  { method: 'POST', path: '/console/api/member/subscription/reset', sample: '/console/api/member/subscription/reset', id: 'console.member' },
   { method: 'GET', path: '/console/api/admin/overview', sample: '/console/api/admin/overview', id: 'console.admin' },
   { method: 'GET', path: '/console/api/admin/plans', sample: '/console/api/admin/plans', id: 'console.admin' },
   { method: 'GET', path: '/console/api/admin/models', sample: '/console/api/admin/models', id: 'console.admin' },

@@ -22,6 +22,14 @@ export interface Plan {
   dailyBudgetUnits: number;
   models: string[];
   active: boolean;
+  /** Release 2 (spec 20.1): subscription purchase metadata, always populated
+   * by toPlan; optional in the input so legacy callers stay valid. */
+  priceCents?: number;
+  durationHours?: number | null;
+  timerBasis?: 'from_payment' | 'from_first_use';
+  resetsAllowed?: number;
+  method?: 'rolling_time' | 'token_pack';
+  tierLabel?: string;
 }
 
 export interface Subscription {
@@ -34,6 +42,13 @@ export interface Subscription {
   includedTokens: number;
   usedTokens: number;
   autoRenew: boolean;
+  /** Release 2 (spec 20.1): snapshot of the plan at purchase time. */
+  method: 'rolling_time' | 'token_pack' | null;
+  durationHours: number | null;
+  timerBasis: 'from_payment' | 'from_first_use' | null;
+  activatedAt: string | null;
+  expiresAt: string | null;
+  resetsRemaining: number;
 }
 
 export interface LedgerEntry {
@@ -69,6 +84,12 @@ interface PlanRow {
   daily_budget_units: number;
   models_json: string;
   active: number;
+  price_cents: number;
+  duration_hours: number | null;
+  timer_basis: 'from_payment' | 'from_first_use';
+  resets_allowed: number;
+  method: 'rolling_time' | 'token_pack';
+  tier_label: string;
 }
 
 interface SubscriptionRow {
@@ -81,6 +102,12 @@ interface SubscriptionRow {
   included_tokens: number;
   used_tokens: number;
   auto_renew: number;
+  method: 'rolling_time' | 'token_pack' | null;
+  duration_hours: number | null;
+  timer_basis: 'from_payment' | 'from_first_use' | null;
+  activated_at: string | null;
+  expires_at: string | null;
+  resets_remaining: number;
 }
 
 function toPlan(row: PlanRow): Plan {
@@ -94,7 +121,13 @@ function toPlan(row: PlanRow): Plan {
     rateLimitRpm: row.rate_limit_rpm,
     dailyBudgetUnits: row.daily_budget_units,
     models: JSON.parse(row.models_json) as string[],
-    active: row.active === 1
+    active: row.active === 1,
+    priceCents: row.price_cents,
+    durationHours: row.duration_hours,
+    timerBasis: row.timer_basis,
+    resetsAllowed: row.resets_allowed,
+    method: row.method,
+    tierLabel: row.tier_label
   };
 }
 
@@ -108,7 +141,13 @@ function toSubscription(row: SubscriptionRow): Subscription {
     periodEnd: row.period_end,
     includedTokens: row.included_tokens,
     usedTokens: row.used_tokens,
-    autoRenew: row.auto_renew === 1
+    autoRenew: row.auto_renew === 1,
+    method: row.method,
+    durationHours: row.duration_hours,
+    timerBasis: row.timer_basis,
+    activatedAt: row.activated_at,
+    expiresAt: row.expires_at,
+    resetsRemaining: row.resets_remaining
   };
 }
 
@@ -149,8 +188,8 @@ export class BillingService {
   upsertPlan(plan: Omit<Plan, 'active'> & { active?: boolean }): Plan {
     this.db
       .prepare(
-        `INSERT INTO plans (id, name, monthly_price_cents, included_tokens, overage_cents_per_million, max_concurrent, rate_limit_rpm, daily_budget_units, models_json, active, updated_at)
-         VALUES (@id, @name, @price, @included, @overage, @concurrent, @rpm, @daily, @models, @active, @updated)
+        `INSERT INTO plans (id, name, monthly_price_cents, included_tokens, overage_cents_per_million, max_concurrent, rate_limit_rpm, daily_budget_units, models_json, active, price_cents, duration_hours, timer_basis, resets_allowed, method, tier_label, updated_at)
+         VALUES (@id, @name, @price, @included, @overage, @concurrent, @rpm, @daily, @models, @active, @priceCents, @durationHours, @timerBasis, @resetsAllowed, @method, @tierLabel, @updated)
          ON CONFLICT(id) DO UPDATE SET
            name = excluded.name,
            monthly_price_cents = excluded.monthly_price_cents,
@@ -161,6 +200,12 @@ export class BillingService {
            daily_budget_units = excluded.daily_budget_units,
            models_json = excluded.models_json,
            active = excluded.active,
+           price_cents = excluded.price_cents,
+           duration_hours = excluded.duration_hours,
+           timer_basis = excluded.timer_basis,
+           resets_allowed = excluded.resets_allowed,
+           method = excluded.method,
+           tier_label = excluded.tier_label,
            updated_at = excluded.updated_at`
       )
       .run({
@@ -174,6 +219,12 @@ export class BillingService {
         daily: plan.dailyBudgetUnits,
         models: JSON.stringify(plan.models),
         active: plan.active === false ? 0 : 1,
+        priceCents: plan.priceCents ?? 0,
+        durationHours: plan.durationHours ?? null,
+        timerBasis: plan.timerBasis ?? 'from_payment',
+        resetsAllowed: plan.resetsAllowed ?? 0,
+        method: plan.method ?? 'token_pack',
+        tierLabel: plan.tierLabel ?? '',
         updated: this.iso()
       });
     const stored = this.getPlan(plan.id);
@@ -202,9 +253,40 @@ export class BillingService {
     return row ? toSubscription(row) : null;
   }
 
+  /** Release 2 (spec 11C): both methods can be active at the same time. */
+  private activeSubscriptions(accountId: string): Subscription[] {
+    const rows = this.db
+      .prepare(
+        "SELECT * FROM subscriptions WHERE account_id = ? AND status IN ('active','past_due') ORDER BY created_at"
+      )
+      .all(accountId) as SubscriptionRow[];
+    return rows.map(toSubscription);
+  }
+
+  /**
+   * Release 2 (spec 20.3): a subscription's timer is running only once it has
+   * been activated. Legacy subscriptions (no duration) stay valid until
+   * period_end, which preserves the pre-Release-2 behaviour.
+   */
+  private windowActive(subscription: Subscription): boolean {
+    if (subscription.durationHours !== null) {
+      return (
+        subscription.activatedAt !== null &&
+        subscription.expiresAt !== null &&
+        subscription.expiresAt > this.iso()
+      );
+    }
+    return subscription.periodEnd > this.iso();
+  }
+
   /**
    * Starting a period grants the allowance as a ledger entry, so the dashboard
    * can always explain where a token balance came from.
+   *
+   * Release 2 (spec 20.1/20.3): the subscription snapshots the plan's method,
+   * duration, timer basis and reset budget. `from_payment` timers start now;
+   * `from_first_use` stays pending until the first metered request activates
+   * it atomically (see activateFirstUse).
    */
   startSubscription(accountId: string, planId: string, periodDays = 30): Subscription {
     const plan = this.getPlan(planId);
@@ -213,19 +295,52 @@ export class BillingService {
 
     const id = randomUUID();
     const start = this.iso();
-    const end = this.iso(periodDays * 24 * 3_600_000);
+    const durationHours = plan.durationHours ?? null;
+    const method = plan.method ?? 'token_pack';
+    const timerBasis = plan.timerBasis ?? 'from_payment';
+    const durationMs = durationHours ? durationHours * 3_600_000 : null;
+    const end = this.iso(durationHours ? durationMs! : periodDays * 24 * 3_600_000);
     const apply = this.db.transaction(() => {
+      // Release 2 (spec 11C): both methods can be active simultaneously.
+      // Buying a new Rolling Time replaces the old timer; buying a Token Pack
+      // stacks on top of live packs, which is what makes the earliest-expiry
+      // queue in applyUsage meaningful. Legacy plans (no duration) keep the
+      // old all-or-nothing behaviour.
+      if (durationHours === null) {
+        this.db
+          .prepare(
+            "UPDATE subscriptions SET status = 'canceled', updated_at = ? WHERE account_id = ? AND status IN ('active','past_due')"
+          )
+          .run(start, accountId);
+      } else if (method === 'rolling_time') {
+        this.db
+          .prepare(
+            `UPDATE subscriptions SET status = 'canceled', updated_at = ?
+             WHERE account_id = ? AND status IN ('active','past_due') AND method = 'rolling_time'`
+          )
+          .run(start, accountId);
+      }
       this.db
         .prepare(
-          "UPDATE subscriptions SET status = 'canceled', updated_at = ? WHERE account_id = ? AND status IN ('active','past_due')"
+          `INSERT INTO subscriptions (id, account_id, plan_id, status, period_start, period_end, included_tokens, used_tokens, auto_renew, method, duration_hours, timer_basis, activated_at, expires_at, resets_remaining, created_at, updated_at)
+           VALUES (?, ?, ?, 'active', ?, ?, ?, 0, 1, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
-        .run(start, accountId);
-      this.db
-        .prepare(
-          `INSERT INTO subscriptions (id, account_id, plan_id, status, period_start, period_end, included_tokens, used_tokens, auto_renew, created_at, updated_at)
-           VALUES (?, ?, ?, 'active', ?, ?, ?, 0, 1, ?, ?)`
-        )
-        .run(id, accountId, planId, start, end, plan.includedTokens, start, start);
+        .run(
+          id,
+          accountId,
+          planId,
+          start,
+          end,
+          plan.includedTokens,
+          method,
+          durationHours,
+          timerBasis,
+          timerBasis === 'from_payment' ? start : null,
+          timerBasis === 'from_payment' ? end : null,
+          plan.resetsAllowed ?? 0,
+          start,
+          start
+        );
       this.recordLedger(accountId, {
         kind: 'grant',
         source: 'subscription',
@@ -236,9 +351,71 @@ export class BillingService {
       this.applyPlanLimits(accountId, plan);
     });
     apply();
-    const created = this.activeSubscription(accountId);
+    const created = this.getSubscription(id);
     if (!created) throw new BillingError('subscription_write_failed', 500);
     return created;
+  }
+
+  /**
+   * Release 2 (spec 20.3): first-use activation is atomic so two racing
+   * requests can only produce one write. Returns the subscription fresh from
+   * the database so the caller observes the winning activation.
+   */
+  activateFirstUse(subscriptionId: string): Subscription | null {
+    const now = this.iso();
+    const row = this.db
+      .prepare(
+        "SELECT * FROM subscriptions WHERE id = ? AND timer_basis = 'from_first_use' AND activated_at IS NULL AND status = 'active'"
+      )
+      .get(subscriptionId) as SubscriptionRow | undefined;
+    if (!row) return this.getSubscription(subscriptionId);
+    const durationMs = row.duration_hours ? row.duration_hours * 3_600_000 : 0;
+    const apply = this.db.transaction(() => {
+      const result = this.db
+        .prepare(
+          "UPDATE subscriptions SET activated_at = ?, expires_at = ?, updated_at = ? WHERE id = ? AND activated_at IS NULL"
+        )
+        .run(now, this.iso(durationMs), now, subscriptionId);
+      return result.changes;
+    });
+    apply();
+    return this.getSubscription(subscriptionId);
+  }
+
+  getSubscription(subscriptionId: string): Subscription | null {
+    const row = this.db.prepare('SELECT * FROM subscriptions WHERE id = ?').get(subscriptionId) as
+      | SubscriptionRow
+      | undefined;
+    return row ? toSubscription(row) : null;
+  }
+
+  /**
+   * Release 2 (spec 20.3/20.4): reset restarts the timer from NOW and restores
+   * the token allowance; the remaining reset budget is decremented once.
+   * A reset with no budget left (or one racing another reset) is a 409.
+   */
+  resetSubscription(subscriptionId: string): Subscription {
+    const now = this.iso();
+    const row = this.db
+      .prepare(
+        "SELECT * FROM subscriptions WHERE id = ? AND status = 'active' AND resets_remaining > 0"
+      )
+      .get(subscriptionId) as SubscriptionRow | undefined;
+    if (!row) throw new BillingError('subscription_reset_unavailable', 409);
+    const durationMs = row.duration_hours ? row.duration_hours * 3_600_000 : 0;
+    const apply = this.db.transaction(() => {
+      const result = this.db
+        .prepare(
+          `UPDATE subscriptions SET activated_at = ?, expires_at = ?, used_tokens = 0, resets_remaining = resets_remaining - 1, updated_at = ?
+           WHERE id = ? AND status = 'active' AND resets_remaining > 0`
+        )
+        .run(now, this.iso(durationMs), now, subscriptionId);
+      if (result.changes === 0) throw new BillingError('subscription_reset_unavailable', 409);
+    });
+    apply();
+    const reset = this.getSubscription(subscriptionId);
+    if (!reset) throw new BillingError('subscription_write_failed', 500);
+    return reset;
   }
 
   cancelSubscription(accountId: string): void {
@@ -377,9 +554,13 @@ export class BillingService {
   // ---- Metering ----
 
   /**
-   * Spend order is subscription allowance first, then the prepaid wallet. A
-   * shortfall is recorded and the subscription is marked past_due; it is never
-   * rounded away, because that would hand out free capacity.
+   * Release 2 (spec 20.2): spend order is
+   *   1. Rolling Time allowance — FREE while the window is active, up to the
+   *      token limit, never touching the wallet;
+   *   2. Token Packs — paid allowance, earliest expiry debited first;
+   *   3. prepaid wallet — PAYG fallback.
+   * A shortfall is recorded and the spent subscriptions are marked past_due;
+   * it is never rounded away, because that would hand out free capacity.
    */
   private applyUsage(accountId: string, units: number, reference: string): void {
     const already = this.db
@@ -401,18 +582,58 @@ export class BillingService {
     }
 
     let remaining = units;
-    const subscription = this.activeSubscription(accountId);
-    if (subscription && subscription.status !== 'canceled') {
-      const available = Math.max(0, subscription.includedTokens - subscription.usedTokens);
-      const fromPlan = Math.min(available, remaining);
-      if (fromPlan > 0) {
-        this.db
-          .prepare('UPDATE subscriptions SET used_tokens = used_tokens + ?, updated_at = ? WHERE id = ?')
-          .run(fromPlan, this.iso(), subscription.id);
-        remaining -= fromPlan;
+    const spentSubscriptions: Subscription[] = [];
+
+    // 1. Rolling Time: free capacity inside the window.
+    const rolling = this.activeSubscriptions(accountId).find(
+      (entry) => entry.method === 'rolling_time'
+    );
+    if (rolling) {
+      // A from_first_use timer that is still pending starts on this spend.
+      if (rolling.timerBasis === 'from_first_use' && rolling.activatedAt === null) {
+        this.activateFirstUse(rolling.id);
+      }
+      const live = this.getSubscription(rolling.id) ?? rolling;
+      if (this.windowActive(live)) {
+        const available = Math.max(0, live.includedTokens - live.usedTokens);
+        const fromRolling = Math.min(available, remaining);
+        if (fromRolling > 0) {
+          this.db
+            .prepare('UPDATE subscriptions SET used_tokens = used_tokens + ?, updated_at = ? WHERE id = ?')
+            .run(fromRolling, this.iso(), live.id);
+          remaining -= fromRolling;
+          spentSubscriptions.push(live);
+        }
       }
     }
 
+    // 2. Token Packs: earliest expiry debited first (spec 20.4).
+    const packs = this.activeSubscriptions(accountId)
+      .filter((entry) => entry.method === 'token_pack' || entry.method === null)
+      .sort((a, b) => {
+        const aExpiry = a.expiresAt ?? a.periodEnd;
+        const bExpiry = b.expiresAt ?? b.periodEnd;
+        return aExpiry.localeCompare(bExpiry);
+      });
+    for (const pack of packs) {
+      if (remaining === 0) break;
+      if (pack.timerBasis === 'from_first_use' && pack.activatedAt === null) {
+        this.activateFirstUse(pack.id);
+      }
+      const live = this.getSubscription(pack.id) ?? pack;
+      if (!this.windowActive(live)) continue;
+      const available = Math.max(0, live.includedTokens - live.usedTokens);
+      const fromPack = Math.min(available, remaining);
+      if (fromPack > 0) {
+        this.db
+          .prepare('UPDATE subscriptions SET used_tokens = used_tokens + ?, updated_at = ? WHERE id = ?')
+          .run(fromPack, this.iso(), live.id);
+        remaining -= fromPack;
+        spentSubscriptions.push(live);
+      }
+    }
+
+    // 3. Prepaid wallet (PAYG).
     const wallet = this.walletBalance(accountId);
     const fromWallet = Math.min(wallet, remaining);
     const balanceAfter = wallet - fromWallet;
@@ -439,10 +660,18 @@ export class BillingService {
         reference: reference + ':unfunded',
         balanceAfter
       });
-      if (subscription) {
-        this.db
-          .prepare("UPDATE subscriptions SET status = 'past_due', updated_at = ? WHERE id = ?")
-          .run(this.iso(), subscription.id);
+      const now = this.iso();
+      const spentIds = spentSubscriptions.map((entry) => entry.id);
+      const mark = this.db.prepare(
+        "UPDATE subscriptions SET status = 'past_due', updated_at = ? WHERE id = ? AND status IN ('active','past_due')"
+      );
+      if (spentIds.length > 0) {
+        for (const id of spentIds) mark.run(now, id);
+      } else {
+        // Nothing consumed (e.g. all windows expired): mark the newest active
+        // subscription so the dashboard still points at the shortfall.
+        const latest = this.activeSubscription(accountId);
+        if (latest) mark.run(now, latest.id);
       }
     }
   }
@@ -536,14 +765,23 @@ export class BillingService {
     };
   }
 
-  /** Cheap gate for the request path: reconcile, then refuse an empty account. */
+  /**
+   * Cheap gate for the request path: reconcile, then refuse an account with no
+   * capacity anywhere. Release 2 (spec 20.5): a live Rolling Time window funds
+   * requests for free, a pending from_first_use timer funds them once the first
+   * request activates it, and remaining pack allowance counts like the wallet.
+   */
   assertFunded(accountId: string, tenantId: string): void {
     this.reconcile(accountId, tenantId);
-    const subscription = this.activeSubscription(accountId);
-    const remaining = subscription
-      ? Math.max(0, subscription.includedTokens - subscription.usedTokens)
-      : 0;
-    if (remaining + this.walletBalance(accountId) <= 0) {
+    for (const subscription of this.activeSubscriptions(accountId)) {
+      if (subscription.timerBasis === 'from_first_use' && subscription.activatedAt === null) {
+        return; // the first request activates the timer and then spends inside it
+      }
+      if (!this.windowActive(subscription)) continue;
+      const remaining = Math.max(0, subscription.includedTokens - subscription.usedTokens);
+      if (remaining > 0) return;
+    }
+    if (this.walletBalance(accountId) <= 0) {
       throw new BillingError('insufficient_tokens', 402);
     }
   }

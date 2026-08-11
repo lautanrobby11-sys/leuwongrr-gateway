@@ -37,7 +37,16 @@ export const planInputSchema = z
       .min(DAILY_BUDGET_UNITS.min)
       .max(DAILY_BUDGET_UNITS.max),
     models: z.array(z.string().min(1).max(64)),
-    active: z.boolean().optional()
+    active: z.boolean().optional(),
+    // Release 2 (spec 20.1): subscription purchase metadata. Optional so the
+    // operator CLI and older clients keep working; `upsertPlan` applies the
+    // same defaults a missing field would otherwise rely on.
+    priceCents: z.number().finite().int().min(0).max(1_000_000_000).optional(),
+    durationHours: z.number().finite().int().min(1).max(8_760).nullable().optional(),
+    timerBasis: z.enum(['from_payment', 'from_first_use']).optional(),
+    resetsAllowed: z.number().finite().int().min(0).max(52).optional(),
+    method: z.enum(['rolling_time', 'token_pack']).optional(),
+    tierLabel: z.string().max(32).optional()
   })
   .strict();
 

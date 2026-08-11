@@ -308,7 +308,10 @@ paths:
   /console/api/member/subscribe:
     post:
       summary: Subscribe to a plan
-      description: Requires an allowed Origin.
+      description: >-
+        Requires an allowed Origin. Release 2 plans charge `priceCents` and
+        carry method/duration/tier metadata; legacy plans keep the monthly
+        rate. A zero price subscribes immediately.
       security:
         - sessionCookie: []
       responses:
@@ -316,6 +319,24 @@ paths:
           description: Subscription invoice created.
         '403':
           description: Origin is not allowed.
+  /console/api/member/subscription/reset:
+    post:
+      summary: Reset a subscription timer
+      description: >-
+        Requires an allowed Origin. Restarts the timer from now and restores
+        the allowance, consuming one reset. 409 when no resets remain or a
+        reset races another.
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Timer reset, allowance restored.
+        '403':
+          description: Origin is not allowed, or the subscription belongs to another account.
+        '404':
+          description: Subscription not found.
+        '409':
+          description: No resets remaining, or a reset is already in flight.
   /console/api/admin/overview:
     get:
       summary: Administrative overview

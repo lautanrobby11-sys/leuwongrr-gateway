@@ -611,7 +611,13 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
       if (!parsed.success) return fail(reply, 400, 'invalid_request', 'Plan required', req.id);
       const plan = billing.getPlan(parsed.data.planId);
       if (!plan || !plan.active) return fail(reply, 404, 'plan_not_found', 'Plan unavailable', req.id);
-      if (plan.monthlyPriceCents === 0) {
+      // Release 2 plans (spec 20.1) charge the purchase price from the
+      // database; legacy plans keep the monthly rate.
+      const priceCents =
+        plan.durationHours !== null && plan.durationHours !== undefined
+          ? (plan.priceCents ?? 0)
+          : plan.monthlyPriceCents;
+      if (priceCents === 0) {
         return reply.send({ subscription: billing.startSubscription(account.id, plan.id) });
       }
       return reply.send(
@@ -619,7 +625,7 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
           account,
           purpose: 'subscription',
           planId: plan.id,
-          amountCents: plan.monthlyPriceCents,
+          amountCents: priceCents,
           tokens: plan.includedTokens,
           traceId: req.id,
           provider: parsed.data.provider
@@ -649,6 +655,26 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
           provider: parsed.data.provider
         })
       );
+    } catch (error) {
+      return handle(error, reply, req.id);
+    }
+  });
+
+  // Release 2 (spec 20.3): a member resets their own subscription's timer; the
+  // service refuses with 409 when no resets remain or a reset is racing another.
+  app.post('/console/api/member/subscription/reset', async (req, reply) => {
+    try {
+      const account = requireMember(await currentAccount(req));
+      const parsed = z
+        .object({ subscriptionId: z.string().min(1).max(64) })
+        .strict()
+        .safeParse(req.body);
+      if (!parsed.success) return fail(reply, 400, 'invalid_request', 'Subscription id required', req.id);
+      const subscription = billing.getSubscription(parsed.data.subscriptionId);
+      if (!subscription || subscription.accountId !== account.id) {
+        return fail(reply, 404, 'subscription_not_found', 'Subscription unavailable', req.id);
+      }
+      return reply.send({ subscription: billing.resetSubscription(subscription.id) });
     } catch (error) {
       return handle(error, reply, req.id);
     }

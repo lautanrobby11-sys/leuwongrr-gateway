@@ -189,4 +189,23 @@ CREATE TABLE models (
   updated_at TEXT NOT NULL
 );
 `
+}, {
+  // Release 2 subscription engine (spec section 20.1): plans carry the
+  // purchase method, price, duration and reset policy; subscriptions snapshot
+  // the plan so an admin editing a plan never rewrites a live subscription.
+  id: '0007_subscription_engine',
+  sql: `
+ALTER TABLE plans ADD COLUMN price_cents INTEGER NOT NULL DEFAULT 0 CHECK(price_cents >= 0);
+ALTER TABLE plans ADD COLUMN duration_hours INTEGER CHECK(duration_hours IS NULL OR duration_hours > 0);
+ALTER TABLE plans ADD COLUMN timer_basis TEXT CHECK(timer_basis IN ('from_payment', 'from_first_use')) DEFAULT 'from_payment';
+ALTER TABLE plans ADD COLUMN resets_allowed INTEGER NOT NULL DEFAULT 0 CHECK(resets_allowed >= 0);
+ALTER TABLE plans ADD COLUMN method TEXT NOT NULL CHECK(method IN ('rolling_time', 'token_pack')) DEFAULT 'token_pack';
+ALTER TABLE plans ADD COLUMN tier_label TEXT NOT NULL DEFAULT '';
+ALTER TABLE subscriptions ADD COLUMN method TEXT CHECK(method IN ('rolling_time', 'token_pack'));
+ALTER TABLE subscriptions ADD COLUMN duration_hours INTEGER;
+ALTER TABLE subscriptions ADD COLUMN timer_basis TEXT CHECK(timer_basis IN ('from_payment', 'from_first_use'));
+ALTER TABLE subscriptions ADD COLUMN activated_at TEXT;
+ALTER TABLE subscriptions ADD COLUMN expires_at TEXT;
+ALTER TABLE subscriptions ADD COLUMN resets_remaining INTEGER NOT NULL DEFAULT 0 CHECK(resets_remaining >= 0);
+`
 }];

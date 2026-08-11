@@ -1,7 +1,7 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
 
-const forbidden=/(?:^|[._-])(new|final2?|fix(?:ed)?|hotfix|patch|override|backup|old|temp)(?:[._-]|$)/i;
+const forbidden=/(?:^|[._-])(new|final2?|fix(?:ed)?|hotfix|patch|override2?|backup|old|temp)(?:[._-]|$)/i;
 const ignored=new Set(['.git','node_modules','dist','data','logs','runtime','.release','coverage']);
 const canonicalExceptions=new Set(['scripts/backup.sh']);
 const violations=[];

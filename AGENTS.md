@@ -29,7 +29,7 @@ Baca file ini, `README.md`, dan ADR terkait sebelum mengubah repository.
 8. Sebelum merge: quality diagnostics PR harus seluruh gate wajib `success` (kecuali `release_readiness` yang memang skipped di PR). Bila `tests`/`lint`/`typecheck`/`conventions`/`secrets` merah — perbaiki dulu, jangan squash.
 
 ## Larangan
-Dilarang membuat source/config dengan suffix `-new`, `-final`, `-final2`, `-fix`, `-fixed`, `-hotfix`, `-patch`, `-override`, `-backup`, `-old`, `-temp`, atau `docker-compose.override.yml`. Backup runtime hanya melalui `scripts/backup.sh`.
+Dilarang membuat source/config dengan suffix `-new`, `-final`, `-final2`, `-fix`, `-fixed`, `-hotfix`, `-patch`, `-override`, `-override2`, `-backup`, `-old`, `-temp`, atau `docker-compose.override.yml`. Backup runtime hanya melalui `scripts/backup.sh`. Aturan ini ditegakkan oleh `scripts/check-conventions.mjs` (gate `conventions`).
 
 ## Source of truth
 | Concern | Pemilik |

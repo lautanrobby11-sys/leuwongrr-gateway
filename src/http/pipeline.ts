@@ -94,8 +94,11 @@ export function createUpstreamExecutor(deps: ExecutorDeps) {
           // defaults to 4, so a handful of upstream errors wedged every later
           // call - including the readiness probe, which shares this semaphore.
           // The non-streaming path below is safe precisely because it always
-          // awaits upstream.json() before it inspects upstream.ok.
-          await upstream.text().catch(() => undefined);
+          // awaits upstream.json() before it inspects upstream.ok. A failed
+          // streaming response is discarded deterministically with cancel()
+          // rather than text(), so the permit is released even when the
+          // upstream never ends the error body.
+          await upstream.body?.cancel().catch(() => undefined);
           deps.db.releaseBudget(reservation, key.tenantId);
           deps.db.audit(key.tenantId, call.auditEvent, req.id, {
             model: call.model, stream: true, status: upstream.status, estimate: call.estimateUnits

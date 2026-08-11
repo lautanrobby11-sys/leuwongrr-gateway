@@ -17,3 +17,8 @@ coverage/
 .DS_Store
 # Local MCP tooling config (not part of the repository)
 .mcp.json
+.zcode/
+.zed/
+.superpowers/
+2026-08-08
+docs/superpowers/plans/

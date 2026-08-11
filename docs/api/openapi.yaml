@@ -420,6 +420,40 @@ paths:
           description: Status written.
         '403':
           description: Origin is not allowed, or the Access assertion failed.
+  /console/api/admin/exchange-rate:
+    get:
+      summary: Get the IDR/USD exchange rate
+      description: Returns the singleton exchange rate row.
+      security:
+        - accessAssertion: []
+      responses:
+        '200':
+          description: Exchange rate row.
+        '404':
+          description: Rate not configured yet.
+    post:
+      summary: Set the IDR/USD exchange rate
+      description: Requires an allowed Origin. Recorded in the audit log.
+      security:
+        - accessAssertion: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - idr_per_usd
+              properties:
+                idr_per_usd:
+                  type: integer
+                  description: IDR per 1 USD (e.g. 16000)
+      responses:
+        '200':
+          description: Exchange rate written.
+        '400':
+          description: Rate payload invalid.
+        '403':
+          description: Origin is not allowed, or the Access assertion failed.
   /webhooks/cryptomus:
     post:
       summary: Cryptomus payment callback
@@ -431,3 +465,40 @@ paths:
           description: Callback accepted.
         '400':
           description: Signature verification failed.
+  /webhooks/leuwongrr:
+    post:
+      summary: leuwongrr.online payment webhook (QRIS + bank)
+      description: >-
+        Server-to-server callback. Authenticated by HMAC-SHA256 of the raw body
+        with LEUWONGRR_WEBHOOK_SECRET, sent in the x-leuwongrr-signature header
+        (optionally prefixed with 'sha256='). Exempt from origin enforcement.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - order_id
+                - amount_idr
+                - status
+              properties:
+                order_id:
+                  type: string
+                amount_idr:
+                  type: number
+                  description: Amount in IDR
+                status:
+                  type: string
+      responses:
+        '200':
+          description: Callback accepted.
+        '400':
+          description: Invalid body or missing fields.
+        '403':
+          description: Signature invalid.
+        '404':
+          description: Payment not found.
+        '409':
+          description: Amount or currency mismatch.
+        '503':
+          description: Webhook secret not configured, or exchange rate not configured.

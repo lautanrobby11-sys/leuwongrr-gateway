@@ -160,4 +160,33 @@ INSERT INTO tenant_limits(tenant_id, daily_budget_units, max_concurrent, rate_li
 SELECT id, 1000, 2, 60, datetime('now')
 FROM tenants WHERE id NOT IN (SELECT tenant_id FROM tenant_limits);
 `
+}, {
+  id: '0005_exchange_rates',
+  sql: `
+CREATE TABLE exchange_rates (
+  id TEXT PRIMARY KEY DEFAULT 'default',
+  idr_per_usd INTEGER NOT NULL CHECK(idr_per_usd > 0),
+  updated_at TEXT NOT NULL,
+  updated_by TEXT REFERENCES accounts(id),
+  CONSTRAINT singleton CHECK(id = 'default')
+);
+`
+}, {
+  id: '0006_models',
+  sql: `
+CREATE TABLE models (
+  id TEXT PRIMARY KEY,
+  public_id TEXT NOT NULL UNIQUE,
+  display_name TEXT NOT NULL,
+  provider TEXT NOT NULL CHECK(provider IN ('openai','anthropic','google','meta','other')),
+  multimodal INTEGER NOT NULL DEFAULT 0 CHECK(multimodal IN (0,1)),
+  input_price_per_m REAL NOT NULL CHECK(input_price_per_m >= 0),
+  output_price_per_m REAL NOT NULL CHECK(output_price_per_m >= 0),
+  cache_read_price_per_m REAL NOT NULL CHECK(cache_read_price_per_m >= 0),
+  cache_write_price_per_m REAL NOT NULL CHECK(cache_write_price_per_m >= 0),
+  enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+`
 }];

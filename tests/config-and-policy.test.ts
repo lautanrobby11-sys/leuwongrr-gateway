@@ -56,7 +56,8 @@ describe('configuration guardrails', () => {
         CONSOLE_ENABLED: 'true',
         OTP_DELIVERY: 'webhook',
         OTP_WEBHOOK_URL: 'https://mail.example.com/send',
-        OTP_WEBHOOK_TOKEN: 'z'.repeat(32)
+        OTP_WEBHOOK_TOKEN: 'z'.repeat(32),
+        LEUWONGRR_WEBHOOK_SECRET: 's'.repeat(32)
       }).OTP_DELIVERY
     ).toBe('webhook'));
   it('rejects an API key pepper that reuses an internal token (A20)', () => {

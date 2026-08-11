@@ -13,7 +13,8 @@ export type RouteId =
   | 'console.callback'
   | 'console.member'
   | 'console.admin'
-  | 'webhook.cryptomus';
+  | 'webhook.cryptomus'
+  | 'webhook.leuwongrr';
 
 export interface AllowedRoute {
   method: 'GET' | 'POST';
@@ -56,15 +57,16 @@ export const PUBLIC_ALLOWLIST: readonly AllowedRoute[] = Object.freeze([
   },
   {
     method: 'GET',
-    pattern: /^\/console\/api\/admin\/(overview|plans|models|accounts|payments)$/,
+    pattern: /^\/console\/api\/admin\/(overview|plans|models|accounts|payments|exchange-rate)$/,
     id: 'console.admin'
   },
   {
     method: 'POST',
-    pattern: /^\/console\/api\/admin\/(plans|models|accounts\/limits|accounts\/credit|accounts\/status)$/,
+    pattern: /^\/console\/api\/admin\/(plans|models|accounts\/limits|accounts\/credit|accounts\/status|exchange-rate)$/,
     id: 'console.admin'
   },
-  { method: 'POST', pattern: /^\/webhooks\/cryptomus$/, id: 'webhook.cryptomus' }
+  { method: 'POST', pattern: /^\/webhooks\/cryptomus$/, id: 'webhook.cryptomus' },
+  { method: 'POST', pattern: /^\/webhooks\/leuwongrr$/, id: 'webhook.leuwongrr' }
 ]);
 
 export function resolveRoute(method: string, path: string): RouteId | null {
@@ -124,12 +126,15 @@ export const DOCUMENTED_OPERATIONS: readonly DocumentedOperation[] = Object.free
   { method: 'GET', path: '/console/api/admin/models', sample: '/console/api/admin/models', id: 'console.admin' },
   { method: 'GET', path: '/console/api/admin/accounts', sample: '/console/api/admin/accounts', id: 'console.admin' },
   { method: 'GET', path: '/console/api/admin/payments', sample: '/console/api/admin/payments', id: 'console.admin' },
+  { method: 'GET', path: '/console/api/admin/exchange-rate', sample: '/console/api/admin/exchange-rate', id: 'console.admin' },
+  { method: 'POST', path: '/console/api/admin/exchange-rate', sample: '/console/api/admin/exchange-rate', id: 'console.admin' },
   { method: 'POST', path: '/console/api/admin/plans', sample: '/console/api/admin/plans', id: 'console.admin' },
   { method: 'POST', path: '/console/api/admin/models', sample: '/console/api/admin/models', id: 'console.admin' },
   { method: 'POST', path: '/console/api/admin/accounts/limits', sample: '/console/api/admin/accounts/limits', id: 'console.admin' },
   { method: 'POST', path: '/console/api/admin/accounts/credit', sample: '/console/api/admin/accounts/credit', id: 'console.admin' },
   { method: 'POST', path: '/console/api/admin/accounts/status', sample: '/console/api/admin/accounts/status', id: 'console.admin' },
-  { method: 'POST', path: '/webhooks/cryptomus', sample: '/webhooks/cryptomus', id: 'webhook.cryptomus' }
+  { method: 'POST', path: '/webhooks/cryptomus', sample: '/webhooks/cryptomus', id: 'webhook.cryptomus' },
+  { method: 'POST', path: '/webhooks/leuwongrr', sample: '/webhooks/leuwongrr', id: 'webhook.leuwongrr' }
 ]);
 
 const CONSOLE_ROUTES = new Set<RouteId>([
@@ -139,7 +144,8 @@ const CONSOLE_ROUTES = new Set<RouteId>([
   'console.callback',
   'console.member',
   'console.admin',
-  'webhook.cryptomus'
+  'webhook.cryptomus',
+  'webhook.leuwongrr'
 ]);
 
 /** Console traffic is served locally and must never enter the upstream path. */

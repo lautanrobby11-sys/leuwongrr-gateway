@@ -20,6 +20,8 @@ import { BillingError, type BillingService } from '../billing/service.js';
 import { planInputSchema } from '../billing/plan-input.js';
 import { DAILY_BUDGET_UNITS, MAX_CONCURRENT, RATE_LIMIT_RPM } from '../billing/limit-bounds.js';
 import { PaymentError, PAID_STATUSES, type CryptomusClient } from '../payments/cryptomus.js';
+import { isPaidStatus as isLeuwongrrPaid, verifyHmacSignature } from '../payments/leuwongrr.js';
+import { getExchangeRate, idrToTokens, setExchangeRate } from '../billing/exchange-rate.js';
 import { assertResolvedPublicEgress } from '../policy/egress.js';
 import { listModels } from '../policy/capabilities.js';
 import type { Scope } from '../auth/api-keys.js';
@@ -147,9 +149,18 @@ const limitsSchema = z
   })
   .strict();
 const topupSchema = z
-  .object({ planId: z.string().min(1).max(32), amountCents: z.number().int().min(100).max(1_000_000) })
+  .object({
+    planId: z.string().min(1).max(32),
+    amountCents: z.number().int().min(100).max(1_000_000),
+    provider: z.enum(['cryptomus', 'leuwongrr']).default('cryptomus')
+  })
   .strict();
-const subscribeSchema = z.object({ planId: z.string().min(1).max(32) }).strict();
+const subscribeSchema = z
+  .object({
+    planId: z.string().min(1).max(32),
+    provider: z.enum(['cryptomus', 'leuwongrr']).default('cryptomus')
+  })
+  .strict();
 
 /**
  * The console is a separate concern from the LLM data plane: it never proxies
@@ -536,8 +547,35 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
     amountCents: number;
     tokens: number;
     traceId: string;
+    provider: 'cryptomus' | 'leuwongrr';
   }) {
     const orderId = `${input.purpose}-${randomUUID()}`;
+    if (input.provider === 'leuwongrr') {
+      const leuwongrrRate = getExchangeRate(db.db);
+      const amountIdr = input.amountCents; // reuse amountCents column for IDR
+      const paymentUrl = `${new URL(config.PUBLIC_BASE_URL).origin}/pay/leuwongrr?order_id=${encodeURIComponent(orderId)}&amount=${amountIdr}&tokens=${input.tokens}`;
+      db.db
+        .prepare(
+          `INSERT INTO payments (id, account_id, provider, order_id, invoice_uuid, purpose, plan_id, tokens, amount_cents, currency, status, payment_url, created_at)
+           VALUES (?, ?, 'leuwongrr', ?, ?, ?, ?, ?, ?, 'IDR', ?, ?, ?)`
+        )
+        .run(
+          randomUUID(),
+          input.account.id,
+          orderId,
+          null,
+          input.purpose,
+          input.planId,
+          input.tokens,
+          amountIdr,
+          'pending',
+          paymentUrl,
+          new Date().toISOString()
+        );
+      void leuwongrrRate; // rate lookup ensures configured state is enforced at invoice time
+      return { order_id: orderId, payment_url: paymentUrl, tokens: input.tokens, provider: 'leuwongrr' };
+    }
+
     const invoice = await payments.createInvoice({
       orderId,
       amountCents: input.amountCents,
@@ -583,7 +621,8 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
           planId: plan.id,
           amountCents: plan.monthlyPriceCents,
           tokens: plan.includedTokens,
-          traceId: req.id
+          traceId: req.id,
+          provider: parsed.data.provider
         })
       );
     } catch (error) {
@@ -606,7 +645,8 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
           planId: plan.id,
           amountCents: parsed.data.amountCents,
           tokens,
-          traceId: req.id
+          traceId: req.id,
+          provider: parsed.data.provider
         })
       );
     } catch (error) {
@@ -808,6 +848,43 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
     }
   });
 
+  // ---- Exchange rate (admin) ----
+
+  app.get('/console/api/admin/exchange-rate', async (req, reply) => {
+    try {
+      await requireAdmin(req);
+      const row = db.db
+        .prepare("SELECT idr_per_usd, updated_at FROM exchange_rates WHERE id = 'default'")
+        .get() as { idr_per_usd: number; updated_at: string } | undefined;
+      if (!row) return fail(reply, 404, 'exchange_rate_not_found', 'Rate not configured', req.id);
+      return reply.send({ idr_per_usd: row.idr_per_usd, updated_at: row.updated_at });
+    } catch (error) {
+      return handle(error, reply, req.id);
+    }
+  });
+
+  app.post('/console/api/admin/exchange-rate', async (req, reply) => {
+    try {
+      const admin = await requireAdmin(req);
+      const parsed = z
+        .object({ idr_per_usd: z.number().int().positive() })
+        .strict()
+        .safeParse(req.body);
+      if (!parsed.success) return fail(reply, 400, 'invalid_request', 'Rate invalid', req.id);
+      setExchangeRate(db.db, parsed.data.idr_per_usd, admin.id);
+      db.audit({
+        tenantId: admin.tenantId,
+        actorType: 'admin',
+        event: 'console.exchange_rate.updated',
+        traceId: req.id,
+        metadata: { idr_per_usd: parsed.data.idr_per_usd }
+      });
+      return reply.send({ idr_per_usd: parsed.data.idr_per_usd });
+    } catch (error) {
+      return handle(error, reply, req.id);
+    }
+  });
+
   // ---- Payment webhook ----
 
   app.post('/webhooks/cryptomus', async (req, reply) => {
@@ -898,6 +975,102 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
         }
 
         // A late failure notice must never revoke money already settled.
+        if (payment.settled_at) return 'recorded';
+        db.db.prepare('UPDATE payments SET status = ? WHERE id = ?').run(status, payment.id);
+        return 'recorded';
+      })();
+      return reply.send({ accepted: true, duplicate: outcome === 'duplicate' });
+    } catch (error) {
+      return handle(error, reply, req.id);
+    }
+  });
+
+  // ---- leuwongrr.online payment webhook (QRIS + bank transfer) ----
+  // Server-to-server: no session cookie, no CORS, no Access JWT.
+  // Signature: HMAC-SHA256 of the raw body with LEUWONGRR_WEBHOOK_SECRET.
+  app.post('/webhooks/leuwongrr', async (req, reply) => {
+    const secret = config.LEUWONGRR_WEBHOOK_SECRET;
+    if (!secret || secret.trim() === '') {
+      return fail(reply, 503, 'webhook_not_configured', 'Webhook secret not configured', req.id);
+    }
+    const signature = req.headers['x-leuwongrr-signature'];
+    const signatureStr = Array.isArray(signature) ? signature[0] : signature;
+    const rawBody = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
+    if (!signatureStr || typeof signatureStr !== 'string' || !verifyHmacSignature(secret, rawBody, signatureStr)) {
+      return fail(reply, 403, 'signature_invalid', 'Signature rejected', req.id);
+    }
+
+    const payload = req.body as Record<string, unknown> | undefined;
+    if (!payload || typeof payload !== 'object') {
+      return fail(reply, 400, 'invalid_request', 'Body required', req.id);
+    }
+
+    const orderId = typeof payload.order_id === 'string' ? payload.order_id : null;
+    const amountIdr = typeof payload.amount_idr === 'number' ? payload.amount_idr : null;
+    const status = typeof payload.status === 'string' ? payload.status : null;
+    if (!orderId || amountIdr === null || !status) {
+      return fail(reply, 400, 'invalid_request', 'Fields missing: order_id, amount_idr, status', req.id);
+    }
+
+    const payment = db.db
+      .prepare(
+        "SELECT id, account_id, purpose, plan_id, tokens, amount_cents, currency, status, settled_at FROM payments WHERE order_id = ? AND provider = 'leuwongrr'"
+      )
+      .get(orderId) as
+      | {
+          id: string;
+          account_id: string;
+          purpose: 'subscription' | 'topup';
+          plan_id: string | null;
+          tokens: number;
+          amount_cents: number;
+          currency: string;
+          status: string;
+          settled_at: string | null;
+        }
+      | undefined;
+    if (!payment) return fail(reply, 404, 'payment_not_found', 'Unknown order', req.id);
+
+    const settles = isLeuwongrrPaid(status);
+    if (settles && Math.round(amountIdr) < payment.amount_cents) {
+      return fail(reply, 409, 'payment_amount_mismatch', 'Reported amount below invoice', req.id);
+    }
+    if (settles && payment.currency !== 'IDR') {
+      return fail(reply, 409, 'payment_currency_mismatch', 'Expected IDR', req.id);
+    }
+
+    let tokens = 0;
+    if (settles) {
+      try {
+        const rate = getExchangeRate(db.db);
+        tokens = idrToTokens(Math.round(amountIdr), rate);
+      } catch (error) {
+        return handle(error, reply, req.id);
+      }
+    }
+
+    const digest = `${orderId}:${status}:${signatureStr}`;
+    const seenAt = new Date().toISOString();
+    try {
+      const outcome = db.db.transaction((): 'duplicate' | 'settled' | 'recorded' => {
+        const inserted = db.db
+          .prepare(
+            'INSERT OR IGNORE INTO payment_events (id, payment_id, digest, status, created_at) VALUES (?, ?, ?, ?, ?)'
+          )
+          .run(randomUUID(), payment.id, digest, status, seenAt);
+        if (inserted.changes === 0) return 'duplicate';
+        if (settles) {
+          if (payment.settled_at) return 'recorded';
+          db.db
+            .prepare('UPDATE payments SET status = ?, settled_at = ? WHERE id = ?')
+            .run(status, seenAt, payment.id);
+          if (payment.purpose === 'subscription' && payment.plan_id) {
+            billing.startSubscription(payment.account_id, payment.plan_id);
+          } else if (tokens > 0) {
+            billing.credit(payment.account_id, tokens, 'payment', orderId);
+          }
+          return 'settled';
+        }
         if (payment.settled_at) return 'recorded';
         db.db.prepare('UPDATE payments SET status = ? WHERE id = ?').run(status, payment.id);
         return 'recorded';

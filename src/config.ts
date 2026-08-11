@@ -94,7 +94,11 @@ const schema = z.object({
   CRYPTOMUS_API_URL: z.string().url().default('https://api.cryptomus.com'),
   CRYPTOMUS_MERCHANT_ID: z.string().min(8).optional(),
   CRYPTOMUS_PAYMENT_API_KEY: z.string().min(8).optional(),
-  CRYPTOMUS_TIMEOUT_MS: z.coerce.number().int().min(1000).max(60000).default(15000)
+  CRYPTOMUS_TIMEOUT_MS: z.coerce.number().int().min(1000).max(60000).default(15000),
+
+  // leuwongrr.online payment webhooks (QRIS + bank) share this secret for HMAC.
+  // Required once the console is enabled: without it, /webhooks/leuwongrr 503s.
+  LEUWONGRR_WEBHOOK_SECRET: z.string().min(32).optional()
 });
 
 export type Config = z.infer<typeof schema>;
@@ -171,6 +175,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   if (config.CONSOLE_ENABLED && Boolean(config.ACCESS_TEAM_DOMAIN) !== Boolean(config.ACCESS_AUD)) {
     throw new Error('ACCESS_TEAM_DOMAIN and ACCESS_AUD must be set together');
+  }
+  if (config.NODE_ENV === 'production' && config.CONSOLE_ENABLED && !config.LEUWONGRR_WEBHOOK_SECRET) {
+    throw new Error('LEUWONGRR_WEBHOOK_SECRET is required when CONSOLE_ENABLED is true in production');
   }
   return config;
 }

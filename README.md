@@ -125,8 +125,8 @@ the artifact instead of building locally.
 
 ```bash
 SHA=$(git rev-parse HEAD)
-scp ".release/$SHA.tar.gz" ".release/$SHA.tar.gz.sha256" ubuntu@18.136.26.152:/tmp/
-ssh ubuntu@18.136.26.152 "sudo bash /opt/leuwongrr-gateway/current/scripts/deploy.sh $SHA /tmp/$SHA.tar.gz"
+scp ".release/$SHA.tar.gz" ".release/$SHA.tar.gz.sha256" admin@47.130.108.143:/tmp/
+ssh admin@47.130.108.143 "sudo bash /opt/leuwongrr-gateway/current/scripts/deploy.sh $SHA /tmp/$SHA.tar.gz"
 ```
 
 For the very first deploy there is no `current/scripts`. Do not copy the

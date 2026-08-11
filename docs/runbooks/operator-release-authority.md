@@ -86,7 +86,7 @@ From the operator workstation, not from inside the VPS:
 ```bash
 SHA=$(git rev-parse HEAD)
 scp ".release/$SHA.tar.gz" ".release/$SHA.tar.gz.sha256" \
-  ".release/$SHA.tar.gz.sha256.sig" ubuntu@18.136.26.152:/tmp/
+  ".release/$SHA.tar.gz.sha256.sig" admin@47.130.108.143:/tmp/
 ```
 
 The VPS receives only the artifact, checksum, and signature. Do not copy the repository, `.git`, `node_modules`, local environment files, private keys, or the signing key.

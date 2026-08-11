@@ -1,7 +1,7 @@
 # Final Go-Live LeuwongRR Gateway — Design
 
-Tanggal: 2026-08-12  
-Status: Menunggu review tertulis sebelum eksekusi lanjutan  
+Tanggal: 2026-08-12
+Status: Menunggu review tertulis sebelum eksekusi lanjutan
 Repository: `lautanrobby11-sys/leuwongrr-gateway`
 
 ## 1. Tujuan dan batas

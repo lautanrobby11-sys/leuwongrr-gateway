@@ -169,9 +169,19 @@ export function Admin() {
   } | null>(null);
   const [revenue, setRevenue] = useState(0);
   const [plans, setPlans] = useState<Plan[]>([]);
-  const [catalog, setCatalog] = useState<
-    Array<{ id: string; capabilities: string[]; max_output_tokens: number }>
-  >([]);
+    const [catalog, setCatalog] = useState<
+      Array<{
+        id: string;
+        name: string;
+        provider: string;
+        inputPriceCents: number;
+        outputPriceCents: number;
+        cacheReadPriceCents: number;
+        multimodalSupport: boolean;
+        upstreamModel: string;
+        enabled: boolean;
+      }>
+    >([]);
   const [policies, setPolicies] = useState<
     Array<{ tenant_id: string; model_id: string; enabled: number }>
   >([]);
@@ -337,13 +347,19 @@ export function Admin() {
 
           {tab === 'models' && (
             <div className="space-y-4">
-              <Card title="Model catalog" subtitle="Declared in policy and served through OmniRoute">
-                <Table headers={['Model', 'Capabilities', 'Max output']} empty={catalog.length === 0}>
+              <Card title="Model catalog" subtitle="Registered in the gateway and served through OmniRoute">
+                <Table
+                  headers={['Model', 'Provider', 'In ₵/M', 'Out ₵/M', 'Cache ₵/M', 'Vision']}
+                  empty={catalog.length === 0}
+                >
                   {catalog.map((model) => (
                     <tr key={model.id}>
                       <Cell className="font-mono text-xs">{model.id}</Cell>
-                      <Cell className="text-xs text-muted">{model.capabilities.join(', ')}</Cell>
-                      <Cell className="tabular-nums">{tokens(model.max_output_tokens)}</Cell>
+                      <Cell className="text-xs text-muted">{model.provider}</Cell>
+                      <Cell className="tabular-nums">{model.inputPriceCents}</Cell>
+                      <Cell className="tabular-nums">{model.outputPriceCents}</Cell>
+                      <Cell className="tabular-nums">{model.cacheReadPriceCents}</Cell>
+                      <Cell className="text-xs text-muted">{model.multimodalSupport ? 'yes' : 'no'}</Cell>
                     </tr>
                   ))}
                 </Table>
@@ -363,9 +379,9 @@ export function Admin() {
                         <Button
                           variant="outline"
                           onClick={() =>
-                            void api.admin
-                              .setModel(policy.tenant_id, policy.model_id, !policy.enabled)
-                              .then(load)
+                              void api.admin
+                                .setModelPolicy(policy.tenant_id, policy.model_id, !policy.enabled)
+                                .then(load)
                           }
                         >
                           {policy.enabled ? 'Disable' : 'Enable'}

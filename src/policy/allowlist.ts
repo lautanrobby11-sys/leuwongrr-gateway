@@ -17,7 +17,7 @@ export type RouteId =
   | 'webhook.leuwongrr';
 
 export interface AllowedRoute {
-  method: 'GET' | 'POST';
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE';
   pattern: RegExp;
   id: RouteId;
 }
@@ -62,7 +62,17 @@ export const PUBLIC_ALLOWLIST: readonly AllowedRoute[] = Object.freeze([
   },
   {
     method: 'POST',
-    pattern: /^\/console\/api\/admin\/(plans|models|accounts\/limits|accounts\/credit|accounts\/status|exchange-rate)$/,
+    pattern: /^\/console\/api\/admin\/(plans|models(\/policy)?|accounts\/limits|accounts\/credit|accounts\/status|exchange-rate)$/,
+    id: 'console.admin'
+  },
+  {
+    method: 'PUT',
+    pattern: /^\/console\/api\/admin\/models\/[a-z0-9-]{2,64}$/,
+    id: 'console.admin'
+  },
+  {
+    method: 'DELETE',
+    pattern: /^\/console\/api\/admin\/models\/[a-z0-9-]{2,64}$/,
     id: 'console.admin'
   },
   { method: 'POST', pattern: /^\/webhooks\/cryptomus$/, id: 'webhook.cryptomus' },
@@ -76,7 +86,7 @@ export function resolveRoute(method: string, path: string): RouteId | null {
 }
 
 export interface DocumentedOperation {
-  method: 'GET' | 'POST';
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE';
   /** Path exactly as it appears in docs/api/openapi.yaml. */
   path: string;
   /** Concrete path proving the allowlist still accepts this operation. */
@@ -131,6 +141,9 @@ export const DOCUMENTED_OPERATIONS: readonly DocumentedOperation[] = Object.free
   { method: 'POST', path: '/console/api/admin/exchange-rate', sample: '/console/api/admin/exchange-rate', id: 'console.admin' },
   { method: 'POST', path: '/console/api/admin/plans', sample: '/console/api/admin/plans', id: 'console.admin' },
   { method: 'POST', path: '/console/api/admin/models', sample: '/console/api/admin/models', id: 'console.admin' },
+  { method: 'POST', path: '/console/api/admin/models/policy', sample: '/console/api/admin/models/policy', id: 'console.admin' },
+  { method: 'PUT', path: '/console/api/admin/models/{id}', sample: '/console/api/admin/models/lwrr-text', id: 'console.admin' },
+  { method: 'DELETE', path: '/console/api/admin/models/{id}', sample: '/console/api/admin/models/lwrr-text', id: 'console.admin' },
   { method: 'POST', path: '/console/api/admin/accounts/limits', sample: '/console/api/admin/accounts/limits', id: 'console.admin' },
   { method: 'POST', path: '/console/api/admin/accounts/credit', sample: '/console/api/admin/accounts/credit', id: 'console.admin' },
   { method: 'POST', path: '/console/api/admin/accounts/status', sample: '/console/api/admin/accounts/status', id: 'console.admin' },

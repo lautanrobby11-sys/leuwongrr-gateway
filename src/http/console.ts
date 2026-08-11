@@ -23,7 +23,7 @@ import { PaymentError, PAID_STATUSES, type CryptomusClient } from '../payments/c
 import { isPaidStatus as isLeuwongrrPaid, verifyHmacSignature } from '../payments/leuwongrr.js';
 import { getExchangeRate, idrToTokens, setExchangeRate } from '../billing/exchange-rate.js';
 import { assertResolvedPublicEgress } from '../policy/egress.js';
-import { listModels } from '../policy/capabilities.js';
+import { ModelCatalog, ModelError, modelInputSchema, modelUpdateSchema } from '../models/catalog.js';
 import type { Scope } from '../auth/api-keys.js';
 
 export interface ConsoleDeps {
@@ -169,6 +169,9 @@ const subscribeSchema = z
 export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
   const { config, accounts, billing, payments, db } = deps;
   const distRoot = normalize(config.WEB_DIST_PATH);
+  // Release 2a: admin-owned model catalogue, read and written via the admin
+  // surface only. The request path keeps using the static registry.
+  const models = new ModelCatalog(db.db);
 
   async function currentAccount(req: FastifyRequest): Promise<AccountRecord | null> {
     const token = readCookie(req, config.SESSION_COOKIE_NAME);
@@ -202,7 +205,8 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
       error instanceof AccessError ||
       error instanceof OauthError ||
       error instanceof BillingError ||
-      error instanceof PaymentError
+      error instanceof PaymentError ||
+      error instanceof ModelError
     ) {
       return fail(reply, error.statusCode, error.code, error.code.replace(/_/g, ' '), traceId);
     }
@@ -742,11 +746,7 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
         .prepare('SELECT tenant_id, model_id, enabled FROM model_policies ORDER BY tenant_id')
         .all();
       return reply.send({
-        catalog: listModels().map((model) => ({
-          id: model.publicId,
-          capabilities: [...model.capabilities],
-          max_output_tokens: model.maxOutputTokens
-        })),
+        catalog: models.list(),
         policies: rows
       });
     } catch (error) {
@@ -754,7 +754,79 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
     }
   });
 
+  // Release 2a: register a model reachable through OmniRoute.
   app.post('/console/api/admin/models', async (req, reply) => {
+    try {
+      const admin = await requireAdmin(req);
+      const parsed = modelInputSchema.safeParse(req.body);
+      if (!parsed.success) return fail(reply, 400, 'invalid_request', 'Model payload invalid', req.id);
+      const model = db.db.transaction(() => {
+        const written = models.create(parsed.data);
+        db.audit({
+          tenantId: admin.tenantId,
+          actorType: 'admin',
+          event: 'console.model.created',
+          traceId: req.id,
+          metadata: { model: written.id }
+        });
+        return written;
+      })();
+      return reply.send({ model });
+    } catch (error) {
+      return handle(error, reply, req.id);
+    }
+  });
+
+  app.put('/console/api/admin/models/:id', async (req, reply) => {
+    try {
+      const admin = await requireAdmin(req);
+      const id = (req.params as { id: string }).id;
+      if (!/^[a-z0-9-]{2,64}$/.test(id)) return fail(reply, 400, 'invalid_request', 'Model id invalid', req.id);
+      const parsed = modelUpdateSchema.safeParse(req.body);
+      if (!parsed.success) return fail(reply, 400, 'invalid_request', 'Model payload invalid', req.id);
+      const model = db.db.transaction(() => {
+        const written = models.update(id, parsed.data);
+        if (!written) return null;
+        db.audit({
+          tenantId: admin.tenantId,
+          actorType: 'admin',
+          event: 'console.model.updated',
+          traceId: req.id,
+          metadata: { model: written.id }
+        });
+        return written;
+      })();
+      if (!model) return fail(reply, 404, 'model_not_found', 'Model unavailable', req.id);
+      return reply.send({ model });
+    } catch (error) {
+      return handle(error, reply, req.id);
+    }
+  });
+
+  app.delete('/console/api/admin/models/:id', async (req, reply) => {
+    try {
+      const admin = await requireAdmin(req);
+      const id = (req.params as { id: string }).id;
+      if (!/^[a-z0-9-]{2,64}$/.test(id)) return fail(reply, 400, 'invalid_request', 'Model id invalid', req.id);
+      db.db.transaction(() => {
+        models.remove(id);
+        db.audit({
+          tenantId: admin.tenantId,
+          actorType: 'admin',
+          event: 'console.model.deleted',
+          traceId: req.id,
+          metadata: { model: id }
+        });
+      })();
+      return reply.send({ deleted: true });
+    } catch (error) {
+      return handle(error, reply, req.id);
+    }
+  });
+
+  // Per-tenant entitlement toggle. Lives on its own path so POST /models can
+  // mean "create a model" rather than being overloaded with a second meaning.
+  app.post('/console/api/admin/models/policy', async (req, reply) => {
     try {
       await requireAdmin(req);
       const parsed = z

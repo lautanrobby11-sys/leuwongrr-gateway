@@ -197,11 +197,21 @@ export const api = {
       post<{ plan: Plan }>('/console/api/admin/plans', plan),
     models: () =>
       get<{
-        catalog: Array<{ id: string; capabilities: string[]; max_output_tokens: number }>;
+        catalog: Array<{
+          id: string;
+          name: string;
+          provider: string;
+          inputPriceCents: number;
+          outputPriceCents: number;
+          cacheReadPriceCents: number;
+          multimodalSupport: boolean;
+          upstreamModel: string;
+          enabled: boolean;
+        }>;
         policies: Array<{ tenant_id: string; model_id: string; enabled: number }>;
       }>('/console/api/admin/models'),
-    setModel: (tenantId: string, modelId: string, enabled: boolean) =>
-      post<{ updated: boolean }>('/console/api/admin/models', { tenantId, modelId, enabled }),
+    setModelPolicy: (tenantId: string, modelId: string, enabled: boolean) =>
+      post<{ updated: boolean }>('/console/api/admin/models/policy', { tenantId, modelId, enabled }),
     accounts: () =>
       get<{
         accounts: Array<{

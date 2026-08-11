@@ -208,4 +208,17 @@ ALTER TABLE subscriptions ADD COLUMN activated_at TEXT;
 ALTER TABLE subscriptions ADD COLUMN expires_at TEXT;
 ALTER TABLE subscriptions ADD COLUMN resets_remaining INTEGER NOT NULL DEFAULT 0 CHECK(resets_remaining >= 0);
 `
+}, {
+  // Release 2a model catalog (Boss spec): admins register models manually from
+  // OmniRoute. The existing 0006 table already carries identity, provider,
+  // multimodal and per-million dollar prices; this migration adds the cents
+  // pricing columns the admin CRUD writes and the upstream model name the
+  // gateway needs to route the model through OmniRoute.
+  id: '0008_model_catalog',
+  sql: `
+ALTER TABLE models ADD COLUMN input_price_cents INTEGER NOT NULL DEFAULT 0 CHECK(input_price_cents >= 0);
+ALTER TABLE models ADD COLUMN output_price_cents INTEGER NOT NULL DEFAULT 0 CHECK(output_price_cents >= 0);
+ALTER TABLE models ADD COLUMN cache_read_price_cents INTEGER NOT NULL DEFAULT 0 CHECK(cache_read_price_cents >= 0);
+ALTER TABLE models ADD COLUMN upstream_model TEXT NOT NULL DEFAULT 'auto';
+`
 }];

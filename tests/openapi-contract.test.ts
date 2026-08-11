@@ -9,7 +9,7 @@ import {
 } from '../src/policy/allowlist.js';
 
 const PATH_LINE = /^ {2}(\/\S*):$/;
-const METHOD_LINE = /^ {4}(get|post):$/;
+const METHOD_LINE = /^ {4}(get|post|put|delete):$/;
 const OPENAPI_PATH = join(process.cwd(), 'docs/api/openapi.yaml');
 
 /**

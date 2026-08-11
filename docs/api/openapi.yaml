@@ -365,12 +365,67 @@ paths:
           description: Origin is not allowed, or the Access assertion failed.
   /console/api/admin/models:
     get:
-      summary: List model entitlements
+      summary: List the model catalog and per-tenant entitlements
+      description: >-
+        `catalog` is the admin-owned registry of models reachable through
+        OmniRoute (id, name, provider, input/output/cache-read prices in cents,
+        multimodal support, upstream model name); `policies` is the per-tenant
+        entitlement matrix.
       security:
         - accessAssertion: []
       responses:
         '200':
-          description: Entitlements per tenant.
+          description: Catalog and entitlements.
+    post:
+      summary: Register a model
+      description: >-
+        Requires an allowed Origin. Prices are cents per million tokens; the
+        id must be a lower-case slug. 409 when the id already exists.
+      security:
+        - accessAssertion: []
+      responses:
+        '200':
+          description: Model registered.
+        '400':
+          description: Model payload invalid.
+        '409':
+          description: Model id already exists.
+        '403':
+          description: Origin is not allowed, or the Access assertion failed.
+  /console/api/admin/models/{id}:
+    put:
+      summary: Amend a model
+      description: >-
+        Requires an allowed Origin. Partial updates only; fields that are
+        omitted keep their current value.
+      security:
+        - accessAssertion: []
+      responses:
+        '200':
+          description: Model updated.
+        '400':
+          description: Model payload invalid.
+        '404':
+          description: Model not found.
+        '403':
+          description: Origin is not allowed, or the Access assertion failed.
+    delete:
+      summary: Remove a model
+      description: >-
+        Requires an allowed Origin. Removes the model and its entitlements;
+        409 while any active plan still references it.
+      security:
+        - accessAssertion: []
+      responses:
+        '200':
+          description: Model removed.
+        '404':
+          description: Model not found.
+        '409':
+          description: Model is referenced by an active plan.
+        '403':
+          description: Origin is not allowed, or the Access assertion failed.
+  /console/api/admin/models/policy:
     post:
       summary: Change a model entitlement
       description: Requires an allowed Origin.

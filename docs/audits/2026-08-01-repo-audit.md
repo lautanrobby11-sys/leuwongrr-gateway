@@ -164,3 +164,22 @@ Baca bagian ini sebelum mengutip audit ini sebagai bukti.
 5. **Konfirmasi setiap epoch dengan `date -u -d @<epoch>` sebelum memakainya.** Titik nol soak yang benar adalah `1785552138`; nilai `1785537738` pernah tercatat dan salah 4 jam, yang bisa membuat operator menyatakan T10 lulus terlalu cepat.
 6. Bila menyentuh `.github/workflows/`, baca §2.1 dan §2.2 lebih dulu — keduanya defect yang tidak terlihat sampai kondisi tertentu terpenuhi.
 7. **A19 (§3.2) memblokir rilis berikutnya.** Perbaiki dengan uji regresi sebelum artefak baru mana pun di-deploy.
+
+---
+
+## 7. Addendum 12 Agustus 2026 — A19 closed-in-code
+
+| # | Status | Fix commit | Regression test |
+|---|---|---|---|
+| A19 | **CLOSED-IN-CODE** | `28ee11b` | `tests/stream-upstream-error.test.ts` |
+
+**Historical finding (unchanged — §3.2 di atas):** Kebocoran permit semaphore di `src/http/pipeline.ts` cabang streaming ketika OmniRoute membalas non-2xx dengan body. Permit tidak pernah dilepas karena body tidak dibaca/dibatalkan. `UPSTREAM_CONCURRENCY` default 4, sehingga empat kegagalan streaming sudah menghabiskan seluruh semaphore dan memacetkan probe readiness.
+
+**Current closure:** Commit `28ee11b` menambahkan `await upstream.body?.cancel().catch(() => undefined)` sebelum `sendProtocolError` pada cabang streaming yang gagal (baris 101 di versi saat ini). Commit `2b52fd7` (PR #53) memperkenalkan `tests/stream-upstream-error.test.ts` yang menetapkan `UPSTREAM_CONCURRENCY: 1`, mengirim satu permintaan streaming yang gagal (502 with JSON body), lalu memverifikasi bahwa permintaan streaming berikutnya berhasil mencapai upstream. Sebelum `28ee11b`, `expect(harness.upstreamCalls()).toBe(2)` gagal karena semaphore habis pada permintaan pertama. Uji ini lulus pada HEAD yang sama dengan addendum ini.
+
+**Yang tidak diklaim:**
+- A19 belum ditutup di produksi. Fix hanya di `main`; belum di-deploy.
+- `UPSTREAM_CONCURRENCY` default tetap 4; tidak ada perubahan konfigurasi.
+- `finalizeFailure()` tetap tidak menulis audit (§3.2 catatan pendukung); issue #47 tetap terbuka.
+- Tidak ada perubahan pada `src/upstream.ts`, `src/config.ts`, atau berkas non-docs lain dalam closure ini.
+- Addendum ini tidak menggantikan gate rilis (quality, artifact, health, release authority) yang tetap wajib sebelum deploy.

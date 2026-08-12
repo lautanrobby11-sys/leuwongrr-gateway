@@ -221,4 +221,18 @@ ALTER TABLE models ADD COLUMN output_price_cents INTEGER NOT NULL DEFAULT 0 CHEC
 ALTER TABLE models ADD COLUMN cache_read_price_cents INTEGER NOT NULL DEFAULT 0 CHECK(cache_read_price_cents >= 0);
 ALTER TABLE models ADD COLUMN upstream_model TEXT NOT NULL DEFAULT 'auto';
 `
+}, {
+  // Goku decision (Notion 20.9): a historical orphan in exchange_rates.updated_by
+  // references an account that no longer exists, which fails PRAGMA
+  // foreign_key_check and blocks the backup/restore drill. The column is
+  // nullable with NO ACTION semantics, so this clears only orphan references,
+  // never touches valid rows, and never deletes the exchange_rates row itself.
+  // Idempotent: after the first run no orphan remains and the UPDATE matches
+  // nothing.
+  id: '0009_clear_orphan_exchange_rate_updated_by',
+  sql: `
+UPDATE exchange_rates SET updated_by = NULL
+WHERE updated_by IS NOT NULL
+  AND updated_by NOT IN (SELECT id FROM accounts);
+`
 }];

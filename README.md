@@ -16,9 +16,9 @@ evidence that the VPS is running that commit.
 
 | Item | Verified state |
 | --- | --- |
-| Local/GitHub `main` | `17acb7bff71f43c4d52ae70aaad260ccaaf40af4` |
-| Recorded production active SHA | `b82fce6` (must be re-verified on the VPS before any release claim) |
-| API | LIVE, according to the canonical operator status record |
+| Local/GitHub `main` | `5160be50253b1e8ed33d339d18f5fb69c9da1638` |
+| Production active SHA (VPS#2) | `5160be50253b1e8ed33d339d18f5fb69c9da1638` (deployed 12 Aug 2026; previous `b82fce6`) |
+| API | LIVE, verified 200 on loopback health/readiness |
 | Console | **OFF**; `/login`, `/member`, and `/chat` remain unavailable in production |
 | Gate 3 — OTP / Cloudflare Access / acceptance | **BLOCKED**; required credentials and runtime acceptance evidence are not recorded as complete |
 | Final go-live | **NOT DECLARED** |

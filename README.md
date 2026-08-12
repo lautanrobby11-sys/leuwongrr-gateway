@@ -8,6 +8,27 @@ web console for administration, member self-service and chat.
 client  ->  router.leuwongrr.cloud  ->  api.leuwongrr.cloud  ->  /v1/*  ->  gateway (127.0.0.1:2080)  ->  OmniRoute (127.0.0.1:20128)
 ```
 
+## Canonical status — 12 August 2026
+
+This status separates repository state from independently verified production
+state. It is intentionally conservative: a newer repository commit is not
+evidence that the VPS is running that commit.
+
+| Item | Verified state |
+| --- | --- |
+| Local/GitHub `main` | `17acb7bff71f43c4d52ae70aaad260ccaaf40af4` |
+| Recorded production active SHA | `b82fce6` (must be re-verified on the VPS before any release claim) |
+| API | LIVE, according to the canonical operator status record |
+| Console | **OFF**; `/login`, `/member`, and `/chat` remain unavailable in production |
+| Gate 3 — OTP / Cloudflare Access / acceptance | **BLOCKED**; required credentials and runtime acceptance evidence are not recorded as complete |
+| Final go-live | **NOT DECLARED** |
+
+The canonical status record is the [Notion API status page](https://app.notion.com/p/7929024abd2483f8bfb181327c508e4d).
+Production activation requires the release-authority procedure in
+`docs/runbooks/operator-release-authority.md`; GitHub Actions and repository
+alignment alone do not authorize deployment. Never place production secrets in
+this repository, README, Notion, logs, or release evidence.
+
 The process never listens on a public interface. Cloudflare terminates TLS and a
 Cloudflare Tunnel carries traffic to loopback, which is why `scripts/deploy.sh`
 refuses to activate a release whose `GATEWAY_HOST` is not `127.0.0.1`.

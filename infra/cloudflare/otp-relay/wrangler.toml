@@ -1,0 +1,10 @@
+name = "leuwongrr-otp-relay"
+main = "src/index.ts"
+compatibility_date = "2026-08-11"
+
+[vars]
+OTP_FROM_EMAIL = "no-reply@leuwongrr.cloud"
+
+# Secrets (never in this file — `wrangler secret put`):
+#   OTP_WEBHOOK_TOKEN  — shared with gateway.env OTP_WEBHOOK_TOKEN
+#   RESEND_API_KEY     — Resend API key

@@ -19,9 +19,17 @@ function resolveBash() {
   return candidate;
 }
 
+function gitBashEnv() {
+  if (process.platform !== 'win32') return process.env;
+  const gitExecPath = execFileSync('git', ['--exec-path'], { encoding: 'utf8' }).trim();
+  const gitUsrBin = resolve(gitExecPath, '..', '..', '..', 'usr', 'bin');
+  const path = process.env.PATH ? `${process.env.PATH};${gitUsrBin}` : gitUsrBin;
+  return { ...process.env, PATH: path };
+}
+
 function run(step, command, args) {
   console.log(`\n=== ${step} ===`);
-  const result = spawnSync(command, args, { stdio: 'inherit' });
+  const result = spawnSync(command, args, { stdio: 'inherit', env: gitBashEnv() });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`${step} failed with exit code ${result.status}`);
 }

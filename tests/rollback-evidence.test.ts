@@ -1,8 +1,9 @@
-import { execFileSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { gitBashEnv, resolveGitBash } from './support/git-bash.js';
 
 /**
  * PR #69 rollback evidence hardening: the evidence append must be safe and
@@ -19,10 +20,7 @@ import { afterEach, describe, expect, it } from 'vitest';
  */
 
 function resolveBash(): string {
-  if (process.platform === 'darwin') return '/bin/bash';
-  if (process.platform !== 'win32') return '/usr/bin/bash';
-  const gitExecPath = execFileSync('git', ['--exec-path'], { encoding: 'utf8' }).trim();
-  return join(gitExecPath, '..', '..', '..', 'usr', 'bin', 'bash.exe');
+  return resolveGitBash();
 }
 
 const bash = resolveBash();
@@ -56,7 +54,7 @@ echo "rolled back from $CURRENT to $TARGET"
   const result = spawnSync(bash, ['-c', script], {
     cwd: process.cwd(),
     encoding: 'utf8',
-    env: { ...process.env, ROLLBACK_TEST_ROOT: rootBash }
+    env: { ...gitBashEnv(), ROLLBACK_TEST_ROOT: rootBash }
   });
   return { status: result.status ?? 1, stdout: result.stdout, stderr: result.stderr };
 }

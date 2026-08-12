@@ -70,6 +70,25 @@ reproduce production startup behaviour — including the config validation that
 `npm run ci:local` reproduces the CI pipeline end to end, including packaging a
 release tarball from the current HEAD.
 
+### Deployment boundary
+
+The VPS never receives this repository. The operator transfers only the
+immutable release artifact, its SHA-256 checksum, and its OpenSSH signature:
+
+```text
+.release/<full-sha>.tar.gz
+.release/<full-sha>.tar.gz.sha256
+.release/<full-sha>.tar.gz.sha256.sig
+```
+
+The artifact contains compiled runtime files, production manifests/lockfiles,
+runtime deployment scripts, required systemd units, and public signer material.
+It excludes `.git`, source trees, tests, workstation `node_modules`, `.env`
+files, credentials, and private keys. The VPS never runs `git pull`, builds
+source, or uses a deploy script copied from a home directory. See
+`docs/runbooks/operator-release-authority.md` for the mandatory transfer and
+activation gate.
+
 The operator CLI is run through the release, not through an npm script: on the
 host it is `node dist/cli/keys.js <subcommand>` with `gateway.env` sourced as
 root, and locally `npx tsx src/cli/keys.ts <subcommand>`. Wrapper scripts were

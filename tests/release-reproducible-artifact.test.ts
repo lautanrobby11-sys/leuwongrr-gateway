@@ -1,10 +1,11 @@
-import { execFileSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { gitBashEnv, resolveGitBash } from './support/git-bash.js';
 
 /**
  * A14: two builds of one commit produced two different tarball checksums, so the
@@ -35,11 +36,7 @@ function bashPath(value: string): string {
 }
 
 function resolveBash(): string {
-  if (process.platform !== 'win32') return 'bash';
-  const execPath = execFileSync('git', ['--exec-path'], { encoding: 'utf8' }).trim();
-  const candidate = path.resolve(execPath, '..', '..', '..', 'bin', 'bash.exe');
-  if (!existsSync(candidate)) throw new Error(`Git Bash not found at ${candidate}`);
-  return candidate;
+  return resolveGitBash();
 }
 
 const bash = resolveBash();
@@ -123,11 +120,10 @@ describe('release artifact reproducibility (A14)', () => {
     const result = spawnSync(bash, [bashPath(harness), sha, bashPath(path.join(workspace, 'stage'))], {
       cwd: workdir,
       encoding: 'utf8',
-      env: {
-        ...process.env,
+      env: gitBashEnv({
         STUBS: bashPath(path.join(workspace, 'stubs')),
         WORKDIR: bashPath(workdir)
-      }
+      })
     });
     if (result.status !== 0) {
       throw new Error(`packaging failed (${result.status}): ${result.stderr}`);
@@ -157,10 +153,11 @@ describe('release artifact reproducibility (A14)', () => {
     const extracted = path.join(workspace, 'extract-release');
     await mkdir(extracted, { recursive: true });
     await writeFile(path.join(workspace, 'release.tar.gz'), archive);
+    const archivePath = bashPath(path.join(workspace, 'release.tar.gz'));
     const untar = spawnSync(
-      'tar',
-      ['-C', bashPath(extracted), '-xzf', bashPath(path.join(workspace, 'release.tar.gz'))],
-      { encoding: 'utf8', env: { ...process.env, MSYS_NO_PATHCONV: '1' } }
+      bash,
+      ['-c', `tar -C "$1" -xzf "$2"`, '_', bashPath(extracted), archivePath],
+      { encoding: 'utf8', env: gitBashEnv() }
     );
     expect(untar.status).toBe(0);
 
@@ -180,9 +177,9 @@ describe('release artifact reproducibility (A14)', () => {
     const { archive } = await pack('run-metadata');
     await writeFile(path.join(workspace, 'metadata.tar.gz'), archive);
     const listing = spawnSync(
-      'tar',
-      ['-tvf', bashPath(path.join(workspace, 'metadata.tar.gz')), '--numeric-owner'],
-      { encoding: 'utf8', env: { ...process.env, MSYS_NO_PATHCONV: '1' } }
+      bash,
+      ['-c', `tar -tvf "$1" --numeric-owner`, '_', bashPath(path.join(workspace, 'metadata.tar.gz'))],
+      { encoding: 'utf8', env: gitBashEnv() }
     );
     expect(listing.status).toBe(0);
 
@@ -216,10 +213,11 @@ describe('release artifact reproducibility (A14)', () => {
   it('normalizes staged modes so a different umask cannot change the archive', async () => {
     const { archive } = await pack('run-modes');
     await writeFile(path.join(workspace, 'modes.tar.gz'), archive);
-    const listing = spawnSync('tar', ['-tvf', bashPath(path.join(workspace, 'modes.tar.gz'))], {
-      encoding: 'utf8',
-      env: { ...process.env, MSYS_NO_PATHCONV: '1' }
-    });
+    const listing = spawnSync(
+      bash,
+      ['-c', `tar -tvf "$1"`, '_', bashPath(path.join(workspace, 'modes.tar.gz'))],
+      { encoding: 'utf8', env: gitBashEnv() }
+    );
     expect(listing.status).toBe(0);
 
     const modeOf = (suffix: string): string | undefined =>

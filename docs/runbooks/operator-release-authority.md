@@ -93,6 +93,32 @@ The VPS receives only the artifact, checksum, and signature. Do not copy the rep
 
 The host verifies the signature against its own trust anchor `/opt/leuwongrr-gateway/config/release-signers`, seeded once from the artifact's `keys/release-signers` (vps-bootstrap) and rotated directly by the operator (ADR-013).
 
+### What is allowed to cross to the VPS
+
+The deployment input is an immutable release artifact, not a repository copy.
+Transfer exactly these three files from the workstation:
+
+```text
+.release/<full-sha>.tar.gz
+.release/<full-sha>.tar.gz.sha256
+.release/<full-sha>.tar.gz.sha256.sig
+```
+
+The artifact contains only runtime material selected by
+`scripts/build-release.sh`: compiled `dist/`, production package manifests and
+lockfiles, the runtime deploy/rollback/backup/restore scripts, required
+systemd units, and the public release-signer trust material needed for bare-host
+bootstrap. It intentionally does not contain `.git`, `src/`, `web/src/`,
+`tests/`, workstation `node_modules/`, `.env` files, provider credentials,
+Cloudflare credentials, or private signing keys. The VPS installs production
+dependencies from the artifact's lockfile as the service user; it never runs
+`git pull`, builds source, or receives a workstation `node_modules/` tree.
+
+The artifact is the only supported source for `deploy.sh` and `rollback.sh`.
+Do not run a copy from a home directory, an ad-hoc checkout, or an unrelated
+release directory. A missing artifact, checksum, signature, manifest, or
+required runtime file is a hard stop.
+
 ## Activation
 
 First syntax-check the deploy entrypoint in the active release:

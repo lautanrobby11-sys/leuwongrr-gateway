@@ -156,4 +156,4 @@ printf '%s\n' "$SHA" > "$ROOT/runtime/active-sha"
 chown "$SERVICE:$SERVICE" "$ROOT/runtime/active-sha"
 chmod 0640 "$ROOT/runtime/active-sha"
 record_rollback_evidence
-echo "rolled back from $CURRENT to $TARGET"
+  echo "rolled back from $(basename "$CURRENT") to $(basename "$TARGET")"

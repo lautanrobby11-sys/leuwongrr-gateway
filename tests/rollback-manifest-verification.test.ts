@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { gitBashEnv, resolveGitBash } from './support/git-bash.js';
 
 let release: string | undefined;
 
@@ -19,16 +20,13 @@ afterEach(() => {
  * scripts/ci-shell-gates.mjs.
  */
 function resolveBash(): string {
-  if (process.platform === 'darwin') return '/bin/bash';
-  if (process.platform !== 'win32') return '/usr/bin/bash';
-  const gitExecPath = spawnSync('git', ['--exec-path'], { encoding: 'utf8' }).stdout.trim();
-  return join(gitExecPath, '..', '..', '..', 'usr', 'bin', 'bash.exe');
+  return resolveGitBash();
 }
 
 function createRelease(): string {
   release = mkdtempSync(join(tmpdir(), 'lwrr-rollback-manifest-'));
   writeFileSync(join(release, 'app.js'), 'trusted release\n');
-  const digest = spawnSync(resolveBash(), ['-c', 'sha256sum app.js'], { cwd: release, encoding: 'utf8' });
+  const digest = spawnSync(resolveBash(), ['-c', 'sha256sum app.js'], { cwd: release, encoding: 'utf8', env: gitBashEnv() });
   expect(digest.status, digest.stderr).toBe(0);
   writeFileSync(join(release, 'manifest.sha256'), digest.stdout);
   return release;
@@ -38,7 +36,7 @@ function verify(target: string) {
   return spawnSync(resolveBash(), ['-c', 'source scripts/rollback.sh; verify_release_manifest "$TARGET"'], {
     cwd: process.cwd(),
     encoding: 'utf8',
-    env: { ...process.env, TARGET: target },
+    env: { ...gitBashEnv(), TARGET: target },
   });
 }
 

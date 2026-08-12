@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { gitBashEnv, resolveGitBash } from './support/git-bash.js';
 
 /**
  * A16: release artifacts are signed with the operator's Ed25519 key
@@ -27,10 +28,7 @@ afterEach(() => {
 
 /** Git Bash on Windows (WSL launcher is useless), system bash elsewhere. */
 function resolveBash(): string {
-  if (process.platform === 'darwin') return '/bin/bash';
-  if (process.platform !== 'win32') return '/usr/bin/bash';
-  const gitExecPath = spawnSync('git', ['--exec-path'], { encoding: 'utf8' }).stdout.trim();
-  return join(gitExecPath, '..', '..', '..', 'usr', 'bin', 'bash.exe');
+  return resolveGitBash();
 }
 
 function newDir(prefix: string): string {
@@ -42,20 +40,20 @@ function newDir(prefix: string): string {
 /** Convert a Windows path to the POSIX form Git Bash passes to native tools. */
 function toPosix(path: string): string {
   if (process.platform !== 'win32') return path;
-  const r = spawnSync(resolveBash(), ['-c', 'cygpath -u "$1"', '_', path], { encoding: 'utf8' });
+  const r = spawnSync(resolveBash(), ['-c', 'cygpath -u "$1"', '_', path], { encoding: 'utf8', env: gitBashEnv() });
   expect(r.status, r.stderr).toBe(0);
   return r.stdout.trim();
 }
 
 function hasSshKeygen(): boolean {
-  const r = spawnSync(resolveBash(), ['-c', 'command -v ssh-keygen >/dev/null 2>&1'], { encoding: 'utf8' });
+  const r = spawnSync(resolveBash(), ['-c', 'command -v ssh-keygen >/dev/null 2>&1'], { encoding: 'utf8', env: gitBashEnv() });
   return r.status === 0;
 }
 
 function runBash(command: string, env: Record<string, string> = {}) {
   return spawnSync(resolveBash(), ['-c', command], {
     encoding: 'utf8',
-    env: { ...process.env, ...env },
+    env: { ...gitBashEnv(), ...env },
   });
 }
 

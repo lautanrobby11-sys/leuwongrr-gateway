@@ -1,16 +1,14 @@
 import { spawnSync } from 'node:child_process';
 import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { delimiter, join } from 'node:path';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { gitBashEnv, resolveGitBash, toGitBashPathList } from './support/git-bash.js';
 
 const deploy = readFileSync('scripts/deploy.sh', 'utf8');
 
 function resolveBash(): string {
-  if (process.platform === 'darwin') return '/bin/bash';
-  if (process.platform !== 'win32') return '/usr/bin/bash';
-  const gitExecPath = spawnSync('git', ['--exec-path'], { encoding: 'utf8' }).stdout.trim();
-  return join(gitExecPath, '..', '..', '..', 'usr', 'bin', 'bash.exe');
+  return resolveGitBash();
 }
 
 describe('production configuration deploy guard', () => {
@@ -50,7 +48,7 @@ describe('production configuration deploy guard', () => {
         {
           cwd: process.cwd(),
           encoding: 'utf8',
-          env: { ...process.env, PATH: `${bin}${delimiter}${process.env.PATH ?? ''}` }
+          env: gitBashEnv({ PATH: toGitBashPathList(`${bin};${process.env.PATH ?? ''}`) })
         }
       );
 

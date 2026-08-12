@@ -3,6 +3,7 @@ import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writ
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { gitBashEnv, resolveGitBash, toGitBashPath, toGitBashPathList } from './support/git-bash.js';
 
 let root: string | undefined;
 
@@ -19,12 +20,7 @@ afterEach(() => {
  * scripts/ci-shell-gates.mjs.
  */
 function resolveBash(): string {
-  if (process.platform === 'darwin') return '/bin/bash';
-  if (process.platform !== 'win32') return '/usr/bin/bash';
-  const gitExecPath = spawnSync('git', ['--exec-path'], { encoding: 'utf8' }).stdout.trim();
-  // Git-for-Windows ships its own MSYS bash under usr/bin; that is the only
-  // bash that can run the real functions on Windows.
-  return join(gitExecPath, '..', '..', '..', 'usr', 'bin', 'bash.exe');
+  return resolveGitBash();
 }
 
 function executable(path: string, content: string): void {
@@ -67,19 +63,18 @@ exit ${npmExit}
   const result = spawnSync(resolveBash(), ['-c', 'source scripts/deploy.sh; install_production_dependencies "$TARGET_RELEASE" "$(id -un)" "$INSTALL_PATH" "$RUNUSER" "$CHOWN"'], {
     cwd: process.cwd(),
     encoding: 'utf8',
-    env: {
-      ...process.env,
+    env: gitBashEnv({
       TARGET_RELEASE: release,
-      INSTALL_PATH: `${bin}:/usr/bin:/bin`,
-      RUNUSER: runuser,
-      CHOWN: chown,
+      INSTALL_PATH: `${toGitBashPath(bin)}:/usr/bin:/bin`,
+      RUNUSER: toGitBashPath(runuser),
+      CHOWN: toGitBashPath(chown),
       SECRET_SENTINEL: 'must-not-reach-lifecycle',
       NPM_CONFIG_REGISTRY: 'https://credential.invalid/',
       // The stub npm runs inside `env -i`, so a bare PATH is enough; but Git
       // Bash needs to keep its own helper PATH to find `id`/`stat` used by the
       // stub. The function under test scrubs that with env -i regardless.
-      PATH: `${bin}:${process.env.PATH ?? ''}`
-    },
+      PATH: toGitBashPathList(`${bin};${process.env.PATH ?? ''}`)
+    }),
   });
 
   return { result, release, trace };
@@ -89,7 +84,7 @@ describe('deploy dependency install privilege (A15)', () => {
   it('runs lifecycle install once as the delegated user with an empty allowlisted environment', () => {
     const { result, release, trace } = runInstall();
     expect(result.status, result.stderr).toBe(0);
-    const user = spawnSync(resolveBash(), ['-c', 'id -un'], { encoding: 'utf8' }).stdout.trim() || process.env.USER;
+    const user = spawnSync(resolveBash(), ['-c', 'id -un'], { encoding: 'utf8', env: gitBashEnv() }).stdout.trim() || process.env.USER;
     expect(readFileSync(join(trace, 'runuser-args'), 'utf8')).toContain(`-u ${user} --`);
     expect(readFileSync(join(trace, 'npm-args'), 'utf8').trim()).toBe('ci --omit=dev --ignore-scripts=false --no-audit --no-fund');
     expect(Number(readFileSync(join(trace, 'npm-euid'), 'utf8').trim())).toBeGreaterThan(0);

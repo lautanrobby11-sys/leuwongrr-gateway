@@ -77,9 +77,20 @@ const schema = z.object({
   OTP_TTL_MINUTES: z.coerce.number().int().min(1).max(60).default(10),
   OTP_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(20).default(5),
   OTP_RESEND_SECONDS: z.coerce.number().int().min(15).max(3600).default(60),
-  OTP_DELIVERY: z.enum(['webhook', 'log']).default('log'),
+  OTP_DELIVERY: z.enum(['webhook', 'smtp', 'log']).default('log'),
   OTP_WEBHOOK_URL: z.string().url().optional(),
   OTP_WEBHOOK_TOKEN: z.string().min(16).optional(),
+
+  // ADR-014: SMTP delivery is explicit all-or-nothing. No defaults exist for
+  // host/port/security, so a provider is never guessed; the operator confirms
+  // every value in gateway.env. Security is a closed enum (starttls | tls) with
+  // no plaintext option, and the port is bounded.
+  SMTP_HOST: z.string().min(1).max(253).optional(),
+  SMTP_PORT: z.coerce.number().int().min(1).max(65535).optional(),
+  SMTP_SECURITY: z.enum(['starttls', 'tls']).optional(),
+  SMTP_USERNAME: z.string().min(1).max(320).optional(),
+  SMTP_PASSWORD: z.string().min(1).max(1024).optional(),
+  SMTP_FROM: z.string().email().max(254).optional(),
 
   ACCESS_TEAM_DOMAIN: z.string().min(3).max(253).optional(),
   ACCESS_AUD: z.string().min(8).optional(),
@@ -129,8 +140,31 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (config.OTP_DELIVERY === 'webhook' && (!config.OTP_WEBHOOK_URL || !config.OTP_WEBHOOK_TOKEN)) {
     throw new Error('OTP_WEBHOOK_URL and OTP_WEBHOOK_TOKEN are required when OTP_DELIVERY is webhook');
   }
-  if (config.NODE_ENV === 'production' && config.CONSOLE_ENABLED && config.OTP_DELIVERY !== 'webhook') {
-    throw new Error('production console requires OTP_DELIVERY=webhook; development OTP responses are forbidden');
+  // ADR-014: SMTP delivery is explicit all-or-nothing. A provider must never
+  // be guessed from partial state, so every value has to be confirmed by the
+  // operator before an SMTP process is allowed to boot.
+  if (config.OTP_DELIVERY === 'smtp') {
+    const missingSmtp = [
+      ['SMTP_HOST', config.SMTP_HOST],
+      ['SMTP_PORT', config.SMTP_PORT],
+      ['SMTP_SECURITY', config.SMTP_SECURITY],
+      ['SMTP_USERNAME', config.SMTP_USERNAME],
+      ['SMTP_PASSWORD', config.SMTP_PASSWORD],
+      ['SMTP_FROM', config.SMTP_FROM]
+    ]
+      .filter((entry) => entry[1] === undefined)
+      .map((entry) => entry[0]);
+    if (missingSmtp.length > 0) {
+      throw new Error(`OTP_DELIVERY=smtp requires ${missingSmtp.join(', ')}`);
+    }
+  }
+  if (
+    config.NODE_ENV === 'production' &&
+    config.CONSOLE_ENABLED &&
+    config.OTP_DELIVERY !== 'webhook' &&
+    config.OTP_DELIVERY !== 'smtp'
+  ) {
+    throw new Error('production console requires OTP_DELIVERY=webhook or smtp; development OTP responses are forbidden');
   }
   if (config.METRICS_ENABLED && !config.INTERNAL_METRICS_TOKEN) {
     throw new Error('METRICS_ENABLED requires INTERNAL_METRICS_TOKEN');

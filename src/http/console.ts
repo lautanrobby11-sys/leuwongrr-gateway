@@ -23,6 +23,7 @@ import { PaymentError, PAID_STATUSES, type CryptomusClient } from '../payments/c
 import { isPaidStatus as isLeuwongrrPaid, verifyHmacSignature } from '../payments/leuwongrr.js';
 import { getExchangeRate, idrToTokens, setExchangeRate } from '../billing/exchange-rate.js';
 import { assertResolvedPublicEgress } from '../policy/egress.js';
+import { createSmtpTransport, sendOtpMail } from '../otp-smtp.js';
 import { ModelCatalog, ModelError, modelInputSchema, modelUpdateSchema } from '../models/catalog.js';
 import type { Scope } from '../auth/api-keys.js';
 
@@ -323,6 +324,29 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
         // success would leave the member waiting for a code that is never
         // going to arrive, with no signal to the operator that it failed.
         if (!delivery.ok) throw new AccountError('otp_delivery_failed', 502);
+        return reply.send({ delivered: true, ttl_minutes: config.OTP_TTL_MINUTES });
+      }
+      if (config.OTP_DELIVERY === 'smtp') {
+        // ADR-014: the transport is created per request and closed after the
+        // send; nodemailer only dials on sendMail, so nothing is held open
+        // between requests. Any failure — auth, TLS, timeout, provider
+        // refusal — becomes a fixed 502 like the webhook relay, and the
+        // provider error is never carried here, so it cannot echo credentials.
+        let transport: ReturnType<typeof createSmtpTransport> | undefined;
+        try {
+          transport = createSmtpTransport(config);
+          await sendOtpMail(transport, {
+            from: config.SMTP_FROM as string, // loadConfig forces all-or-nothing
+            to: normaliseEmail(parsed.data.email),
+            code,
+            ttlMinutes: config.OTP_TTL_MINUTES
+          });
+        } catch {
+          // Any SMTP failure reduces to the same fixed 502: delivered nothing.
+          throw new AccountError('otp_delivery_failed', 502);
+        } finally {
+          transport?.close?.();
+        }
         return reply.send({ delivered: true, ttl_minutes: config.OTP_TTL_MINUTES });
       }
       // Development delivery returns the code in the response instead of the

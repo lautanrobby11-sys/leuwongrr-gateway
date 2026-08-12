@@ -60,6 +60,56 @@ describe('configuration guardrails', () => {
         LEUWONGRR_WEBHOOK_SECRET: 's'.repeat(32)
       }).OTP_DELIVERY
     ).toBe('webhook'));
+  const smtpEnv = {
+    NODE_ENV: 'production',
+    CONSOLE_ENABLED: 'true',
+    OTP_DELIVERY: 'smtp',
+    SMTP_HOST: 'smtp.example.test',
+    SMTP_PORT: '465',
+    SMTP_SECURITY: 'tls',
+    SMTP_USERNAME: 'api-noreply@leuwongrr.online',
+    SMTP_PASSWORD: 's'.repeat(24),
+    SMTP_FROM: 'api-noreply@leuwongrr.online',
+    LEUWONGRR_WEBHOOK_SECRET: 's'.repeat(32)
+  };
+  it('accepts a complete production OTP SMTP configuration', () =>
+    expect(loadConfig({ ...base, ...smtpEnv }).OTP_DELIVERY).toBe('smtp'));
+  it.each([
+    ['SMTP_HOST', { SMTP_HOST: undefined }],
+    ['SMTP_PORT', { SMTP_PORT: undefined }],
+    ['SMTP_SECURITY', { SMTP_SECURITY: undefined }],
+    ['SMTP_USERNAME', { SMTP_USERNAME: undefined }],
+    ['SMTP_PASSWORD', { SMTP_PASSWORD: undefined }],
+    ['SMTP_FROM', { SMTP_FROM: undefined }]
+  ])('rejects smtp delivery missing %s', (_field, missing) =>
+    expect(() => loadConfig({ ...base, ...smtpEnv, ...missing })).toThrow(/OTP_DELIVERY=smtp requires/));
+  it('rejects a plaintext-only SMTP security value', () =>
+    expect(() =>
+      loadConfig({ ...base, ...smtpEnv, SMTP_SECURITY: 'none' })
+    ).toThrow(/SMTP_SECURITY/));
+  it('rejects an out-of-range SMTP port', () =>
+    expect(() =>
+      loadConfig({ ...base, ...smtpEnv, SMTP_PORT: '70000' })
+    ).toThrow(/SMTP_PORT/));
+  it('rejects a non-email SMTP_FROM', () =>
+    expect(() =>
+      loadConfig({ ...base, ...smtpEnv, SMTP_FROM: 'not-an-email' })
+    ).toThrow(/SMTP_FROM/));
+  it('accepts a starttls SMTP configuration without LEUWONGRR_WEBHOOK_SECRET when console is off', () =>
+    expect(
+      loadConfig({
+        ...base,
+        NODE_ENV: 'production',
+        CONSOLE_ENABLED: 'false',
+        OTP_DELIVERY: 'smtp',
+        SMTP_HOST: 'smtp.example.test',
+        SMTP_PORT: '587',
+        SMTP_SECURITY: 'starttls',
+        SMTP_USERNAME: 'api-noreply@leuwongrr.online',
+        SMTP_PASSWORD: 's'.repeat(24),
+        SMTP_FROM: 'api-noreply@leuwongrr.online'
+      }).OTP_DELIVERY
+    ).toBe('smtp'));
   it('rejects an API key pepper that reuses an internal token (A20)', () => {
     expect(() =>
       loadConfig({

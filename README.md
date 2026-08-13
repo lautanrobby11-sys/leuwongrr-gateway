@@ -8,7 +8,7 @@ web console for administration, member self-service and chat.
 client  ->  router.leuwongrr.cloud  ->  api.leuwongrr.cloud  ->  /v1/*  ->  gateway (127.0.0.1:2080)  ->  OmniRoute (127.0.0.1:20128)
 ```
 
-## Canonical status — 12 August 2026
+## Canonical status — 13 August 2026
 
 This status separates repository state from independently verified production
 state. It is intentionally conservative: a newer repository commit is not
@@ -16,8 +16,8 @@ evidence that the VPS is running that commit.
 
 | Item | Verified state |
 | --- | --- |
-| Local/GitHub `main` | `5160be50253b1e8ed33d339d18f5fb69c9da1638` |
-| Production active SHA (VPS#2) | `5160be50253b1e8ed33d339d18f5fb69c9da1638` (deployed 12 Aug 2026; previous `b82fce6`) |
+| Local/GitHub `main` | `cc93a86b37fd887ef3288330947161add3d23c10` |
+| Production active SHA (VPS#2) | `cc93a86b37fd887ef3288330947161add3d23c10` (deployed 13 Aug 2026; previous `5160be5`) |
 | API | LIVE, verified 200 on loopback health/readiness |
 | Console | **OFF**; `/login`, `/member`, and `/chat` remain unavailable in production |
 | Gate 3 — OTP / Cloudflare Access / acceptance | **BLOCKED**; required credentials and runtime acceptance evidence are not recorded as complete |

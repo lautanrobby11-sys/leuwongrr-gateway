@@ -84,7 +84,7 @@ TRUSTED_CLIENT_IP_HEADER=cf-connecting-ip
 AGE_RECIPIENT=REPLACE_ME
 BACKUP_KEEP=14
 METRICS_ENABLED=false
-CONSOLE_ENABLED=true
+CONSOLE_ENABLED=false
 WEB_DIST_PATH=./dist/public
 SESSION_COOKIE_NAME=lwrr_session
 SESSION_TTL_HOURS=12
@@ -94,6 +94,16 @@ OTP_RESEND_SECONDS=60
 OTP_DELIVERY=webhook
 OTP_WEBHOOK_URL=REPLACE_ME
 OTP_WEBHOOK_TOKEN=REPLACE_ME
+# ADR-014: SMTP delivery is all-or-nothing. Set OTP_DELIVERY=smtp and fill all
+# six; loadConfig() refuses to boot on any missing value. SMTP_SECURITY is only
+# `starttls` or `tls`; there is no plaintext mode. The password is a host-only
+# secret: never commit it.
+# SMTP_HOST=REPLACE_ME
+# SMTP_PORT=REPLACE_ME
+# SMTP_SECURITY=REPLACE_ME
+# SMTP_USERNAME=REPLACE_ME
+# SMTP_PASSWORD=REPLACE_ME
+# SMTP_FROM=REPLACE_ME
 ACCESS_TEAM_DOMAIN=REPLACE_ME
 ACCESS_AUD=REPLACE_ME
 CRYPTOMUS_API_URL=https://api.cryptomus.com

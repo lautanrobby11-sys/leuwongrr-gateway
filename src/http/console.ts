@@ -1103,7 +1103,7 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
 
     const payment = db.db
       .prepare(
-        'SELECT id, account_id, purpose, plan_id, tokens, amount_cents, currency, status, settled_at FROM payments WHERE order_id = ?'
+        'SELECT id, account_id, purpose, plan_id, tokens, amount_cents, currency, status, settled_at, entitlement_snapshot_json FROM payments WHERE order_id = ?'
       )
       .get(orderId) as
       | {
@@ -1116,6 +1116,7 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
           currency: string;
           status: string;
           settled_at: string | null;
+          entitlement_snapshot_json: string;
         }
       | undefined;
     if (!payment) return fail(reply, 404, 'payment_not_found', 'Unknown order', req.id);
@@ -1164,11 +1165,13 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
             .prepare('UPDATE payments SET status = ?, settled_at = ? WHERE id = ?')
             .run(status, seenAt, payment.id);
           db.db.prepare("UPDATE payments SET settlement_status = 'settled', settlement_error = NULL WHERE id = ?").run(payment.id);
-          if (payment.purpose === 'subscription' && payment.plan_id) {
-            billing.startSubscription(payment.account_id, payment.plan_id);
-          } else if (payment.tokens > 0) {
-            billing.credit(payment.account_id, payment.tokens, 'payment', orderId);
+          const snapshot = JSON.parse(payment.entitlement_snapshot_json || '{}') as Record<string, unknown>;
+          if (Object.keys(snapshot).length === 0) {
+            snapshot.method = payment.purpose === 'subscription' ? 'rolling_time' : 'token_pack';
+            snapshot.planId = payment.plan_id;
+            snapshot.tokens = payment.tokens;
           }
+          billing.settlePaymentSnapshot(payment.account_id, payment.id, snapshot);
           return 'settled';
         }
 
@@ -1225,6 +1228,7 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
           currency: string;
           status: string;
           settled_at: string | null;
+          entitlement_snapshot_json: string;
         }
       | undefined;
     if (!payment) return fail(reply, 404, 'payment_not_found', 'Unknown order', req.id);

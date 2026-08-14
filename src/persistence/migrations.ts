@@ -279,6 +279,13 @@ ALTER TABLE payments ADD COLUMN settlement_status TEXT NOT NULL DEFAULT 'pending
 ALTER TABLE payments ADD COLUMN settlement_error TEXT;
 CREATE INDEX payments_settlement_idx ON payments(settlement_status, created_at);
 `
+}, {
+  id: '0013_multimode_payment_ledger',
+  sql: `
+ALTER TABLE ledger_entries ADD COLUMN currency TEXT NOT NULL DEFAULT 'tokens' CHECK(currency IN ('tokens','cents'));
+ALTER TABLE ledger_entries ADD COLUMN cents INTEGER NOT NULL DEFAULT 0 CHECK(cents >= 0);
+ALTER TABLE ledger_entries ADD COLUMN balance_after_cents INTEGER NOT NULL DEFAULT 0 CHECK(balance_after_cents >= 0);
+`
 }];
 
 export function runModelGroupBackfill(db: Database.Database): void {

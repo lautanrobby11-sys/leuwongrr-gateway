@@ -30,7 +30,7 @@ export interface Plan {
   durationHours?: number | null;
   timerBasis?: 'from_payment' | 'from_first_use';
   resetsAllowed?: number;
-  method?: 'rolling_time' | 'token_pack';
+  method?: 'rolling_time' | 'token_pack' | 'monetary_pack';
   tierLabel?: string;
 }
 
@@ -45,12 +45,13 @@ export interface Subscription {
   usedTokens: number;
   autoRenew: boolean;
   /** Release 2 (spec 20.1): snapshot of the plan at purchase time. */
-  method: 'rolling_time' | 'token_pack' | null;
+  method: 'rolling_time' | 'token_pack' | 'monetary_pack' | null;
   durationHours: number | null;
   timerBasis: 'from_payment' | 'from_first_use' | null;
   activatedAt: string | null;
   expiresAt: string | null;
   resetsRemaining: number;
+  modelGroupId: string | null;
 }
 
 export interface LedgerEntry {
@@ -105,12 +106,13 @@ interface SubscriptionRow {
   included_tokens: number;
   used_tokens: number;
   auto_renew: number;
-  method: 'rolling_time' | 'token_pack' | null;
+  method: 'rolling_time' | 'token_pack' | 'monetary_pack' | null;
   duration_hours: number | null;
   timer_basis: 'from_payment' | 'from_first_use' | null;
   activated_at: string | null;
   expires_at: string | null;
   resets_remaining: number;
+  model_group_id: string | null;
 }
 
 function toPlan(row: PlanRow): Plan {
@@ -151,7 +153,8 @@ function toSubscription(row: SubscriptionRow): Subscription {
     timerBasis: row.timer_basis,
     activatedAt: row.activated_at,
     expiresAt: row.expires_at,
-    resetsRemaining: row.resets_remaining
+    resetsRemaining: row.resets_remaining,
+    modelGroupId: row.model_group_id
   };
 }
 
@@ -557,6 +560,46 @@ export class BillingService {
       return balance;
     });
     return apply();
+  }
+
+  settlePaymentSnapshot(
+    accountId: string,
+    paymentId: string,
+    snapshot: {
+      method?: 'rolling_time' | 'token_pack' | 'monetary_pack' | 'payg';
+      planId?: string;
+      modelGroupId?: string | null;
+      tokens?: number;
+      balanceCents?: number;
+    }
+  ): { tokensGranted: number; centsGranted: number; subscription: Subscription | null } {
+    const method = snapshot.method ?? 'token_pack';
+    const reference = paymentId;
+    return this.db.transaction(() => {
+      const existing = this.db.prepare("SELECT currency FROM ledger_entries WHERE account_id = ? AND source = 'payment' AND reference = ?").get(accountId, reference) as { currency: string } | undefined;
+      if (existing) return { tokensGranted: 0, centsGranted: 0, subscription: null };
+      if (method === 'rolling_time') {
+        if (!snapshot.planId) throw new BillingError('payment_plan_missing', 409);
+        const subscription = this.startSubscription(accountId, snapshot.planId);
+        if (snapshot.modelGroupId !== undefined) {
+          this.db.prepare('UPDATE subscriptions SET model_group_id = ? WHERE id = ?').run(snapshot.modelGroupId, subscription.id);
+          subscription.modelGroupId = snapshot.modelGroupId;
+        }
+        this.db.prepare("INSERT INTO ledger_entries (id, account_id, kind, source, tokens, reference, balance_after, created_at, currency, cents, balance_after_cents) VALUES (?, ?, 'grant', 'payment', 0, ?, ?, ?, 'tokens', 0, 0)").run(randomUUID(), accountId, reference, this.walletBalance(accountId), this.iso());
+        return { tokensGranted: 0, centsGranted: 0, subscription };
+      }
+      const tokens = Math.max(0, snapshot.tokens ?? 0);
+      const cents = Math.max(0, snapshot.balanceCents ?? 0);
+      if (method === 'token_pack') {
+        if (tokens <= 0) throw new BillingError('payment_tokens_missing', 409);
+        this.credit(accountId, tokens, 'payment', reference);
+        return { tokensGranted: tokens, centsGranted: 0, subscription: null };
+      }
+      if (cents <= 0) throw new BillingError('payment_cents_missing', 409);
+      this.db.prepare('INSERT INTO wallets (account_id, balance_tokens, balance_cents, updated_at) VALUES (?, 0, ?, ?) ON CONFLICT(account_id) DO UPDATE SET balance_cents = wallets.balance_cents + excluded.balance_cents, updated_at = excluded.updated_at').run(accountId, cents, this.iso());
+      this.db.prepare("INSERT INTO ledger_entries (id, account_id, kind, source, tokens, reference, balance_after, created_at, currency, cents, balance_after_cents) VALUES (?, ?, 'grant', 'payment', 0, ?, ?, ?, 'cents', ?, (SELECT balance_cents FROM wallets WHERE account_id = ?))").run(randomUUID(), accountId, reference, this.walletBalance(accountId), this.iso(), cents, accountId);
+      return { tokensGranted: 0, centsGranted: cents, subscription: null };
+    })();
   }
 
   ledger(accountId: string, limit = 50): LedgerEntry[] {

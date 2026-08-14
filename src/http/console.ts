@@ -1164,7 +1164,14 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
           db.db
             .prepare('UPDATE payments SET status = ?, settled_at = ? WHERE id = ?')
             .run(status, seenAt, payment.id);
-          const snapshot = JSON.parse(payment.entitlement_snapshot_json || '{}') as Record<string, unknown>;
+          let snapshot: Record<string, unknown>;
+          try {
+            snapshot = JSON.parse(payment.entitlement_snapshot_json || '{}') as Record<string, unknown>;
+            if (!snapshot || Array.isArray(snapshot) || typeof snapshot !== 'object') throw new Error('snapshot_not_object');
+          } catch {
+            db.db.prepare("UPDATE payments SET settlement_status = 'reconciliation_required', settlement_error = ?, status = ?, settled_at = NULL WHERE id = ?").run('entitlement_snapshot_invalid', status, payment.id);
+            return 'reconciliation';
+          }
           if (Object.keys(snapshot).length === 0) {
             snapshot.method = payment.purpose === 'subscription' ? 'rolling_time' : 'token_pack';
             snapshot.planId = payment.plan_id;
@@ -1172,7 +1179,7 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
           }
           try {
             snapshot.amountCents ??= payment.amount_cents;
-          billing.settlePaymentSnapshot(payment.account_id, payment.id, snapshot);
+            billing.settlePaymentSnapshot(payment.account_id, payment.id, snapshot);
           } catch (error) {
             const reason = error instanceof BillingError ? error.code : 'settlement_failed';
             db.db.prepare("UPDATE payments SET settlement_status = 'reconciliation_required', settlement_error = ?, status = ?, settled_at = NULL WHERE id = ?").run(reason, status, payment.id);

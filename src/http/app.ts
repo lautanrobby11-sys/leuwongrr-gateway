@@ -16,13 +16,8 @@ import { chatRequestSchema } from '../contracts/chat.js';
 import { responsesRequestSchema } from '../contracts/responses.js';
 import { countTokensRequestSchema, messagesRequestSchema } from '../contracts/messages.js';
 import { sendProtocolError, type Dialect } from '../contracts/errors.js';
-import {
-  listModels,
-  requireModel,
-  PolicyError,
-  type Capability,
-  type ModelPolicy
-} from '../policy/capabilities.js';
+import { PolicyError, type Capability } from '../policy/capabilities.js';
+import { resolveCatalogModel, ModelResolutionError, type ResolvedCatalogModel } from '../policy/model-resolver.js';
 import { isConsoleRoute, requiresTrustedOrigin, resolveRoute } from '../policy/allowlist.js';
 import { MetricsRegistry } from '../metrics.js';
 import { OverloadError } from '../policy/semaphore.js';
@@ -271,13 +266,13 @@ export function buildApp(deps: AppDeps) {
     publicId: string,
     required: readonly Capability[],
     tenantId: string
-  ): ModelPolicy {
-    const model = requireModel(publicId, required);
-    if (!deps.db.modelEnabled(tenantId, model.publicId)) {
-      throw new PolicyError('model_not_entitled', 403);
-    }
-    return model;
+  ) {
+    const account = accounts.findByTenant(tenantId);
+    if (!account) throw new ModelResolutionError('model_not_entitled', 403);
+    return resolveCatalogModel(deps.db.db, publicId, required, tenantId, account.id);
   }
+
+  type ModelPolicy = ResolvedCatalogModel;
 
   app.get('/health/live', async () => ({ status: 'ok' }));
 
@@ -329,14 +324,15 @@ export function buildApp(deps: AppDeps) {
       const key = await authenticate(req, 'models:read');
       return {
         object: 'list',
-        data: listModels()
-          .filter((model) => deps.db.modelEnabled(key.tenantId, model.publicId))
-          .map((model) => ({
-            id: model.publicId,
-            object: 'model',
-            owned_by: 'leuwongrr',
-            capabilities: [...model.capabilities]
-          }))
+        data: deps.db.db.prepare('SELECT public_id, capabilities_json FROM models WHERE enabled = 1 AND group_id IS NOT NULL ORDER BY public_id').all().flatMap((row) => {
+          const model = row as { public_id: string; capabilities_json: string };
+          try {
+            const resolved = resolveModel(model.public_id, [], key.tenantId);
+            return [{ id: resolved.id, object: 'model', owned_by: 'leuwongrr', capabilities: [...resolved.capabilities] }];
+          } catch {
+            return [];
+          }
+        })
       };
     } catch (error) {
       return handleError(error, reply, req.id, 'openai');
@@ -502,7 +498,7 @@ function handleError(
     reply.header('retry-after', String(error.retryAfterSeconds));
     return sendProtocolError(reply, dialect, 429, 'rate_limited', 'Too many requests', traceId, true);
   }
-  if (error instanceof AuthError || error instanceof PolicyError) {
+  if (error instanceof AuthError || error instanceof PolicyError || error instanceof ModelResolutionError) {
     return sendProtocolError(reply, dialect, error.statusCode, error.code, error.message, traceId);
   }
   if (error instanceof OverloadError) {

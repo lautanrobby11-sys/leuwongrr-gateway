@@ -191,7 +191,7 @@ describe('console member surface', () => {
       url: '/console/api/member/plans',
       headers: { cookie }
     });
-    expect(before.json().plans).toEqual([]);
+    expect(before.json().plans.map((plan: { id: string }) => plan.id)).toEqual(['harness-plan']);
 
     new BillingService(active.db.db).upsertPlan({
       id: 'starter',
@@ -210,7 +210,7 @@ describe('console member surface', () => {
       url: '/console/api/member/plans',
       headers: { cookie }
     });
-    expect(after.json().plans.map((plan: { id: string }) => plan.id)).toEqual(['starter']);
+    expect(after.json().plans.map((plan: { id: string }) => plan.id)).toEqual(['harness-plan', 'starter']);
   });
 
   it('issues a key once and never returns it again', async () => {

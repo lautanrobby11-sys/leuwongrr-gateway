@@ -256,6 +256,19 @@ CREATE INDEX models_group_idx ON models(group_id);
 CREATE INDEX plans_group_idx ON plans(model_group_id);
 `,
   run: runModelGroupBackfill
+}, {
+  id: '0011_subscription_group_snapshot',
+  sql: `
+ALTER TABLE subscriptions ADD COLUMN model_group_id TEXT REFERENCES model_groups(id);
+ALTER TABLE subscriptions ADD COLUMN balance_cents INTEGER NOT NULL DEFAULT 0 CHECK(balance_cents >= 0);
+ALTER TABLE wallets ADD COLUMN balance_cents INTEGER NOT NULL DEFAULT 0 CHECK(balance_cents >= 0);
+CREATE INDEX subscriptions_group_idx ON subscriptions(model_group_id);
+`,
+  run: (db) => {
+    db.prepare(`UPDATE subscriptions SET model_group_id = (
+      SELECT model_group_id FROM plans WHERE plans.id = subscriptions.plan_id
+    ) WHERE model_group_id IS NULL`).run();
+  }
 }];
 
 export function runModelGroupBackfill(db: Database.Database): void {

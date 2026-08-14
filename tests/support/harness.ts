@@ -116,6 +116,9 @@ export function createHarness(
     rateLimitRpm: config.RATE_LIMIT_RPM
   });
   db.tenants.setModelPolicy('tenant-a', 'lwrr-text', true);
+  db.db.prepare("INSERT INTO accounts (id, tenant_id, email, display_name, role, status, created_at) VALUES ('harness-account', 'tenant-a', 'harness@example.test', 'Harness', 'member', 'active', datetime('now'))").run();
+  db.db.prepare("INSERT INTO plans (id, name, monthly_price_cents, included_tokens, overage_cents_per_million, max_concurrent, rate_limit_rpm, daily_budget_units, models_json, active, updated_at, model_group_id) VALUES ('harness-plan', 'Harness Plan', 0, 1000000, 1, 2, 60, 100000, '[]', 1, datetime('now'), 'legacy-default')").run();
+  db.db.prepare("INSERT INTO subscriptions (id, account_id, plan_id, status, period_start, period_end, included_tokens, used_tokens, auto_renew, created_at, updated_at, model_group_id) VALUES ('harness-subscription', 'harness-account', 'harness-plan', 'active', datetime('now'), datetime('now', '+1 day'), 1000000, 0, 1, datetime('now'), datetime('now'), 'legacy-default')").run();
   const fetcher = vi.fn(async () => respond());
   const upstream = new OmniRouteClient(
     config.OMNIROUTE_URL,

@@ -1157,12 +1157,13 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
           // paid and paid_over are distinct deliveries of one settlement.
           // settled_at, not the digest, is what makes the grant one-time.
           if (payment.settled_at) {
-            db.db.prepare('UPDATE payments SET status = ? WHERE id = ?').run(status, payment.id);
+            db.db.prepare('UPDATE payments SET status = ?, settlement_status = \'settled\' WHERE id = ?').run(status, payment.id);
             return 'recorded';
           }
           db.db
             .prepare('UPDATE payments SET status = ?, settled_at = ? WHERE id = ?')
             .run(status, seenAt, payment.id);
+          db.db.prepare("UPDATE payments SET settlement_status = 'settled', settlement_error = NULL WHERE id = ?").run(payment.id);
           if (payment.purpose === 'subscription' && payment.plan_id) {
             billing.startSubscription(payment.account_id, payment.plan_id);
           } else if (payment.tokens > 0) {
@@ -1261,6 +1262,7 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
           db.db
             .prepare('UPDATE payments SET status = ?, settled_at = ? WHERE id = ?')
             .run(status, seenAt, payment.id);
+          db.db.prepare("UPDATE payments SET settlement_status = 'settled', settlement_error = NULL WHERE id = ?").run(payment.id);
           if (payment.purpose === 'subscription' && payment.plan_id) {
             billing.startSubscription(payment.account_id, payment.plan_id);
           } else if (tokens > 0) {

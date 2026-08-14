@@ -77,6 +77,8 @@ describe('cryptomus settlement', () => {
     expect(retry.statusCode).toBe(200);
     expect(retry.json()).toMatchObject({ duplicate: true });
     expect(billing.walletBalance(accountId)).toBe(TOKENS);
+    const row = (harness as Harness).db.db.prepare('SELECT settlement_status FROM payments WHERE order_id = ?').get(orderId) as { settlement_status: string };
+    expect(row.settlement_status).toBe('settled');
   });
 
   it('does not grant again when the status later becomes paid_over', async () => {

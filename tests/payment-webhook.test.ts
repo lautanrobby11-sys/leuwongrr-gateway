@@ -154,7 +154,9 @@ describe('cryptomus settlement', () => {
     const db = (harness as Harness).db.db;
     expect((db.prepare("SELECT COUNT(*) AS n FROM ledger_entries WHERE account_id = ? AND source = 'payment'").get(accountId) as { n: number }).n).toBe(0);
     expect((db.prepare('SELECT COUNT(*) AS n FROM subscriptions WHERE account_id = ?').get(accountId) as { n: number }).n).toBe(0);
-    expect((db.prepare('SELECT COUNT(*) AS n FROM payment_events WHERE payment_id = (SELECT id FROM payments WHERE order_id = ?)').get(orderId) as { n: number }).n).toBe(1);
+    // The settlement transaction rolls back the event when the grant fails;
+    // reconciliation is persisted separately so a later retry remains visible.
+    expect((db.prepare('SELECT COUNT(*) AS n FROM payment_events WHERE payment_id = (SELECT id FROM payments WHERE order_id = ?)').get(orderId) as { n: number }).n).toBe(0);
     expect((db.prepare('SELECT settlement_status FROM payments WHERE order_id = ?').get(orderId) as { settlement_status: string }).settlement_status).toBe('reconciliation_required');
   });
 

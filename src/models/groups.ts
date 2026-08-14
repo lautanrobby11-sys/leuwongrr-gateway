@@ -52,8 +52,12 @@ export class ModelGroupCatalog {
   }
 
   update(id: string, input: Omit<ModelGroupInput, 'id'>): ModelGroupRecord {
-    const result = this.db.prepare('UPDATE model_groups SET name = ?, multiplier_bps = ?, enabled = ?, updated_at = datetime(\'now\') WHERE id = ?').run(input.name, input.multiplierBps, input.enabled === false ? 0 : 1, id);
-    if (result.changes === 0) throw new ModelGroupError('group_not_found', 404);
+    // An omitted `enabled` must preserve the stored value: undefining it used
+    // to default to enabled, silently flipping a disabled group back on.
+    const existing = this.get(id);
+    if (!existing) throw new ModelGroupError('group_not_found', 404);
+    const enabled = input.enabled === undefined ? (existing.enabled ? 1 : 0) : input.enabled ? 1 : 0;
+    this.db.prepare('UPDATE model_groups SET name = ?, multiplier_bps = ?, enabled = ?, updated_at = datetime(\'now\') WHERE id = ?').run(input.name, input.multiplierBps, enabled, id);
     return this.get(id) as ModelGroupRecord;
   }
 
@@ -68,9 +72,12 @@ export class ModelGroupCatalog {
     if (result.changes === 0) throw new ModelGroupError('model_not_found', 404);
   }
 
-  remove(id: string): void {
-    if ((this.db.prepare('SELECT 1 FROM plans WHERE model_group_id = ? LIMIT 1').get(id))) throw new ModelGroupError('group_in_use', 409);
-    const result = this.db.prepare('DELETE FROM model_groups WHERE id = ?').run(id);
-    if (result.changes === 0) throw new ModelGroupError('group_not_found', 404);
-  }
+remove(id: string): void {
+  if ((this.db.prepare('SELECT 1 FROM plans WHERE model_group_id = ? LIMIT 1').get(id))) throw new ModelGroupError('group_in_use', 409);
+  // A group can own models without any plan referencing it; the foreign key
+  // would turn that into an unhandled 500, so reject the deletion up front.
+  if ((this.db.prepare('SELECT 1 FROM models WHERE group_id = ? LIMIT 1').get(id))) throw new ModelGroupError('group_has_models', 409);
+  const result = this.db.prepare('DELETE FROM model_groups WHERE id = ?').run(id);
+  if (result.changes === 0) throw new ModelGroupError('group_not_found', 404);
+}
 }

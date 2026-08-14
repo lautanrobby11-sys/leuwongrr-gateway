@@ -268,8 +268,10 @@ export function buildApp(deps: AppDeps) {
     tenantId: string
   ) {
     const account = accounts.findByTenant(tenantId);
-    if (!account) throw new ModelResolutionError('model_not_entitled', 403);
-    return resolveCatalogModel(deps.db.db, publicId, required, tenantId, account.id);
+    if (!account && deps.config.CONSOLE_ENABLED) {
+      throw new ModelResolutionError('model_not_entitled', 403);
+    }
+    return resolveCatalogModel(deps.db.db, publicId, required, tenantId, account?.id ?? null);
   }
 
   type ModelPolicy = ResolvedCatalogModel;
@@ -322,14 +324,20 @@ export function buildApp(deps: AppDeps) {
   app.get('/v1/models', async (req, reply) => {
     try {
       const key = await authenticate(req, 'models:read');
+      const account = accounts.findByTenant(key.tenantId);
+      if (!account && deps.config.CONSOLE_ENABLED) {
+        throw new ModelResolutionError('model_not_entitled', 403);
+      }
       return {
         object: 'list',
-        data: deps.db.db.prepare('SELECT public_id, capabilities_json FROM models WHERE enabled = 1 AND group_id IS NOT NULL ORDER BY public_id').all().flatMap((row) => {
-          const model = row as { public_id: string; capabilities_json: string };
+        data: deps.db.db.prepare('SELECT public_id FROM models WHERE enabled = 1 AND group_id IS NOT NULL ORDER BY public_id').all().flatMap((row) => {
+          const model = row as { public_id: string };
           try {
-            const resolved = resolveModel(model.public_id, [], key.tenantId);
+            const resolved = resolveCatalogModel(deps.db.db, model.public_id, [], key.tenantId, account?.id ?? null);
             return [{ id: resolved.id, object: 'model', owned_by: 'leuwongrr', capabilities: [...resolved.capabilities] }];
-          } catch {
+          } catch (error) {
+            if (!(error instanceof ModelResolutionError)) throw error;
+            deps.logger.debug({ err: error, model: model.public_id, tenant_id: key.tenantId }, 'model_not_listed');
             return [];
           }
         })

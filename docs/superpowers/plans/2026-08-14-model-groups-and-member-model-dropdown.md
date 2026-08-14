@@ -73,7 +73,7 @@ primitives + Motion + single Lucide wrapper), Vitest.
       1. parse every `plans.models_json`; normalize model ids;
       2. abort (rollback) if a plan references an absent model, if a plan has an
          empty/ambiguous membership that one-group cannot represent without
-         expanding entitlement, if an active plan has no saf representable set,
+         expanding entitlement, if an active plan has no safe representable set,
          or if tenant policy `model_policies` contradicts the plan entitlement;
       3. only when entitlement-preserving: insert `legacy-default`
          (`multiplier_bps=10000`, `enabled=1`), set `models.group_id` and

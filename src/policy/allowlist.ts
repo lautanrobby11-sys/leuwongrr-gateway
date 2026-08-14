@@ -62,7 +62,7 @@ export const PUBLIC_ALLOWLIST: readonly AllowedRoute[] = Object.freeze([
   },
   {
     method: 'POST',
-    pattern: /^\/console\/api\/admin\/(plans|models(\/policy)?|model-groups(\/[^/]+\/models)?|accounts\/limits|accounts\/credit|accounts\/status|exchange-rate)$/,
+    pattern: /^\/console\/api\/admin\/(plans|models(\/policy)?|model-groups(\/[a-z0-9-]{2,64}\/models)?|accounts\/limits|accounts\/credit|accounts\/status|exchange-rate)$/,
     id: 'console.admin'
   },
   {
@@ -72,7 +72,7 @@ export const PUBLIC_ALLOWLIST: readonly AllowedRoute[] = Object.freeze([
   },
   {
     method: 'DELETE',
-    pattern: /^\/console\/api\/admin\/(models|model-groups)\/[a-z0-9-]{2,64}(\/models\/[a-z0-9-]{2,64})?$/,
+    pattern: /^\/console\/api\/admin\/(models\/[a-z0-9-]{2,64}|model-groups\/[a-z0-9-]{2,64}(\/models\/[a-z0-9-]{2,64})?)$/,
     id: 'console.admin'
   },
   { method: 'POST', pattern: /^\/webhooks\/cryptomus$/, id: 'webhook.cryptomus' },

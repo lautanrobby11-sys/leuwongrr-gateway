@@ -71,6 +71,7 @@ export interface BillingSummary {
   plan: Plan | null;
   subscription: Subscription | null;
   walletTokens: number;
+  walletCents: number;
   subscriptionRemaining: number;
   totalAvailable: number;
   funded: boolean;
@@ -95,7 +96,7 @@ interface PlanRow {
   duration_hours: number | null;
   timer_basis: 'from_payment' | 'from_first_use';
   resets_allowed: number;
-  method: 'rolling_time' | 'token_pack';
+  method: 'rolling_time' | 'token_pack' | 'monetary_pack';
   tier_label: string;
 }
 
@@ -504,6 +505,177 @@ export class BillingService {
     return row?.balance_tokens ?? 0;
   }
 
+  /** Currency-aware balance backing monetary-pack and PAYG grants (spec: cents
+   * balance is a separate ledger axis, never silently converted to tokens). */
+  walletCents(accountId: string): number {
+    const row = this.db
+      .prepare('SELECT balance_cents FROM wallets WHERE account_id = ?')
+      .get(accountId) as { balance_cents: number } | undefined;
+    return row?.balance_cents ?? 0;
+  }
+
+  /**
+   * Debits metered usage. Spending order (spec 20.2):
+   *   1. Rolling Time allowance — FREE while the window is active;
+   *   2. Token Packs — earliest expiry debited first;
+   *   3. prepaid wallet tokens — PAYG fallback;
+   *   4. prepaid wallet cents — the monetary-pack/PAYG fallback, priced through
+   *      the conversion rate of the account's active PAYG plan so a cents
+   *      balance is never left unspendable.
+   */
+  private applyUsage(accountId: string, units: number, reference: string): void {
+    const already = this.db
+      .prepare("SELECT 1 FROM ledger_entries WHERE account_id = ? AND source = 'usage' AND reference = ?")
+      .get(accountId, reference);
+    if (already) return;
+    // A zero unit event still has to leave a mark. Reconciliation selects rows
+    // that have no ledger entry, so returning silently here would keep the row
+    // in the window forever and eventually crowd out billable work.
+    if (units <= 0) {
+      this.recordLedger(accountId, {
+        kind: 'debit',
+        source: 'usage',
+        tokens: 0,
+        reference,
+        balanceAfter: this.walletBalance(accountId)
+      });
+      return;
+    }
+
+    let remaining = units;
+    const spentSubscriptions: Subscription[] = [];
+
+    // 1. Rolling Time: free capacity inside the window.
+    const rolling = this.activeSubscriptions(accountId).find(
+      (entry) => entry.method === 'rolling_time'
+    );
+    if (rolling) {
+      // A from_first_use timer that is still pending starts on this spend.
+      if (rolling.timerBasis === 'from_first_use' && rolling.activatedAt === null) {
+        this.activateFirstUse(rolling.id);
+      }
+      const live = this.getSubscription(rolling.id) ?? rolling;
+      if (this.windowActive(live)) {
+        const available = Math.max(0, live.includedTokens - live.usedTokens);
+        const fromRolling = Math.min(available, remaining);
+        if (fromRolling > 0) {
+          this.db
+            .prepare('UPDATE subscriptions SET used_tokens = used_tokens + ?, updated_at = ? WHERE id = ?')
+            .run(fromRolling, this.iso(), live.id);
+          remaining -= fromRolling;
+          spentSubscriptions.push(live);
+        }
+      }
+    }
+
+    // 2. Token Packs: earliest expiry debited first (spec 20.4).
+    const packs = this.activeSubscriptions(accountId)
+      .filter((entry) => entry.method === 'token_pack' || entry.method === null)
+      .sort((a, b) => {
+        const aExpiry = a.expiresAt ?? a.periodEnd;
+        const bExpiry = b.expiresAt ?? b.periodEnd;
+        return aExpiry.localeCompare(bExpiry);
+      });
+    for (const pack of packs) {
+      if (remaining === 0) break;
+      if (pack.timerBasis === 'from_first_use' && pack.activatedAt === null) {
+        this.activateFirstUse(pack.id);
+      }
+      const live = this.getSubscription(pack.id) ?? pack;
+      if (!this.windowActive(live)) continue;
+      const available = Math.max(0, live.includedTokens - live.usedTokens);
+      const fromPack = Math.min(available, remaining);
+      if (fromPack > 0) {
+        this.db
+          .prepare('UPDATE subscriptions SET used_tokens = used_tokens + ?, updated_at = ? WHERE id = ?')
+          .run(fromPack, this.iso(), live.id);
+        remaining -= fromPack;
+        spentSubscriptions.push(live);
+      }
+    }
+
+    // 3. Prepaid wallet (PAYG): tokens first, then cents priced at the active
+    // PAYG rate so monetary-pack grants stay spendable on the request path.
+    const wallet = this.walletBalance(accountId);
+    const fromWallet = Math.min(wallet, remaining);
+    const balanceAfter = wallet - fromWallet;
+    if (fromWallet > 0) {
+      this.db
+        .prepare('UPDATE wallets SET balance_tokens = ?, updated_at = ? WHERE account_id = ?')
+        .run(balanceAfter, this.iso(), accountId);
+      remaining -= fromWallet;
+    }
+
+    let balanceCentsAfter = this.walletCents(accountId);
+    let spentCents = 0;
+    if (remaining > 0 && balanceCentsAfter > 0) {
+      const ratePlan = this.paygRatePlan(accountId);
+      if (ratePlan) {
+        const centsForRemaining = this.centsForTokens(ratePlan, remaining);
+        spentCents = Math.min(balanceCentsAfter, centsForRemaining);
+        const coveredTokens = this.tokensForCents(ratePlan, spentCents);
+        balanceCentsAfter = balanceCentsAfter - spentCents;
+        if (spentCents > 0) {
+          this.db
+            .prepare('UPDATE wallets SET balance_cents = ?, updated_at = ? WHERE account_id = ?')
+            .run(balanceCentsAfter, this.iso(), accountId);
+          remaining -= coveredTokens;
+        }
+      }
+    }
+
+    this.recordLedger(accountId, {
+      kind: 'debit',
+      source: 'usage',
+      tokens: -(units - remaining),
+      reference,
+      balanceAfter,
+      currency: spentCents > 0 ? 'cents' : 'tokens',
+      cents: spentCents,
+      balanceAfterCents: balanceCentsAfter
+    });
+
+    if (remaining > 0) {
+      this.recordLedger(accountId, {
+        kind: 'adjustment',
+        source: 'usage',
+        tokens: -remaining,
+        reference: reference + ':unfunded',
+        balanceAfter,
+        currency: spentCents > 0 ? 'cents' : 'tokens',
+        cents: 0,
+        balanceAfterCents: balanceCentsAfter
+      });
+      const now = this.iso();
+      const spentIds = spentSubscriptions.map((entry) => entry.id);
+      const mark = this.db.prepare(
+        "UPDATE subscriptions SET status = 'past_due', updated_at = ? WHERE id = ? AND status IN ('active','past_due')"
+      );
+      if (spentIds.length > 0) {
+        for (const id of spentIds) mark.run(now, id);
+      } else {
+        // Nothing consumed (e.g. all windows expired): mark the newest active
+        // subscription so the dashboard still points at the shortfall.
+        const latest = this.activeSubscription(accountId);
+        if (latest) mark.run(now, latest.id);
+      }
+    }
+  }
+
+  /**
+   * The PAYG conversion plan used to price cents spending: the active plan of
+   * the account that carries an overage rate, preferring one that explicitly
+   * charges per-million. A cents balance without any rate stays untouched and
+   * the shortfall is recorded, so money is never silently lost or invented.
+   */
+  private paygRatePlan(accountId: string): Plan | null {
+    for (const subscription of this.activeSubscriptions(accountId)) {
+      const plan = this.getPlan(subscription.planId);
+      if (plan && plan.overageCentsPerMillion > 0) return plan;
+    }
+    return null;
+  }
+
   private recordLedger(
     accountId: string,
     entry: {
@@ -595,7 +767,7 @@ export class BillingService {
         if (!snapshot.planId) throw new BillingError('payment_plan_missing', 409);
         const subscription = this.startSubscription(accountId, snapshot.planId);
         if (snapshot.modelGroupId !== undefined) {
-          this.db.prepare('UPDATE subscriptions SET model_group_id = ? WHERE id = ?').run(snapshot.modelGroupId, subscription.id);
+          this.db.prepare('UPDATE subscriptions SET model_group_id = ?, updated_at = ? WHERE id = ?').run(snapshot.modelGroupId, this.iso(), subscription.id);
           subscription.modelGroupId = snapshot.modelGroupId;
         }
         this.db.prepare("INSERT INTO ledger_entries (id, account_id, kind, source, tokens, reference, balance_after, created_at, currency, cents, balance_after_cents) VALUES (?, ?, 'grant', 'payment', 0, ?, ?, ?, 'tokens', 0, 0)").run(randomUUID(), accountId, reference, this.walletBalance(accountId), this.iso());
@@ -653,129 +825,6 @@ export class BillingService {
   // ---- Metering ----
 
   /**
-   * Release 2 (spec 20.2): spend order is
-   *   1. Rolling Time allowance — FREE while the window is active, up to the
-   *      token limit, never touching the wallet;
-   *   2. Token Packs — paid allowance, earliest expiry debited first;
-   *   3. prepaid wallet — PAYG fallback.
-   * A shortfall is recorded and the spent subscriptions are marked past_due;
-   * it is never rounded away, because that would hand out free capacity.
-   */
-  private applyUsage(accountId: string, units: number, reference: string): void {
-    const already = this.db
-      .prepare("SELECT 1 FROM ledger_entries WHERE account_id = ? AND source = 'usage' AND reference = ?")
-      .get(accountId, reference);
-    if (already) return;
-    // A zero unit event still has to leave a mark. Reconciliation selects rows
-    // that have no ledger entry, so returning silently here would keep the row
-    // in the window forever and eventually crowd out billable work.
-    if (units <= 0) {
-      this.recordLedger(accountId, {
-        kind: 'debit',
-        source: 'usage',
-        tokens: 0,
-        reference,
-        balanceAfter: this.walletBalance(accountId)
-      });
-      return;
-    }
-
-    let remaining = units;
-    const spentSubscriptions: Subscription[] = [];
-
-    // 1. Rolling Time: free capacity inside the window.
-    const rolling = this.activeSubscriptions(accountId).find(
-      (entry) => entry.method === 'rolling_time'
-    );
-    if (rolling) {
-      // A from_first_use timer that is still pending starts on this spend.
-      if (rolling.timerBasis === 'from_first_use' && rolling.activatedAt === null) {
-        this.activateFirstUse(rolling.id);
-      }
-      const live = this.getSubscription(rolling.id) ?? rolling;
-      if (this.windowActive(live)) {
-        const available = Math.max(0, live.includedTokens - live.usedTokens);
-        const fromRolling = Math.min(available, remaining);
-        if (fromRolling > 0) {
-          this.db
-            .prepare('UPDATE subscriptions SET used_tokens = used_tokens + ?, updated_at = ? WHERE id = ?')
-            .run(fromRolling, this.iso(), live.id);
-          remaining -= fromRolling;
-          spentSubscriptions.push(live);
-        }
-      }
-    }
-
-    // 2. Token Packs: earliest expiry debited first (spec 20.4).
-    const packs = this.activeSubscriptions(accountId)
-      .filter((entry) => entry.method === 'token_pack' || entry.method === null)
-      .sort((a, b) => {
-        const aExpiry = a.expiresAt ?? a.periodEnd;
-        const bExpiry = b.expiresAt ?? b.periodEnd;
-        return aExpiry.localeCompare(bExpiry);
-      });
-    for (const pack of packs) {
-      if (remaining === 0) break;
-      if (pack.timerBasis === 'from_first_use' && pack.activatedAt === null) {
-        this.activateFirstUse(pack.id);
-      }
-      const live = this.getSubscription(pack.id) ?? pack;
-      if (!this.windowActive(live)) continue;
-      const available = Math.max(0, live.includedTokens - live.usedTokens);
-      const fromPack = Math.min(available, remaining);
-      if (fromPack > 0) {
-        this.db
-          .prepare('UPDATE subscriptions SET used_tokens = used_tokens + ?, updated_at = ? WHERE id = ?')
-          .run(fromPack, this.iso(), live.id);
-        remaining -= fromPack;
-        spentSubscriptions.push(live);
-      }
-    }
-
-    // 3. Prepaid wallet (PAYG).
-    const wallet = this.walletBalance(accountId);
-    const fromWallet = Math.min(wallet, remaining);
-    const balanceAfter = wallet - fromWallet;
-    if (fromWallet > 0) {
-      this.db
-        .prepare('UPDATE wallets SET balance_tokens = ?, updated_at = ? WHERE account_id = ?')
-        .run(balanceAfter, this.iso(), accountId);
-      remaining -= fromWallet;
-    }
-
-    this.recordLedger(accountId, {
-      kind: 'debit',
-      source: 'usage',
-      tokens: -(units - remaining),
-      reference,
-      balanceAfter
-    });
-
-    if (remaining > 0) {
-      this.recordLedger(accountId, {
-        kind: 'adjustment',
-        source: 'usage',
-        tokens: -remaining,
-        reference: reference + ':unfunded',
-        balanceAfter
-      });
-      const now = this.iso();
-      const spentIds = spentSubscriptions.map((entry) => entry.id);
-      const mark = this.db.prepare(
-        "UPDATE subscriptions SET status = 'past_due', updated_at = ? WHERE id = ? AND status IN ('active','past_due')"
-      );
-      if (spentIds.length > 0) {
-        for (const id of spentIds) mark.run(now, id);
-      } else {
-        // Nothing consumed (e.g. all windows expired): mark the newest active
-        // subscription so the dashboard still points at the shortfall.
-        const latest = this.activeSubscription(accountId);
-        if (latest) mark.run(now, latest.id);
-      }
-    }
-  }
-
-  /**
    * Pulls settled metering rows into the ledger. Safe to call on every read.
    *
    * The cursor is an optimisation, not the correctness boundary. Two rows can
@@ -808,9 +857,6 @@ export class BillingService {
       .all(tenantId, since, accountId, RECONCILE_BATCH) as Array<{
       id: string;
       units: number;
-      currency: 'tokens' | 'cents';
-      cents: number;
-      balance_after_cents: number;
       created_at: string;
     }>;
     if (rows.length === 0) return;
@@ -835,6 +881,7 @@ export class BillingService {
     const subscription = this.activeSubscription(accountId);
     const plan = subscription ? this.getPlan(subscription.planId) : null;
     const walletTokens = this.walletBalance(accountId);
+    const walletCents = this.walletCents(accountId);
     const subscriptionRemaining = subscription
       ? Math.max(0, subscription.includedTokens - subscription.usedTokens)
       : 0;
@@ -854,16 +901,21 @@ export class BillingService {
 
     const totalAvailable = subscriptionRemaining + walletTokens;
     const burnPerDay = today.total;
+    // Monetary-pack/PAYG wallets fund requests too, so they count as capacity.
+    const funded = totalAvailable > 0 || walletCents > 0;
+    const projectedDaysLeft =
+      burnPerDay > 0 && totalAvailable > 0 ? Math.floor(totalAvailable / burnPerDay) : null;
     return {
       plan,
       subscription,
       walletTokens,
+      walletCents,
       subscriptionRemaining,
       totalAvailable,
-      funded: totalAvailable > 0,
+      funded,
       usageToday: today.total,
       usageThisPeriod: period.total,
-      projectedDaysLeft: burnPerDay > 0 ? Math.floor(totalAvailable / burnPerDay) : null
+      projectedDaysLeft
     };
   }
 
@@ -872,6 +924,8 @@ export class BillingService {
    * capacity anywhere. Release 2 (spec 20.5): a live Rolling Time window funds
    * requests for free, a pending from_first_use timer funds them once the first
    * request activates it, and remaining pack allowance counts like the wallet.
+   * A cents balance also satisfies the gate: it is spendable through the active
+   * PAYG rate, so treating it as unfunded would strand paid money.
    */
   assertFunded(accountId: string, tenantId: string): void {
     this.reconcile(accountId, tenantId);
@@ -883,7 +937,7 @@ export class BillingService {
       const remaining = Math.max(0, subscription.includedTokens - subscription.usedTokens);
       if (remaining > 0) return;
     }
-    if (this.walletBalance(accountId) <= 0) {
+    if (this.walletBalance(accountId) <= 0 && this.walletCents(accountId) <= 0) {
       throw new BillingError('insufficient_tokens', 402);
     }
   }

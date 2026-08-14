@@ -45,7 +45,7 @@ export const planInputSchema = z
     durationHours: z.number().finite().int().min(1).max(8_760).nullable().optional(),
     timerBasis: z.enum(['from_payment', 'from_first_use']).optional(),
     resetsAllowed: z.number().finite().int().min(0).max(52).optional(),
-    method: z.enum(['rolling_time', 'token_pack']).optional(),
+    method: z.enum(['rolling_time', 'token_pack', 'monetary_pack']).optional(),
     tierLabel: z.string().max(32).optional()
   })
   .strict();

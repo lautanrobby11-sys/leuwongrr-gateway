@@ -579,6 +579,7 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
     tokens: number;
     traceId: string;
     provider: 'cryptomus' | 'leuwongrr';
+    snapshot: Record<string, unknown>;
   }) {
     const orderId = `${input.purpose}-${randomUUID()}`;
     if (input.provider === 'leuwongrr') {
@@ -587,8 +588,8 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
       const paymentUrl = `${new URL(config.PUBLIC_BASE_URL).origin}/pay/leuwongrr?order_id=${encodeURIComponent(orderId)}&amount=${amountIdr}&tokens=${input.tokens}`;
       db.db
         .prepare(
-          `INSERT INTO payments (id, account_id, provider, order_id, invoice_uuid, purpose, plan_id, tokens, amount_cents, currency, status, payment_url, created_at)
-           VALUES (?, ?, 'leuwongrr', ?, ?, ?, ?, ?, ?, 'IDR', ?, ?, ?)`
+          `INSERT INTO payments (id, account_id, provider, order_id, invoice_uuid, purpose, plan_id, tokens, token_amount, balance_cents, amount_cents, currency, status, settlement_status, entitlement_snapshot_json, payment_url, created_at)
+           VALUES (?, ?, 'leuwongrr', ?, ?, ?, ?, ?, ?, ?, ?, 'IDR', ?, 'pending', ?, ?, ?)`
         )
         .run(
           randomUUID(),
@@ -598,8 +599,11 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
           input.purpose,
           input.planId,
           input.tokens,
+          input.tokens,
+          0,
           amountIdr,
           'pending',
+          JSON.stringify(input.snapshot),
           paymentUrl,
           new Date().toISOString()
         );
@@ -616,8 +620,8 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
     });
     db.db
       .prepare(
-        `INSERT INTO payments (id, account_id, provider, order_id, invoice_uuid, purpose, plan_id, tokens, amount_cents, currency, status, payment_url, created_at)
-         VALUES (?, ?, 'cryptomus', ?, ?, ?, ?, ?, ?, 'USD', ?, ?, ?)`
+        `INSERT INTO payments (id, account_id, provider, order_id, invoice_uuid, purpose, plan_id, tokens, token_amount, balance_cents, amount_cents, currency, status, settlement_status, entitlement_snapshot_json, payment_url, created_at)
+         VALUES (?, ?, 'cryptomus', ?, ?, ?, ?, ?, ?, ?, ?, 'USD', ?, 'pending', ?, ?, ?)`
       )
       .run(
         randomUUID(),
@@ -627,8 +631,11 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
         input.purpose,
         input.planId,
         input.tokens,
+        input.tokens,
+        0,
         input.amountCents,
         invoice.status,
+        JSON.stringify(input.snapshot),
         invoice.paymentUrl,
         new Date().toISOString()
       );
@@ -659,7 +666,8 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
           amountCents: priceCents,
           tokens: plan.includedTokens,
           traceId: req.id,
-          provider: parsed.data.provider
+          provider: parsed.data.provider,
+          snapshot: { method: plan.method ?? 'token_pack', modelGroupId: plan.modelGroupId ?? null, planId: plan.id, amountCents: priceCents, tokens: plan.includedTokens, balanceCents: 0 }
         })
       );
     } catch (error) {
@@ -683,7 +691,8 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
           amountCents: parsed.data.amountCents,
           tokens,
           traceId: req.id,
-          provider: parsed.data.provider
+          provider: parsed.data.provider,
+          snapshot: { method: 'token_pack', modelGroupId: plan.modelGroupId ?? null, planId: plan.id, amountCents: parsed.data.amountCents, tokens, balanceCents: 0 }
         })
       );
     } catch (error) {

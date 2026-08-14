@@ -22,6 +22,7 @@ export interface Plan {
   rateLimitRpm: number;
   dailyBudgetUnits: number;
   models: string[];
+  modelGroupId?: string | null;
   active: boolean;
   /** Release 2 (spec 20.1): subscription purchase metadata, always populated
    * by toPlan; optional in the input so legacy callers stay valid. */
@@ -84,6 +85,7 @@ interface PlanRow {
   rate_limit_rpm: number;
   daily_budget_units: number;
   models_json: string;
+  model_group_id: string | null;
   active: number;
   price_cents: number;
   duration_hours: number | null;
@@ -122,6 +124,7 @@ function toPlan(row: PlanRow): Plan {
     rateLimitRpm: row.rate_limit_rpm,
     dailyBudgetUnits: row.daily_budget_units,
     models: JSON.parse(row.models_json) as string[],
+    modelGroupId: row.model_group_id,
     active: row.active === 1,
     priceCents: row.price_cents,
     durationHours: row.duration_hours,

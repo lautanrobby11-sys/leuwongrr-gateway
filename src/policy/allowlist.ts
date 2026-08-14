@@ -57,22 +57,22 @@ export const PUBLIC_ALLOWLIST: readonly AllowedRoute[] = Object.freeze([
   },
   {
     method: 'GET',
-    pattern: /^\/console\/api\/admin\/(overview|plans|models|accounts|payments|exchange-rate)$/,
+    pattern: /^\/console\/api\/admin\/(overview|plans|models|model-groups|accounts|payments|exchange-rate)$/,
     id: 'console.admin'
   },
   {
     method: 'POST',
-    pattern: /^\/console\/api\/admin\/(plans|models(\/policy)?|accounts\/limits|accounts\/credit|accounts\/status|exchange-rate)$/,
+    pattern: /^\/console\/api\/admin\/(plans|models(\/policy)?|model-groups(\/[a-z0-9-]{2,64}\/models)?|accounts\/limits|accounts\/credit|accounts\/status|exchange-rate)$/,
     id: 'console.admin'
   },
   {
     method: 'PUT',
-    pattern: /^\/console\/api\/admin\/models\/[a-z0-9-]{2,64}$/,
+    pattern: /^\/console\/api\/admin\/(models|model-groups)\/[a-z0-9-]{2,64}$/,
     id: 'console.admin'
   },
   {
     method: 'DELETE',
-    pattern: /^\/console\/api\/admin\/models\/[a-z0-9-]{2,64}$/,
+    pattern: /^\/console\/api\/admin\/(models\/[a-z0-9-]{2,64}|model-groups\/[a-z0-9-]{2,64}(\/models\/[a-z0-9-]{2,64})?)$/,
     id: 'console.admin'
   },
   { method: 'POST', pattern: /^\/webhooks\/cryptomus$/, id: 'webhook.cryptomus' },
@@ -144,6 +144,12 @@ export const DOCUMENTED_OPERATIONS: readonly DocumentedOperation[] = Object.free
   { method: 'POST', path: '/console/api/admin/models/policy', sample: '/console/api/admin/models/policy', id: 'console.admin' },
   { method: 'PUT', path: '/console/api/admin/models/{id}', sample: '/console/api/admin/models/lwrr-text', id: 'console.admin' },
   { method: 'DELETE', path: '/console/api/admin/models/{id}', sample: '/console/api/admin/models/lwrr-text', id: 'console.admin' },
+  { method: 'GET', path: '/console/api/admin/model-groups', sample: '/console/api/admin/model-groups', id: 'console.admin' },
+  { method: 'POST', path: '/console/api/admin/model-groups', sample: '/console/api/admin/model-groups', id: 'console.admin' },
+  { method: 'PUT', path: '/console/api/admin/model-groups/{id}', sample: '/console/api/admin/model-groups/value', id: 'console.admin' },
+  { method: 'DELETE', path: '/console/api/admin/model-groups/{id}', sample: '/console/api/admin/model-groups/value', id: 'console.admin' },
+  { method: 'POST', path: '/console/api/admin/model-groups/{id}/models', sample: '/console/api/admin/model-groups/value/models', id: 'console.admin' },
+  { method: 'DELETE', path: '/console/api/admin/model-groups/{id}/models/{modelId}', sample: '/console/api/admin/model-groups/value/models/lwrr-text', id: 'console.admin' },
   { method: 'POST', path: '/console/api/admin/accounts/limits', sample: '/console/api/admin/accounts/limits', id: 'console.admin' },
   { method: 'POST', path: '/console/api/admin/accounts/credit', sample: '/console/api/admin/accounts/credit', id: 'console.admin' },
   { method: 'POST', path: '/console/api/admin/accounts/status', sample: '/console/api/admin/accounts/status', id: 'console.admin' },

@@ -77,6 +77,8 @@ describe('cryptomus settlement', () => {
     expect(retry.statusCode).toBe(200);
     expect(retry.json()).toMatchObject({ duplicate: true });
     expect(billing.walletBalance(accountId)).toBe(TOKENS);
+    const row = (harness as Harness).db.db.prepare('SELECT settlement_status FROM payments WHERE order_id = ?').get(orderId) as { settlement_status: string };
+    expect(row.settlement_status).toBe('settled');
   });
 
   it('does not grant again when the status later becomes paid_over', async () => {
@@ -124,6 +126,38 @@ describe('cryptomus settlement', () => {
       .get(orderId) as { status: string; settled_at: string | null };
     expect(row.status).toBe('paid');
     expect(row.settled_at).not.toBeNull();
+  });
+
+  it('marks malformed entitlement snapshots for reconciliation without granting', async () => {
+    const { app, billing, accountId, orderId } = openInvoice();
+    (harness as Harness).db.db.prepare('UPDATE payments SET entitlement_snapshot_json = ? WHERE order_id = ?').run('{bad', orderId);
+    const response = await post(app, signed({ order_id: orderId, status: 'paid', amount: '10.00', currency: 'USD' }));
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error.code).toBe('payment_reconciliation_required');
+    expect(billing.walletBalance(accountId)).toBe(0);
+    const row = (harness as Harness).db.db.prepare('SELECT settlement_status, settlement_error, settled_at FROM payments WHERE order_id = ?').get(orderId) as { settlement_status: string; settlement_error: string; settled_at: string | null };
+    expect(row).toMatchObject({ settlement_status: 'reconciliation_required', settlement_error: 'entitlement_snapshot_invalid', settled_at: null });
+  });
+
+  it('rejects invalid settlement amounts and methods without negative balances', async () => {
+    const { billing, accountId, orderId } = openInvoice();
+    expect(() => billing.settlePaymentSnapshot(accountId, orderId + '-wrong', { method: 'payg', balanceCents: -1 })).toThrowError('payment_scope_invalid');
+    expect(billing.walletBalance(accountId)).toBe(0);
+  });
+
+  it('rolls back a failed grant atomically', async () => {
+    const { app, billing, accountId, orderId } = openInvoice();
+    (harness as Harness).db.db.prepare('UPDATE payments SET entitlement_snapshot_json = ? WHERE order_id = ?').run(JSON.stringify({ method: 'rolling_time', planId: 'missing-plan', amountCents: 1000 }), orderId);
+    const response = await post(app, signed({ order_id: orderId, status: 'paid', amount: '10.00', currency: 'USD' }));
+    expect(response.statusCode).toBe(409);
+    expect(billing.walletBalance(accountId)).toBe(0);
+    const db = (harness as Harness).db.db;
+    expect((db.prepare("SELECT COUNT(*) AS n FROM ledger_entries WHERE account_id = ? AND source = 'payment'").get(accountId) as { n: number }).n).toBe(0);
+    expect((db.prepare('SELECT COUNT(*) AS n FROM subscriptions WHERE account_id = ?').get(accountId) as { n: number }).n).toBe(0);
+    // The settlement transaction rolls back the event when the grant fails;
+    // reconciliation is persisted separately so a later retry remains visible.
+    expect((db.prepare('SELECT COUNT(*) AS n FROM payment_events WHERE payment_id = (SELECT id FROM payments WHERE order_id = ?)').get(orderId) as { n: number }).n).toBe(0);
+    expect((db.prepare('SELECT settlement_status FROM payments WHERE order_id = ?').get(orderId) as { settlement_status: string }).settlement_status).toBe('reconciliation_required');
   });
 
   it('rejects an unsigned body and an unknown order', async () => {

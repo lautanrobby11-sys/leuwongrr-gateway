@@ -147,7 +147,8 @@ describe('model catalogue admin CRUD (Release 2a)', () => {
     const listed = await active.app.inject({ method: 'GET', url: '/console/api/admin/models', headers });
     expect(listed.statusCode).toBe(200);
     const body = listed.json() as { catalog: ModelRecord[]; policies: unknown[] };
-    expect(body.catalog).toHaveLength(1);
+    expect(body.catalog).toHaveLength(2);
+    expect(body.catalog.map((model) => model.id)).toEqual(['lwrr-text', 'lwrr-vision']);
     expect(body.policies).toEqual([]);
 
     const amended = await active.app.inject({
@@ -173,7 +174,8 @@ describe('model catalogue admin CRUD (Release 2a)', () => {
     expect(removed.json().deleted).toBe(true);
 
     const after = await active.app.inject({ method: 'GET', url: '/console/api/admin/models', headers });
-    expect((after.json() as { catalog: ModelRecord[] }).catalog).toHaveLength(0);
+    expect((after.json() as { catalog: ModelRecord[] }).catalog).toHaveLength(1);
+    expect((after.json() as { catalog: ModelRecord[] }).catalog[0]?.id).toBe('lwrr-text');
   });
 
   it('rejects a duplicate model id with 409', async () => {

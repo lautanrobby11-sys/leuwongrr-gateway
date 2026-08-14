@@ -1,5 +1,6 @@
 import type { Database } from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
+import { effectiveCents } from './pricing.js';
 
 export class BillingError extends Error {
   constructor(
@@ -21,6 +22,7 @@ export interface Plan {
   rateLimitRpm: number;
   dailyBudgetUnits: number;
   models: string[];
+  modelGroupId?: string | null;
   active: boolean;
   /** Release 2 (spec 20.1): subscription purchase metadata, always populated
    * by toPlan; optional in the input so legacy callers stay valid. */
@@ -28,7 +30,7 @@ export interface Plan {
   durationHours?: number | null;
   timerBasis?: 'from_payment' | 'from_first_use';
   resetsAllowed?: number;
-  method?: 'rolling_time' | 'token_pack';
+  method?: 'rolling_time' | 'token_pack' | 'monetary_pack' | 'payg';
   tierLabel?: string;
 }
 
@@ -43,12 +45,13 @@ export interface Subscription {
   usedTokens: number;
   autoRenew: boolean;
   /** Release 2 (spec 20.1): snapshot of the plan at purchase time. */
-  method: 'rolling_time' | 'token_pack' | null;
+  method: 'rolling_time' | 'token_pack' | 'monetary_pack' | null;
   durationHours: number | null;
   timerBasis: 'from_payment' | 'from_first_use' | null;
   activatedAt: string | null;
   expiresAt: string | null;
   resetsRemaining: number;
+  modelGroupId: string | null;
 }
 
 export interface LedgerEntry {
@@ -58,6 +61,9 @@ export interface LedgerEntry {
   tokens: number;
   reference: string;
   balanceAfter: number;
+  currency: 'tokens' | 'cents';
+  cents: number;
+  balanceAfterCents: number;
   createdAt: string;
 }
 
@@ -65,6 +71,7 @@ export interface BillingSummary {
   plan: Plan | null;
   subscription: Subscription | null;
   walletTokens: number;
+  walletCents: number;
   subscriptionRemaining: number;
   totalAvailable: number;
   funded: boolean;
@@ -83,12 +90,13 @@ interface PlanRow {
   rate_limit_rpm: number;
   daily_budget_units: number;
   models_json: string;
+  model_group_id: string | null;
   active: number;
   price_cents: number;
   duration_hours: number | null;
   timer_basis: 'from_payment' | 'from_first_use';
   resets_allowed: number;
-  method: 'rolling_time' | 'token_pack';
+  method: 'rolling_time' | 'token_pack' | 'monetary_pack' | 'payg';
   tier_label: string;
 }
 
@@ -102,12 +110,13 @@ interface SubscriptionRow {
   included_tokens: number;
   used_tokens: number;
   auto_renew: number;
-  method: 'rolling_time' | 'token_pack' | null;
+  method: 'rolling_time' | 'token_pack' | 'monetary_pack' | null;
   duration_hours: number | null;
   timer_basis: 'from_payment' | 'from_first_use' | null;
   activated_at: string | null;
   expires_at: string | null;
   resets_remaining: number;
+  model_group_id: string | null;
 }
 
 function toPlan(row: PlanRow): Plan {
@@ -121,6 +130,7 @@ function toPlan(row: PlanRow): Plan {
     rateLimitRpm: row.rate_limit_rpm,
     dailyBudgetUnits: row.daily_budget_units,
     models: JSON.parse(row.models_json) as string[],
+    modelGroupId: row.model_group_id,
     active: row.active === 1,
     priceCents: row.price_cents,
     durationHours: row.duration_hours,
@@ -147,7 +157,8 @@ function toSubscription(row: SubscriptionRow): Subscription {
     timerBasis: row.timer_basis,
     activatedAt: row.activated_at,
     expiresAt: row.expires_at,
-    resetsRemaining: row.resets_remaining
+    resetsRemaining: row.resets_remaining,
+    modelGroupId: row.model_group_id
   };
 }
 
@@ -178,6 +189,35 @@ export class BillingService {
     return (this.db.prepare(sql).all() as PlanRow[]).map(toPlan);
   }
 
+  listMemberPlans(): Array<Plan & { modelGroupId: string | null; eligibleModels: Array<Record<string, unknown>> }> {
+    const plans = this.db.prepare(`
+      SELECT p.*, g.multiplier_bps
+      FROM plans p LEFT JOIN model_groups g ON g.id = p.model_group_id
+      WHERE p.active = 1 AND g.enabled = 1
+      ORDER BY p.monthly_price_cents, p.name, p.id
+    `).all() as Array<PlanRow & { model_group_id: string; multiplier_bps: number }>;
+    const models = this.db.prepare(`
+      SELECT public_id, display_name, provider, multimodal, input_price_cents, output_price_cents, cache_read_price_cents, group_id
+      FROM models WHERE enabled = 1 AND group_id = ? ORDER BY display_name, public_id
+    `);
+    return plans.map((row) => ({
+      ...toPlan(row),
+      modelGroupId: row.model_group_id,
+      eligibleModels: (models.all(row.model_group_id) as Array<Record<string, unknown>>).map((model) => ({
+        id: model.public_id,
+        name: model.display_name,
+        provider: model.provider,
+        multimodalSupport: model.multimodal === 1,
+        inputPriceCents: model.input_price_cents,
+        outputPriceCents: model.output_price_cents,
+        cacheReadPriceCents: model.cache_read_price_cents,
+        effectiveInputPriceCents: effectiveCents(model.input_price_cents as number, row.multiplier_bps),
+        effectiveOutputPriceCents: effectiveCents(model.output_price_cents as number, row.multiplier_bps),
+        effectiveCacheReadPriceCents: effectiveCents(model.cache_read_price_cents as number, row.multiplier_bps)
+      }))
+    }));
+  }
+
   getPlan(planId: string): Plan | null {
     const row = this.db.prepare('SELECT * FROM plans WHERE id = ?').get(planId) as
       | PlanRow
@@ -188,8 +228,8 @@ export class BillingService {
   upsertPlan(plan: Omit<Plan, 'active'> & { active?: boolean }): Plan {
     this.db
       .prepare(
-        `INSERT INTO plans (id, name, monthly_price_cents, included_tokens, overage_cents_per_million, max_concurrent, rate_limit_rpm, daily_budget_units, models_json, active, price_cents, duration_hours, timer_basis, resets_allowed, method, tier_label, updated_at)
-         VALUES (@id, @name, @price, @included, @overage, @concurrent, @rpm, @daily, @models, @active, @priceCents, @durationHours, @timerBasis, @resetsAllowed, @method, @tierLabel, @updated)
+        `INSERT INTO plans (id, name, monthly_price_cents, included_tokens, overage_cents_per_million, max_concurrent, rate_limit_rpm, daily_budget_units, models_json, active, price_cents, duration_hours, timer_basis, resets_allowed, method, tier_label, model_group_id, updated_at)
+         VALUES (@id, @name, @price, @included, @overage, @concurrent, @rpm, @daily, @models, @active, @priceCents, @durationHours, @timerBasis, @resetsAllowed, @method, @tierLabel, @modelGroupId, @updated)
          ON CONFLICT(id) DO UPDATE SET
            name = excluded.name,
            monthly_price_cents = excluded.monthly_price_cents,
@@ -206,6 +246,7 @@ export class BillingService {
            resets_allowed = excluded.resets_allowed,
            method = excluded.method,
            tier_label = excluded.tier_label,
+           model_group_id = excluded.model_group_id,
            updated_at = excluded.updated_at`
       )
       .run({
@@ -225,6 +266,7 @@ export class BillingService {
         resetsAllowed: plan.resetsAllowed ?? 0,
         method: plan.method ?? 'token_pack',
         tierLabel: plan.tierLabel ?? '',
+        modelGroupId: plan.modelGroupId ?? null,
         updated: this.iso()
       });
     const stored = this.getPlan(plan.id);
@@ -465,102 +507,23 @@ export class BillingService {
     return row?.balance_tokens ?? 0;
   }
 
-  private recordLedger(
-    accountId: string,
-    entry: {
-      kind: LedgerEntry['kind'];
-      source: LedgerEntry['source'];
-      tokens: number;
-      reference: string;
-      balanceAfter: number;
-    }
-  ): void {
-    this.db
-      .prepare(
-        `INSERT OR IGNORE INTO ledger_entries (id, account_id, kind, source, tokens, reference, balance_after, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-      )
-      .run(
-        randomUUID(),
-        accountId,
-        entry.kind,
-        entry.source,
-        entry.tokens,
-        entry.reference,
-        entry.balanceAfter,
-        this.iso()
-      );
+  /** Currency-aware balance backing monetary-pack and PAYG grants (spec: cents
+   * balance is a separate ledger axis, never silently converted to tokens). */
+  walletCents(accountId: string): number {
+    const row = this.db
+      .prepare('SELECT balance_cents FROM wallets WHERE account_id = ?')
+      .get(accountId) as { balance_cents: number } | undefined;
+    return row?.balance_cents ?? 0;
   }
-
-  /** Credits are idempotent on (source, reference) so a webhook retry is free. */
-  credit(
-    accountId: string,
-    tokens: number,
-    source: 'payment' | 'admin' | 'payg',
-    reference: string,
-    kind: 'purchase' | 'adjustment' | 'refund' = 'purchase'
-  ): number {
-    if (tokens <= 0) throw new BillingError('credit_must_be_positive', 400);
-    const apply = this.db.transaction(() => {
-      const already = this.db
-        .prepare(
-          'SELECT 1 FROM ledger_entries WHERE account_id = ? AND source = ? AND reference = ?'
-        )
-        .get(accountId, source, reference);
-      if (already) return this.walletBalance(accountId);
-      const balance = this.walletBalance(accountId) + tokens;
-      this.db
-        .prepare(
-          'INSERT INTO wallets (account_id, balance_tokens, updated_at) VALUES (?, ?, ?) ON CONFLICT(account_id) DO UPDATE SET balance_tokens = excluded.balance_tokens, updated_at = excluded.updated_at'
-        )
-        .run(accountId, balance, this.iso());
-      this.recordLedger(accountId, {
-        kind,
-        source,
-        tokens,
-        reference,
-        balanceAfter: balance
-      });
-      return balance;
-    });
-    return apply();
-  }
-
-  ledger(accountId: string, limit = 50): LedgerEntry[] {
-    const rows = this.db
-      .prepare(
-        'SELECT id, kind, source, tokens, reference, balance_after, created_at FROM ledger_entries WHERE account_id = ? ORDER BY created_at DESC LIMIT ?'
-      )
-      .all(accountId, limit) as Array<{
-      id: string;
-      kind: string;
-      source: string;
-      tokens: number;
-      reference: string;
-      balance_after: number;
-      created_at: string;
-    }>;
-    return rows.map((row) => ({
-      id: row.id,
-      kind: row.kind,
-      source: row.source,
-      tokens: row.tokens,
-      reference: row.reference,
-      balanceAfter: row.balance_after,
-      createdAt: row.created_at
-    }));
-  }
-
-  // ---- Metering ----
 
   /**
-   * Release 2 (spec 20.2): spend order is
-   *   1. Rolling Time allowance — FREE while the window is active, up to the
-   *      token limit, never touching the wallet;
-   *   2. Token Packs — paid allowance, earliest expiry debited first;
-   *   3. prepaid wallet — PAYG fallback.
-   * A shortfall is recorded and the spent subscriptions are marked past_due;
-   * it is never rounded away, because that would hand out free capacity.
+   * Debits metered usage. Spending order (spec 20.2):
+   *   1. Rolling Time allowance — FREE while the window is active;
+   *   2. Token Packs — earliest expiry debited first;
+   *   3. prepaid wallet tokens — PAYG fallback;
+   *   4. prepaid wallet cents — the monetary-pack/PAYG fallback, priced through
+   *      the conversion rate of the account's active PAYG plan so a cents
+   *      balance is never left unspendable.
    */
   private applyUsage(accountId: string, units: number, reference: string): void {
     const already = this.db
@@ -633,7 +596,8 @@ export class BillingService {
       }
     }
 
-    // 3. Prepaid wallet (PAYG).
+    // 3. Prepaid wallet (PAYG): tokens first, then cents priced at the active
+    // PAYG rate so monetary-pack grants stay spendable on the request path.
     const wallet = this.walletBalance(accountId);
     const fromWallet = Math.min(wallet, remaining);
     const balanceAfter = wallet - fromWallet;
@@ -644,12 +608,33 @@ export class BillingService {
       remaining -= fromWallet;
     }
 
+    let balanceCentsAfter = this.walletCents(accountId);
+    let spentCents = 0;
+    if (remaining > 0 && balanceCentsAfter > 0) {
+      const ratePlan = this.paygRatePlan(accountId);
+      if (ratePlan) {
+        const centsForRemaining = this.centsForTokens(ratePlan, remaining);
+        spentCents = Math.min(balanceCentsAfter, centsForRemaining);
+        const coveredTokens = this.tokensForCents(ratePlan, spentCents);
+        balanceCentsAfter = balanceCentsAfter - spentCents;
+        if (spentCents > 0) {
+          this.db
+            .prepare('UPDATE wallets SET balance_cents = ?, updated_at = ? WHERE account_id = ?')
+            .run(balanceCentsAfter, this.iso(), accountId);
+          remaining -= Math.min(coveredTokens, remaining);
+        }
+      }
+    }
+
     this.recordLedger(accountId, {
       kind: 'debit',
       source: 'usage',
       tokens: -(units - remaining),
       reference,
-      balanceAfter
+      balanceAfter,
+      currency: spentCents > 0 ? 'cents' : 'tokens',
+      cents: spentCents,
+      balanceAfterCents: balanceCentsAfter
     });
 
     if (remaining > 0) {
@@ -658,7 +643,10 @@ export class BillingService {
         source: 'usage',
         tokens: -remaining,
         reference: reference + ':unfunded',
-        balanceAfter
+        balanceAfter,
+        currency: spentCents > 0 ? 'cents' : 'tokens',
+        cents: 0,
+        balanceAfterCents: balanceCentsAfter
       });
       const now = this.iso();
       const spentIds = spentSubscriptions.map((entry) => entry.id);
@@ -675,6 +663,171 @@ export class BillingService {
       }
     }
   }
+
+  /**
+   * The PAYG conversion plan used to price cents spending: the active plan of
+   * the account that carries an overage rate, preferring one that explicitly
+   * charges per-million. A cents balance without any rate stays untouched and
+   * the shortfall is recorded, so money is never silently lost or invented.
+   */
+  private paygRatePlan(accountId: string): Plan | null {
+    for (const subscription of this.activeSubscriptions(accountId)) {
+      const plan = this.getPlan(subscription.planId);
+      if (plan && plan.overageCentsPerMillion > 0) return plan;
+    }
+    return null;
+  }
+
+  private recordLedger(
+    accountId: string,
+    entry: {
+      kind: LedgerEntry['kind'];
+      source: LedgerEntry['source'];
+      tokens: number;
+      reference: string;
+      balanceAfter: number;
+      currency?: 'tokens' | 'cents';
+      cents?: number;
+      balanceAfterCents?: number;
+    }
+  ): void {
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO ledger_entries (id, account_id, kind, source, tokens, reference, balance_after, created_at, currency, cents, balance_after_cents)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        randomUUID(),
+        accountId,
+        entry.kind,
+        entry.source,
+        entry.tokens,
+        entry.reference,
+        entry.balanceAfter,
+        this.iso(),
+        entry.currency ?? 'tokens',
+        entry.cents ?? 0,
+        entry.balanceAfterCents ?? 0
+      );
+  }
+
+  /** Credits are idempotent on (source, reference) so a webhook retry is free. */
+  credit(
+    accountId: string,
+    tokens: number,
+    source: 'payment' | 'admin' | 'payg',
+    reference: string,
+    kind: 'purchase' | 'adjustment' | 'refund' = 'purchase'
+  ): number {
+    if (tokens <= 0) throw new BillingError('credit_must_be_positive', 400);
+    const apply = this.db.transaction(() => {
+      const already = this.db
+        .prepare(
+          'SELECT 1 FROM ledger_entries WHERE account_id = ? AND source = ? AND reference = ?'
+        )
+        .get(accountId, source, reference);
+      if (already) return this.walletBalance(accountId);
+      const balance = this.walletBalance(accountId) + tokens;
+      this.db
+        .prepare(
+          'INSERT INTO wallets (account_id, balance_tokens, updated_at) VALUES (?, ?, ?) ON CONFLICT(account_id) DO UPDATE SET balance_tokens = excluded.balance_tokens, updated_at = excluded.updated_at'
+        )
+        .run(accountId, balance, this.iso());
+      this.recordLedger(accountId, {
+        kind,
+        source,
+        tokens,
+        reference,
+        balanceAfter: balance
+      });
+      return balance;
+    });
+    return apply();
+  }
+
+  settlePaymentSnapshot(
+    accountId: string,
+    paymentId: string,
+    snapshot: {
+      method?: 'rolling_time' | 'token_pack' | 'monetary_pack' | 'payg';
+      planId?: string;
+      modelGroupId?: string | null;
+      tokens?: number;
+      balanceCents?: number;
+      amountCents?: number;
+    }
+  ): { tokensGranted: number; centsGranted: number; subscription: Subscription | null } {
+    const method = snapshot.method;
+    const reference = paymentId;
+    if (!method || !['rolling_time', 'token_pack', 'monetary_pack', 'payg'].includes(method)) throw new BillingError('payment_method_invalid', 409);
+    const payment = this.db.prepare('SELECT account_id, order_id FROM payments WHERE id = ?').get(paymentId) as { account_id: string; order_id: string } | undefined;
+    if (!payment || payment.account_id !== accountId || !payment.order_id) throw new BillingError('payment_scope_invalid', 409);
+    return this.db.transaction(() => {
+      const existing = this.db.prepare("SELECT currency FROM ledger_entries WHERE account_id = ? AND source = 'payment' AND reference = ?").get(accountId, reference) as { currency: string } | undefined;
+      if (existing) return { tokensGranted: 0, centsGranted: 0, subscription: null };
+      if (method === 'rolling_time') {
+        if (!snapshot.planId) throw new BillingError('payment_plan_missing', 409);
+        const subscription = this.startSubscription(accountId, snapshot.planId);
+        if (snapshot.modelGroupId !== undefined) {
+          this.db.prepare('UPDATE subscriptions SET model_group_id = ?, updated_at = ? WHERE id = ?').run(snapshot.modelGroupId, this.iso(), subscription.id);
+          subscription.modelGroupId = snapshot.modelGroupId;
+        }
+        this.db.prepare("INSERT INTO ledger_entries (id, account_id, kind, source, tokens, reference, balance_after, created_at, currency, cents, balance_after_cents) VALUES (?, ?, 'grant', 'payment', 0, ?, ?, ?, 'tokens', 0, 0)").run(randomUUID(), accountId, reference, this.walletBalance(accountId), this.iso());
+        return { tokensGranted: 0, centsGranted: 0, subscription };
+      }
+      const tokens = snapshot.tokens ?? 0;
+      const cents = snapshot.balanceCents ?? 0;
+      if (!Number.isInteger(tokens) || !Number.isInteger(cents) || tokens < 0 || cents < 0) throw new BillingError('payment_amount_invalid', 409);
+      if (method === 'token_pack') {
+        if (tokens <= 0) throw new BillingError('payment_tokens_missing', 409);
+        this.credit(accountId, tokens, 'payment', reference, 'purchase');
+        const equivalentCents = snapshot.amountCents ?? cents;
+        if (!Number.isInteger(equivalentCents) || equivalentCents < 0) throw new BillingError('payment_amount_invalid', 409);
+        this.db.prepare("UPDATE ledger_entries SET cents = ?, currency = 'tokens' WHERE account_id = ? AND source = 'payment' AND reference = ?").run(equivalentCents, accountId, reference);
+        return { tokensGranted: tokens, centsGranted: 0, subscription: null };
+      }
+      if ((method === 'monetary_pack' || method === 'payg') && !this.paygRatePlan(accountId)) {
+        throw new BillingError('payg_rate_missing', 409);
+      }
+      if (cents <= 0) throw new BillingError('payment_cents_missing', 409);
+      this.db.prepare('INSERT INTO wallets (account_id, balance_tokens, balance_cents, updated_at) VALUES (?, 0, ?, ?) ON CONFLICT(account_id) DO UPDATE SET balance_cents = wallets.balance_cents + excluded.balance_cents, updated_at = excluded.updated_at').run(accountId, cents, this.iso());
+      this.db.prepare("INSERT INTO ledger_entries (id, account_id, kind, source, tokens, reference, balance_after, created_at, currency, cents, balance_after_cents) VALUES (?, ?, 'grant', 'payment', 0, ?, ?, ?, 'cents', ?, (SELECT balance_cents FROM wallets WHERE account_id = ?))").run(randomUUID(), accountId, reference, this.walletBalance(accountId), this.iso(), cents, accountId);
+      return { tokensGranted: 0, centsGranted: cents, subscription: null };
+    })();
+  }
+
+  ledger(accountId: string, limit = 50): LedgerEntry[] {
+    const rows = this.db
+      .prepare(
+        'SELECT id, kind, source, tokens, reference, balance_after, currency, cents, balance_after_cents, created_at FROM ledger_entries WHERE account_id = ? ORDER BY created_at DESC LIMIT ?'
+      )
+      .all(accountId, limit) as Array<{
+      id: string;
+      kind: string;
+      source: string;
+      tokens: number;
+      reference: string;
+      balance_after: number;
+      currency: 'tokens' | 'cents';
+      cents: number;
+      balance_after_cents: number;
+      created_at: string;
+    }>;
+    return rows.map((row) => ({
+      id: row.id,
+      kind: row.kind,
+      source: row.source,
+      tokens: row.tokens,
+      reference: row.reference,
+      balanceAfter: row.balance_after,
+      currency: row.currency as 'tokens' | 'cents',
+      cents: row.cents,
+      balanceAfterCents: row.balance_after_cents,
+      createdAt: row.created_at
+    }));
+  }
+
+  // ---- Metering ----
 
   /**
    * Pulls settled metering rows into the ledger. Safe to call on every read.
@@ -733,6 +886,7 @@ export class BillingService {
     const subscription = this.activeSubscription(accountId);
     const plan = subscription ? this.getPlan(subscription.planId) : null;
     const walletTokens = this.walletBalance(accountId);
+    const walletCents = this.walletCents(accountId);
     const subscriptionRemaining = subscription
       ? Math.max(0, subscription.includedTokens - subscription.usedTokens)
       : 0;
@@ -752,16 +906,21 @@ export class BillingService {
 
     const totalAvailable = subscriptionRemaining + walletTokens;
     const burnPerDay = today.total;
+    // Monetary-pack/PAYG wallets fund requests too, so they count as capacity.
+    const funded = totalAvailable > 0 || walletCents > 0;
+    const projectedDaysLeft =
+      burnPerDay > 0 && totalAvailable > 0 ? Math.floor(totalAvailable / burnPerDay) : null;
     return {
       plan,
       subscription,
       walletTokens,
+      walletCents,
       subscriptionRemaining,
       totalAvailable,
-      funded: totalAvailable > 0,
+      funded,
       usageToday: today.total,
       usageThisPeriod: period.total,
-      projectedDaysLeft: burnPerDay > 0 ? Math.floor(totalAvailable / burnPerDay) : null
+      projectedDaysLeft
     };
   }
 
@@ -770,6 +929,8 @@ export class BillingService {
    * capacity anywhere. Release 2 (spec 20.5): a live Rolling Time window funds
    * requests for free, a pending from_first_use timer funds them once the first
    * request activates it, and remaining pack allowance counts like the wallet.
+   * A cents balance also satisfies the gate: it is spendable through the active
+   * PAYG rate, so treating it as unfunded would strand paid money.
    */
   assertFunded(accountId: string, tenantId: string): void {
     this.reconcile(accountId, tenantId);
@@ -781,7 +942,7 @@ export class BillingService {
       const remaining = Math.max(0, subscription.includedTokens - subscription.usedTokens);
       if (remaining > 0) return;
     }
-    if (this.walletBalance(accountId) <= 0) {
+    if (this.walletBalance(accountId) <= 0 && this.walletCents(accountId) <= 0) {
       throw new BillingError('insufficient_tokens', 402);
     }
   }

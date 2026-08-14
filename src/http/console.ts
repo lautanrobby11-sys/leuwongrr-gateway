@@ -25,6 +25,7 @@ import { getExchangeRate, idrToTokens, setExchangeRate } from '../billing/exchan
 import { assertResolvedPublicEgress } from '../policy/egress.js';
 import { createSmtpTransport, sendOtpMail } from '../otp-smtp.js';
 import { ModelCatalog, ModelError, modelInputSchema, modelUpdateSchema } from '../models/catalog.js';
+import { ModelGroupCatalog, ModelGroupError, modelGroupInputSchema } from '../models/groups.js';
 import type { Scope } from '../auth/api-keys.js';
 
 export interface ConsoleDeps {
@@ -173,6 +174,7 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
   // Release 2a: admin-owned model catalogue, read and written via the admin
   // surface only. The request path keeps using the static registry.
   const models = new ModelCatalog(db.db);
+  const groups = new ModelGroupCatalog(db.db);
 
   async function currentAccount(req: FastifyRequest): Promise<AccountRecord | null> {
     const token = readCookie(req, config.SESSION_COOKIE_NAME);
@@ -207,7 +209,8 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
       error instanceof OauthError ||
       error instanceof BillingError ||
       error instanceof PaymentError ||
-      error instanceof ModelError
+      error instanceof ModelError ||
+      error instanceof ModelGroupError
     ) {
       return fail(reply, error.statusCode, error.code, error.code.replace(/_/g, ' '), traceId);
     }
@@ -500,7 +503,7 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
   app.get('/console/api/member/plans', async (req, reply) => {
     try {
       requireMember(await currentAccount(req));
-      return reply.send({ plans: billing.listPlans(true) });
+      return reply.send({ plans: billing.listMemberPlans() });
     } catch (error) {
       return handle(error, reply, req.id);
     }
@@ -576,6 +579,7 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
     tokens: number;
     traceId: string;
     provider: 'cryptomus' | 'leuwongrr';
+    snapshot: Record<string, unknown>;
   }) {
     const orderId = `${input.purpose}-${randomUUID()}`;
     if (input.provider === 'leuwongrr') {
@@ -584,8 +588,8 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
       const paymentUrl = `${new URL(config.PUBLIC_BASE_URL).origin}/pay/leuwongrr?order_id=${encodeURIComponent(orderId)}&amount=${amountIdr}&tokens=${input.tokens}`;
       db.db
         .prepare(
-          `INSERT INTO payments (id, account_id, provider, order_id, invoice_uuid, purpose, plan_id, tokens, amount_cents, currency, status, payment_url, created_at)
-           VALUES (?, ?, 'leuwongrr', ?, ?, ?, ?, ?, ?, 'IDR', ?, ?, ?)`
+          `INSERT INTO payments (id, account_id, provider, order_id, invoice_uuid, purpose, plan_id, tokens, token_amount, balance_cents, amount_cents, currency, status, settlement_status, entitlement_snapshot_json, payment_url, created_at)
+           VALUES (?, ?, 'leuwongrr', ?, ?, ?, ?, ?, ?, ?, ?, 'IDR', ?, 'pending', ?, ?, ?)`
         )
         .run(
           randomUUID(),
@@ -595,8 +599,11 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
           input.purpose,
           input.planId,
           input.tokens,
+          input.tokens,
+          0,
           amountIdr,
           'pending',
+          JSON.stringify(input.snapshot),
           paymentUrl,
           new Date().toISOString()
         );
@@ -613,8 +620,8 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
     });
     db.db
       .prepare(
-        `INSERT INTO payments (id, account_id, provider, order_id, invoice_uuid, purpose, plan_id, tokens, amount_cents, currency, status, payment_url, created_at)
-         VALUES (?, ?, 'cryptomus', ?, ?, ?, ?, ?, ?, 'USD', ?, ?, ?)`
+        `INSERT INTO payments (id, account_id, provider, order_id, invoice_uuid, purpose, plan_id, tokens, token_amount, balance_cents, amount_cents, currency, status, settlement_status, entitlement_snapshot_json, payment_url, created_at)
+         VALUES (?, ?, 'cryptomus', ?, ?, ?, ?, ?, ?, ?, ?, 'USD', ?, 'pending', ?, ?, ?)`
       )
       .run(
         randomUUID(),
@@ -624,8 +631,11 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
         input.purpose,
         input.planId,
         input.tokens,
+        input.tokens,
+        0,
         input.amountCents,
         invoice.status,
+        JSON.stringify(input.snapshot),
         invoice.paymentUrl,
         new Date().toISOString()
       );
@@ -648,6 +658,10 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
       if (priceCents === 0) {
         return reply.send({ subscription: billing.startSubscription(account.id, plan.id) });
       }
+      // A monetary pack buys a cents balance, so the snapshot carries the
+      // purchase price on the cents axis; every other method keeps it at zero
+      // and the request path spends it through the active PAYG rate.
+      const balanceCents = plan.method === 'monetary_pack' ? priceCents : 0;
       return reply.send(
         await openInvoice({
           account,
@@ -656,7 +670,8 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
           amountCents: priceCents,
           tokens: plan.includedTokens,
           traceId: req.id,
-          provider: parsed.data.provider
+          provider: parsed.data.provider,
+          snapshot: { method: plan.method ?? 'token_pack', modelGroupId: plan.modelGroupId ?? null, planId: plan.id, amountCents: priceCents, tokens: plan.includedTokens, balanceCents }
         })
       );
     } catch (error) {
@@ -680,7 +695,8 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
           amountCents: parsed.data.amountCents,
           tokens,
           traceId: req.id,
-          provider: parsed.data.provider
+          provider: parsed.data.provider,
+          snapshot: { method: 'token_pack', modelGroupId: plan.modelGroupId ?? null, planId: plan.id, amountCents: parsed.data.amountCents, tokens, balanceCents: 0 }
         })
       );
     } catch (error) {
@@ -869,6 +885,101 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
     }
   });
 
+  app.get('/console/api/admin/model-groups', async (req, reply) => {
+    try {
+      await requireAdmin(req);
+      const modelCounts = db.db
+        .prepare('SELECT group_id AS group_id, COUNT(*) AS models, SUM(enabled = 1) AS active_models FROM models WHERE group_id IS NOT NULL GROUP BY group_id')
+        .all() as Array<{ group_id: string; models: number; active_models: number | null }>;
+      const planCounts = db.db
+        .prepare('SELECT model_group_id AS group_id, COUNT(*) AS plans FROM plans WHERE model_group_id IS NOT NULL GROUP BY model_group_id')
+        .all() as Array<{ group_id: string; plans: number }>;
+      const modelsByGroup = new Map(modelCounts.map((row) => [row.group_id, row]));
+      const plansByGroup = new Map(planCounts.map((row) => [row.group_id, row.plans]));
+      const listed = groups.list().map((group) => {
+        const models = modelsByGroup.get(group.id);
+        return {
+          ...group,
+          modelsCount: models?.models ?? 0,
+          activeModelsCount: models?.active_models ?? 0,
+          plansCount: plansByGroup.get(group.id) ?? 0
+        };
+      });
+      return reply.send({ groups: listed });
+    } catch (error) { return handle(error, reply, req.id); }
+  });
+
+  app.post('/console/api/admin/model-groups', async (req, reply) => {
+    try {
+      const admin = await requireAdmin(req);
+      const parsed = modelGroupInputSchema.safeParse(req.body);
+      if (!parsed.success) return fail(reply, 400, 'invalid_request', 'Group payload invalid', req.id);
+      const group = db.db.transaction(() => {
+        const written = groups.create(parsed.data);
+        db.audit({ tenantId: admin.tenantId, actorType: 'admin', event: 'console.model_group.created', traceId: req.id, metadata: { group: written.id } });
+        return written;
+      })();
+      return reply.send({ group });
+    } catch (error) { return handle(error, reply, req.id); }
+  });
+
+  app.put('/console/api/admin/model-groups/:id', async (req, reply) => {
+    try {
+      const admin = await requireAdmin(req);
+      const parsed = modelGroupInputSchema.omit({ id: true }).safeParse(req.body);
+      if (!parsed.success) return fail(reply, 400, 'invalid_request', 'Group payload invalid', req.id);
+      const id = (req.params as { id: string }).id;
+      if (!/^[a-z0-9-]{2,64}$/.test(id)) return fail(reply, 400, 'invalid_request', 'Group id invalid', req.id);
+      const group = db.db.transaction(() => {
+        const written = groups.update(id, parsed.data);
+        db.audit({ tenantId: admin.tenantId, actorType: 'admin', event: 'console.model_group.updated', traceId: req.id, metadata: { group: id } });
+        return written;
+      })();
+      return reply.send({ group });
+    } catch (error) { return handle(error, reply, req.id); }
+  });
+
+  app.post('/console/api/admin/model-groups/:id/models', async (req, reply) => {
+    try {
+      const admin = await requireAdmin(req);
+      const groupId = (req.params as { id: string }).id;
+      if (!/^[a-z0-9-]{2,64}$/.test(groupId)) return fail(reply, 400, 'invalid_request', 'Group id invalid', req.id);
+      const parsed = z.object({ modelId: z.string().min(1).max(64) }).strict().safeParse(req.body);
+      if (!parsed.success) return fail(reply, 400, 'invalid_request', 'Model assignment invalid', req.id);
+      db.db.transaction(() => {
+        groups.assignModel(groupId, parsed.data.modelId);
+        db.audit({ tenantId: admin.tenantId, actorType: 'admin', event: 'console.model_group.model_assigned', traceId: req.id, metadata: { group: groupId, model: parsed.data.modelId } });
+      })();
+      return reply.send({ assigned: true, groupId, modelId: parsed.data.modelId });
+    } catch (error) { return handle(error, reply, req.id); }
+  });
+
+  app.delete('/console/api/admin/model-groups/:id/models/:modelId', async (req, reply) => {
+    try {
+      const admin = await requireAdmin(req);
+      const modelId = (req.params as { modelId: string }).modelId;
+      if (!/^[a-z0-9-]{2,64}$/.test(modelId)) return fail(reply, 400, 'invalid_request', 'Model id invalid', req.id);
+      db.db.transaction(() => {
+        groups.unassignModel(modelId);
+        db.audit({ tenantId: admin.tenantId, actorType: 'admin', event: 'console.model_group.model_unassigned', traceId: req.id, metadata: { model: modelId } });
+      })();
+      return reply.send({ unassigned: true });
+    } catch (error) { return handle(error, reply, req.id); }
+  });
+
+  app.delete('/console/api/admin/model-groups/:id', async (req, reply) => {
+    try {
+      const admin = await requireAdmin(req);
+      const id = (req.params as { id: string }).id;
+      if (!/^[a-z0-9-]{2,64}$/.test(id)) return fail(reply, 400, 'invalid_request', 'Group id invalid', req.id);
+      db.db.transaction(() => {
+        groups.remove(id);
+        db.audit({ tenantId: admin.tenantId, actorType: 'admin', event: 'console.model_group.deleted', traceId: req.id, metadata: { group: id } });
+      })();
+      return reply.send({ deleted: true });
+    } catch (error) { return handle(error, reply, req.id); }
+  });
+
   app.get('/console/api/admin/accounts', async (req, reply) => {
     try {
       await requireAdmin(req);
@@ -1028,7 +1139,7 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
 
     const payment = db.db
       .prepare(
-        'SELECT id, account_id, purpose, plan_id, tokens, amount_cents, currency, status, settled_at FROM payments WHERE order_id = ?'
+        'SELECT id, account_id, purpose, plan_id, tokens, amount_cents, currency, status, settled_at, entitlement_snapshot_json FROM payments WHERE order_id = ?'
       )
       .get(orderId) as
       | {
@@ -1041,6 +1152,7 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
           currency: string;
           status: string;
           settled_at: string | null;
+          entitlement_snapshot_json: string;
         }
       | undefined;
     if (!payment) return fail(reply, 404, 'payment_not_found', 'Unknown order', req.id);
@@ -1066,7 +1178,10 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
     // Cryptomus retries. Recording the delivery and acting on it therefore
     // share a single transaction: if the grant throws, the marker rolls back
     // with it and the retry can still settle, instead of being mistaken for a
-    // duplicate and leaving the payer with nothing.
+    // duplicate and leaving the payer with nothing. Settlement failures are
+    // rethrown as BillingError so the transaction rolls back the marker AND
+    // the `reconciliation_required` state is persisted only afterwards — a
+    // transient failure must never lock the payment out of a later retry.
     const digest = `${orderId}:${status}:${String(payload.sign)}`;
     const seenAt = new Date().toISOString();
     try {
@@ -1082,17 +1197,32 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
           // paid and paid_over are distinct deliveries of one settlement.
           // settled_at, not the digest, is what makes the grant one-time.
           if (payment.settled_at) {
-            db.db.prepare('UPDATE payments SET status = ? WHERE id = ?').run(status, payment.id);
+            db.db.prepare('UPDATE payments SET status = ?, settlement_status = \'settled\' WHERE id = ?').run(status, payment.id);
             return 'recorded';
           }
           db.db
             .prepare('UPDATE payments SET status = ?, settled_at = ? WHERE id = ?')
             .run(status, seenAt, payment.id);
-          if (payment.purpose === 'subscription' && payment.plan_id) {
-            billing.startSubscription(payment.account_id, payment.plan_id);
-          } else if (payment.tokens > 0) {
-            billing.credit(payment.account_id, payment.tokens, 'payment', orderId);
+          let snapshot: Record<string, unknown>;
+          try {
+            snapshot = JSON.parse(payment.entitlement_snapshot_json || '{}') as Record<string, unknown>;
+            if (!snapshot || Array.isArray(snapshot) || typeof snapshot !== 'object') throw new Error('snapshot_not_object');
+          } catch {
+            throw new BillingError('entitlement_snapshot_invalid', 409);
           }
+          if (Object.keys(snapshot).length === 0) {
+            snapshot.method = payment.purpose === 'subscription' ? 'rolling_time' : 'token_pack';
+            snapshot.planId = payment.plan_id;
+            snapshot.tokens = payment.tokens;
+          }
+          try {
+            snapshot.amountCents ??= payment.amount_cents;
+            billing.settlePaymentSnapshot(payment.account_id, payment.id, snapshot);
+          } catch (error) {
+            const reason = error instanceof BillingError ? error.code : 'settlement_failed';
+            throw new BillingError(reason, 409);
+          }
+          db.db.prepare("UPDATE payments SET settlement_status = 'settled', settlement_error = NULL WHERE id = ?").run(payment.id);
           return 'settled';
         }
 
@@ -1103,6 +1233,13 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
       })();
       return reply.send({ accepted: true, duplicate: outcome === 'duplicate' });
     } catch (error) {
+      if (error instanceof BillingError) {
+        // The transaction rolled back, so no payment_events marker survived.
+        // Mark the payment for operator attention now that the failure is
+        // definitively its own row, not a blind retry of a settled payment.
+        db.db.prepare("UPDATE payments SET settlement_status = 'reconciliation_required', settlement_error = ?, status = ?, settled_at = NULL WHERE id = ?").run(error.code, status, payment.id);
+        return fail(reply, 409, 'payment_reconciliation_required', 'Payment requires reconciliation', req.id);
+      }
       return handle(error, reply, req.id);
     }
   });
@@ -1136,7 +1273,7 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
 
     const payment = db.db
       .prepare(
-        "SELECT id, account_id, purpose, plan_id, tokens, amount_cents, currency, status, settled_at FROM payments WHERE order_id = ? AND provider = 'leuwongrr'"
+        "SELECT id, account_id, purpose, plan_id, tokens, amount_cents, currency, status, settled_at, entitlement_snapshot_json FROM payments WHERE order_id = ? AND provider = 'leuwongrr'"
       )
       .get(orderId) as
       | {
@@ -1149,6 +1286,7 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
           currency: string;
           status: string;
           settled_at: string | null;
+          entitlement_snapshot_json: string;
         }
       | undefined;
     if (!payment) return fail(reply, 404, 'payment_not_found', 'Unknown order', req.id);
@@ -1162,12 +1300,30 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
     }
 
     let tokens = 0;
+    let snapshot: Record<string, unknown>;
     if (settles) {
       try {
         const rate = getExchangeRate(db.db);
         tokens = idrToTokens(Math.round(amountIdr), rate);
       } catch (error) {
         return handle(error, reply, req.id);
+      }
+      try {
+        snapshot = JSON.parse(payment.entitlement_snapshot_json || '{}') as Record<string, unknown>;
+        if (!snapshot || Array.isArray(snapshot) || typeof snapshot !== 'object') throw new Error('snapshot_not_object');
+        if (Object.keys(snapshot).length === 0) {
+          snapshot = {
+            method: payment.purpose === 'subscription' ? 'rolling_time' : 'token_pack',
+            planId: payment.plan_id,
+            tokens
+          };
+        }
+        snapshot.amountCents ??= payment.amount_cents;
+        if (snapshot.tokens === undefined || snapshot.tokens === null || snapshot.tokens === 0) {
+          snapshot.tokens = tokens;
+        }
+      } catch {
+        return fail(reply, 400, 'snapshot_invalid', 'Entitlement snapshot invalid', req.id);
       }
     }
 
@@ -1186,11 +1342,20 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
           db.db
             .prepare('UPDATE payments SET status = ?, settled_at = ? WHERE id = ?')
             .run(status, seenAt, payment.id);
-          if (payment.purpose === 'subscription' && payment.plan_id) {
-            billing.startSubscription(payment.account_id, payment.plan_id);
-          } else if (tokens > 0) {
-            billing.credit(payment.account_id, tokens, 'payment', orderId);
+          try {
+            billing.settlePaymentSnapshot(payment.account_id, payment.id, snapshot as {
+              method?: 'rolling_time' | 'token_pack' | 'monetary_pack' | 'payg';
+              planId?: string;
+              modelGroupId?: string | null;
+              tokens?: number;
+              balanceCents?: number;
+              amountCents?: number;
+            });
+          } catch (error) {
+            const reason = error instanceof BillingError ? error.code : 'settlement_failed';
+            throw new BillingError(reason, 409);
           }
+          db.db.prepare("UPDATE payments SET settlement_status = 'settled', settlement_error = NULL WHERE id = ?").run(payment.id);
           return 'settled';
         }
         if (payment.settled_at) return 'recorded';
@@ -1199,6 +1364,10 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
       })();
       return reply.send({ accepted: true, duplicate: outcome === 'duplicate' });
     } catch (error) {
+      if (error instanceof BillingError) {
+        db.db.prepare("UPDATE payments SET settlement_status = 'reconciliation_required', settlement_error = ?, status = ?, settled_at = NULL WHERE id = ?").run(error.code, status, payment.id);
+        return fail(reply, 409, 'payment_reconciliation_required', 'Payment requires reconciliation', req.id);
+      }
       return handle(error, reply, req.id);
     }
   });

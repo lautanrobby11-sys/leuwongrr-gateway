@@ -8,6 +8,11 @@ SHA=${1:-}
 ARTIFACT=${2:-}
 RELEASE=
 ACTIVATED=0
+# Set only after this session created the release directory, so the failure
+# trap can never delete a release that belonged to a prior deploy of the same
+# SHA (incident 13 Aug 2026 17:07Z: the immutable guard failed and the trap
+# removed a pre-existing release directory).
+CREATED_RELEASE=0
 readonly HEALTH_REQUEST_TIMEOUT_SECONDS=5
 readonly HEALTH_STARTUP_DEADLINE_SECONDS=90
 readonly HEALTH_RETRY_INTERVAL_SECONDS=1
@@ -26,7 +31,7 @@ resolve_current() {
 
 cleanup_failed_release() {
   local rc=$?
-  if [[ $rc -ne 0 && $ACTIVATED -eq 0 && -n ${RELEASE:-} && -d $RELEASE ]]; then
+  if [[ $rc -ne 0 && $ACTIVATED -eq 0 && $CREATED_RELEASE -eq 1 && -n ${RELEASE:-} && -d $RELEASE ]]; then
     if [[ $(resolve_current) != "$RELEASE" ]]; then
       rm -rf -- "$RELEASE"
     fi
@@ -198,6 +203,7 @@ fi
 RELEASE="$ROOT/releases/$SHA"
 [[ ! -e $RELEASE ]] || fail 'immutable release already exists'
 mkdir -m 0750 "$RELEASE"
+CREATED_RELEASE=1
 tar --extract --file "$ARTIFACT" --directory "$RELEASE" --no-same-owner --no-same-permissions
 (
   cd "$RELEASE"

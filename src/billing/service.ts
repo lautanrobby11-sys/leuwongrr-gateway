@@ -1,5 +1,6 @@
 import type { Database } from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
+import { effectiveCents } from './pricing.js';
 
 export class BillingError extends Error {
   constructor(
@@ -176,6 +177,35 @@ export class BillingService {
       ? 'SELECT * FROM plans WHERE active = 1 ORDER BY monthly_price_cents'
       : 'SELECT * FROM plans ORDER BY monthly_price_cents';
     return (this.db.prepare(sql).all() as PlanRow[]).map(toPlan);
+  }
+
+  listMemberPlans(): Array<Plan & { modelGroupId: string | null; eligibleModels: Array<Record<string, unknown>> }> {
+    const plans = this.db.prepare(`
+      SELECT p.*, g.multiplier_bps
+      FROM plans p LEFT JOIN model_groups g ON g.id = p.model_group_id
+      WHERE p.active = 1 AND g.enabled = 1
+      ORDER BY p.monthly_price_cents, p.name, p.id
+    `).all() as Array<PlanRow & { model_group_id: string; multiplier_bps: number }>;
+    const models = this.db.prepare(`
+      SELECT public_id, display_name, provider, multimodal, input_price_cents, output_price_cents, cache_read_price_cents, group_id
+      FROM models WHERE enabled = 1 AND group_id = ? ORDER BY display_name, public_id
+    `);
+    return plans.map((row) => ({
+      ...toPlan(row),
+      modelGroupId: row.model_group_id,
+      eligibleModels: (models.all(row.model_group_id) as Array<Record<string, unknown>>).map((model) => ({
+        id: model.public_id,
+        name: model.display_name,
+        provider: model.provider,
+        multimodalSupport: model.multimodal === 1,
+        inputPriceCents: model.input_price_cents,
+        outputPriceCents: model.output_price_cents,
+        cacheReadPriceCents: model.cache_read_price_cents,
+        effectiveInputPriceCents: effectiveCents(model.input_price_cents as number, row.multiplier_bps),
+        effectiveOutputPriceCents: effectiveCents(model.output_price_cents as number, row.multiplier_bps),
+        effectiveCacheReadPriceCents: effectiveCents(model.cache_read_price_cents as number, row.multiplier_bps)
+      }))
+    }));
   }
 
   getPlan(planId: string): Plan | null {

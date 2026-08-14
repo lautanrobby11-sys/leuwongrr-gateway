@@ -210,7 +210,7 @@ describe('console member surface', () => {
       url: '/console/api/member/plans',
       headers: { cookie }
     });
-    expect(after.json().plans.map((plan: { id: string }) => plan.id)).toEqual(['harness-plan', 'starter']);
+    expect(after.json().plans.map((plan: { id: string }) => plan.id)).toEqual(['harness-plan']);
   });
 
   it('issues a key once and never returns it again', async () => {

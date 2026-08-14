@@ -503,7 +503,7 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
   app.get('/console/api/member/plans', async (req, reply) => {
     try {
       requireMember(await currentAccount(req));
-      return reply.send({ plans: billing.listPlans(true) });
+      return reply.send({ plans: billing.listMemberPlans() });
     } catch (error) {
       return handle(error, reply, req.id);
     }

@@ -436,6 +436,73 @@ paths:
           description: Entitlement written.
         '403':
           description: Origin is not allowed, or the Access assertion failed.
+  /console/api/admin/model-groups:
+    get:
+      summary: List model groups
+      security:
+        - accessAssertion: []
+      responses:
+        '200':
+          description: Model groups with model and plan counts.
+    post:
+      summary: Create a model group
+      description: Requires an allowed Origin. The multiplier is basis points.
+      security:
+        - accessAssertion: []
+      responses:
+        '200':
+          description: Model group created.
+        '400':
+          description: Group payload invalid.
+        '409':
+          description: Group id already exists.
+  /console/api/admin/model-groups/{id}:
+    put:
+      summary: Update a model group
+      description: Requires an allowed Origin.
+      security:
+        - accessAssertion: []
+      responses:
+        '200':
+          description: Model group updated.
+        '400':
+          description: Group payload invalid.
+        '404':
+          description: Group not found.
+    delete:
+      summary: Remove a model group
+      description: Requires an allowed Origin. Groups referenced by plans cannot be removed.
+      security:
+        - accessAssertion: []
+      responses:
+        '200':
+          description: Model group removed.
+        '404':
+          description: Group not found.
+        '409':
+          description: Group is referenced by a plan.
+  /console/api/admin/model-groups/{id}/models:
+    post:
+      summary: Assign a model to a group
+      description: Requires an allowed Origin. A model belongs to at most one group.
+      security:
+        - accessAssertion: []
+      responses:
+        '200':
+          description: Model assigned.
+        '404':
+          description: Group or model not found.
+  /console/api/admin/model-groups/{id}/models/{modelId}:
+    delete:
+      summary: Remove a model from its group
+      description: Requires an allowed Origin.
+      security:
+        - accessAssertion: []
+      responses:
+        '200':
+          description: Model unassigned.
+        '404':
+          description: Model not found.
   /console/api/admin/accounts:
     get:
       summary: List accounts

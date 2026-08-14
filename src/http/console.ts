@@ -25,6 +25,7 @@ import { getExchangeRate, idrToTokens, setExchangeRate } from '../billing/exchan
 import { assertResolvedPublicEgress } from '../policy/egress.js';
 import { createSmtpTransport, sendOtpMail } from '../otp-smtp.js';
 import { ModelCatalog, ModelError, modelInputSchema, modelUpdateSchema } from '../models/catalog.js';
+import { ModelGroupCatalog, ModelGroupError, modelGroupInputSchema } from '../models/groups.js';
 import type { Scope } from '../auth/api-keys.js';
 
 export interface ConsoleDeps {
@@ -173,6 +174,7 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
   // Release 2a: admin-owned model catalogue, read and written via the admin
   // surface only. The request path keeps using the static registry.
   const models = new ModelCatalog(db.db);
+  const groups = new ModelGroupCatalog(db.db);
 
   async function currentAccount(req: FastifyRequest): Promise<AccountRecord | null> {
     const token = readCookie(req, config.SESSION_COOKIE_NAME);
@@ -207,7 +209,8 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
       error instanceof OauthError ||
       error instanceof BillingError ||
       error instanceof PaymentError ||
-      error instanceof ModelError
+      error instanceof ModelError ||
+      error instanceof ModelGroupError
     ) {
       return fail(reply, error.statusCode, error.code, error.code.replace(/_/g, ' '), traceId);
     }
@@ -867,6 +870,69 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
     } catch (error) {
       return handle(error, reply, req.id);
     }
+  });
+
+  app.get('/console/api/admin/model-groups', async (req, reply) => {
+    try {
+      await requireAdmin(req);
+      const listed = groups.list().map((group) => ({
+        ...group,
+        modelsCount: (db.db.prepare('SELECT COUNT(*) AS count FROM models WHERE group_id = ?').get(group.id) as { count: number }).count,
+        activeModelsCount: (db.db.prepare('SELECT COUNT(*) AS count FROM models WHERE group_id = ? AND enabled = 1').get(group.id) as { count: number }).count,
+        plansCount: (db.db.prepare('SELECT COUNT(*) AS count FROM plans WHERE model_group_id = ?').get(group.id) as { count: number }).count
+      }));
+      return reply.send({ groups: listed });
+    } catch (error) { return handle(error, reply, req.id); }
+  });
+
+  app.post('/console/api/admin/model-groups', async (req, reply) => {
+    try {
+      const admin = await requireAdmin(req);
+      const parsed = modelGroupInputSchema.safeParse(req.body);
+      if (!parsed.success) return fail(reply, 400, 'invalid_request', 'Group payload invalid', req.id);
+      const group = groups.create(parsed.data);
+      db.audit({ tenantId: admin.tenantId, actorType: 'admin', event: 'console.model_group.created', traceId: req.id, metadata: { group: group.id } });
+      return reply.send({ group });
+    } catch (error) { return handle(error, reply, req.id); }
+  });
+
+  app.put('/console/api/admin/model-groups/:id', async (req, reply) => {
+    try {
+      const admin = await requireAdmin(req);
+      const parsed = modelGroupInputSchema.omit({ id: true }).safeParse(req.body);
+      if (!parsed.success) return fail(reply, 400, 'invalid_request', 'Group payload invalid', req.id);
+      const id = (req.params as { id: string }).id;
+      const group = groups.update(id, parsed.data);
+      db.audit({ tenantId: admin.tenantId, actorType: 'admin', event: 'console.model_group.updated', traceId: req.id, metadata: { group: id } });
+      return reply.send({ group });
+    } catch (error) { return handle(error, reply, req.id); }
+  });
+
+  app.post('/console/api/admin/model-groups/:id/models', async (req, reply) => {
+    try {
+      await requireAdmin(req);
+      const groupId = (req.params as { id: string }).id;
+      const parsed = z.object({ modelId: z.string().min(1).max(64) }).strict().safeParse(req.body);
+      if (!parsed.success) return fail(reply, 400, 'invalid_request', 'Model assignment invalid', req.id);
+      groups.assignModel(groupId, parsed.data.modelId);
+      return reply.send({ assigned: true, groupId, modelId: parsed.data.modelId });
+    } catch (error) { return handle(error, reply, req.id); }
+  });
+
+  app.delete('/console/api/admin/model-groups/:id/models/:modelId', async (req, reply) => {
+    try {
+      await requireAdmin(req);
+      groups.unassignModel((req.params as { modelId: string }).modelId);
+      return reply.send({ unassigned: true });
+    } catch (error) { return handle(error, reply, req.id); }
+  });
+
+  app.delete('/console/api/admin/model-groups/:id', async (req, reply) => {
+    try {
+      await requireAdmin(req);
+      groups.remove((req.params as { id: string }).id);
+      return reply.send({ deleted: true });
+    } catch (error) { return handle(error, reply, req.id); }
   });
 
   app.get('/console/api/admin/accounts', async (req, reply) => {

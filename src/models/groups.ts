@@ -51,6 +51,12 @@ export class ModelGroupCatalog {
     return this.get(input.id) as ModelGroupRecord;
   }
 
+  update(id: string, input: Omit<ModelGroupInput, 'id'>): ModelGroupRecord {
+    const result = this.db.prepare('UPDATE model_groups SET name = ?, multiplier_bps = ?, enabled = ?, updated_at = datetime(\'now\') WHERE id = ?').run(input.name, input.multiplierBps, input.enabled === false ? 0 : 1, id);
+    if (result.changes === 0) throw new ModelGroupError('group_not_found', 404);
+    return this.get(id) as ModelGroupRecord;
+  }
+
   assignModel(groupId: string, modelId: string): void {
     if (!this.get(groupId)) throw new ModelGroupError('group_not_found', 404);
     const result = this.db.prepare('UPDATE models SET group_id = ?, updated_at = datetime(\'now\') WHERE public_id = ?').run(groupId, modelId);

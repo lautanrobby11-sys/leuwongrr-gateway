@@ -45,4 +45,14 @@ describe('model group catalog', () => {
     expect(() => groups.remove('value')).toThrowError('group_in_use');
     db.close();
   });
+
+  it('refuses deleting a group that still owns models', () => {
+    const db = open();
+    const groups = new ModelGroupCatalog(db.db);
+    groups.create({ id: 'value', name: 'Value', multiplierBps: 12500, enabled: true });
+    db.db.prepare("UPDATE models SET group_id = 'value' WHERE public_id = 'lwrr-text'").run();
+    expect(() => groups.remove('value')).toThrowError('group_has_models');
+    expect(db.db.prepare("SELECT group_id FROM models WHERE public_id = 'lwrr-text'").get()).toEqual({ group_id: 'value' });
+    db.close();
+  });
 });

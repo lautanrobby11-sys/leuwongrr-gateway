@@ -55,7 +55,6 @@ describe('migration 0010 model groups', () => {
     dropMigration(first);
     expect(() => runModelGroupBackfill(first.db as never)).toThrow(/legacy.*membership|entitlement/i);
     first.close();
-    root = null;
   });
 
   it('backfills a single legacy group only when every plan entitlement is preserved', () => {
@@ -84,6 +83,5 @@ describe('migration 0010 model groups', () => {
       model_group_id: 'legacy-default'
     });
     first.close();
-    root = null;
   });
 });

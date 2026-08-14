@@ -230,7 +230,7 @@ primitives + Motion + single Lucide wrapper), Vitest.
 - [ ] Multiple valid active subscriptions contribute candidate sources; rolling-time
       first, then token packs by earliest expiry, then monetary; `past_due` grants
       nothing; expired/exhausted skipped.
-- [ ] Tail: keep `suure` ledger discipline — reconciliation is an audited ledger
+- [ ] Tail: keep strict ledger discipline — reconciliation is an audited ledger
       op, never a direct balance edit.
 - [ ] Tests: priority order; chaining; `settlement_failed` without negative balance;
       block-until-reconcile; multiple keys share one balance (no per-key balance).

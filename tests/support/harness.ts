@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { vi } from 'vitest';
+import { expect, vi } from 'vitest';
 import { buildApp } from '../../src/http/app.js';
 import { closeActiveStreams } from '../../src/http/stream-lifecycle.js';
 import { GatewayDatabase } from '../../src/persistence/database.js';
@@ -110,6 +110,8 @@ export function createHarness(
   const db = new GatewayDatabase(join(root, 'gateway.db'), config.API_KEY_PEPPER, {
     cacheKib: config.SQLITE_CACHE_KIB
   });
+  expect(db.db.prepare("SELECT 1 FROM model_groups WHERE id = 'legacy-default' AND enabled = 1").get()).toBeTruthy();
+  expect(db.db.prepare("SELECT 1 FROM models WHERE public_id = 'lwrr-text' AND group_id = 'legacy-default'").get()).toBeTruthy();
   const token = seedTenant(db, 'tenant-a', ['models:read', 'chat:write'], {
     dailyBudgetUnits: config.DAILY_BUDGET_UNITS,
     maxConcurrent: config.TENANT_MAX_CONCURRENT,

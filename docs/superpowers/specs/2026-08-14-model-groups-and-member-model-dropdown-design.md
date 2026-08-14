@@ -42,7 +42,7 @@ keeps only capability types/constants and validation helpers.
 
 Relations:
 
-```
+```text
 Model  -> belongs to exactly one Group (models.group_id)
 Group  -> contains many Models, has one multiplier, referenced by many Plans
 Plan   -> references exactly one Group (plans.model_group_id)
@@ -52,7 +52,7 @@ Request-> chooses one Model from that Group
 
 Per-request resolution (re-run every request, no caching of authority):
 
-```
+```text
 public model id
   -> model exists
   -> model.enabled
@@ -142,7 +142,7 @@ Rules that prevent wild overrides:
 
 ## Admin API (resource-oriented, no duplicate endpoints)
 
-```
+```text
 GET    /console/api/admin/model-groups
 POST   /console/api/admin/model-groups
 PUT    /console/api/admin/model-groups/:id

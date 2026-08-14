@@ -142,6 +142,35 @@ checked against `src/billing/plan-input.ts`, the same schema
 an out-of-range plan would become live enforcement state rather than a merely odd
 row. A rejected value prints `invalid plan: <field>: <reason>` and writes nothing.
 
+Before any release that carries migration `0010` (model groups), the model
+catalog and every **active** plan membership must already exist in the database.
+The backfill in `src/persistence/migrations.ts::runModelGroupBackfill` validates
+all plan memberships and policy references before it writes, and it fails closed:
+an active plan whose `models_json` is empty (or whose membership is a strict
+subset/unknown set of the catalog) aborts the migration with
+`legacy_membership_ambiguous` and a preflight refusal. The legacy
+`lwrr-text` fallback row is only seeded when the catalog is empty **and** no
+active plan blocks the validation step, so an existing active plan without
+membership cannot be "repaired" by the migration itself.
+
+Observed 15 August 2026: deploy of production candidate `ed2279a` was refused in
+application preflight for exactly this reason on a host whose `models` table was
+empty while plan `starter` was active with `models_json='[]'`. The SHA was
+abandoned (never retried after side effects), the catalog was seeded through the
+admin console (`Models -> New model`, then plan edit adding the model to
+`starter`), and the next SHA deployed cleanly. Seed the catalog through the
+console or `plan:upsert` **before** running such a deploy:
+
+```bash
+# via the admin console: Models -> New model (e.g. id lwrr-text,
+# upstream_model auto, provider other, zero prices, capabilities text/stream)
+# then Plans -> starter -> add the model to its membership.
+# Mirror through the CLI after the fact (non-destructive re-upsert):
+node dist/cli/keys.js plan:upsert --plan starter --name 'Starter' \
+  --price-cents 0 --included-tokens 1000000 --overage-cents 7 \
+  --max-concurrent 2 --rpm 60 --daily-units 100000 --models lwrr-text
+```
+
 There is no `tenant:list`. To inventory tenants, read the database read-only
 instead of inventing a subcommand.
 

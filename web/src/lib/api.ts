@@ -40,6 +40,26 @@ export interface TenantLimits {
   rateLimitRpm: number;
 }
 
+export interface ModelInput {
+  id: string;
+  name: string;
+  provider: 'openai' | 'anthropic' | 'google' | 'meta' | 'other';
+  inputPriceCents: number;
+  outputPriceCents: number;
+  cacheReadPriceCents: number;
+  multimodalSupport: boolean;
+  upstreamModel: string;
+  enabled?: boolean;
+}
+
+export type ModelUpdate = Partial<Omit<ModelInput, 'id'>>;
+
+export interface ModelRecord extends Omit<ModelInput, 'enabled'> {
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 /**
  * What the gateway will actually enforce for a tenant. `stored` is false when no
  * `tenant_limits` row exists yet and the values are the process defaults, so the
@@ -210,6 +230,17 @@ export const api = {
         }>;
         policies: Array<{ tenant_id: string; model_id: string; enabled: number }>;
       }>('/console/api/admin/models'),
+    createModel: (input: ModelInput) =>
+      post<{ model: ModelRecord }>('/console/api/admin/models', input),
+    updateModel: (id: string, input: ModelUpdate) =>
+      request<{ model: ModelRecord }>(`/console/api/admin/models/${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        body: JSON.stringify(input)
+      }),
+    deleteModel: (id: string) =>
+      request<{ deleted: boolean }>(`/console/api/admin/models/${encodeURIComponent(id)}`, {
+        method: 'DELETE'
+      }),
     setModelPolicy: (tenantId: string, modelId: string, enabled: boolean) =>
       post<{ updated: boolean }>('/console/api/admin/models/policy', { tenantId, modelId, enabled }),
     accounts: () =>

@@ -5,6 +5,7 @@ import {
   ApiError,
   type BillingSummary,
   type EffectiveTenantLimits,
+  type ModelInput,
   type Plan,
   type TenantLimits
 } from '../lib/api';
@@ -156,6 +157,115 @@ function PlanEditor({
   );
 }
 
+const BLANK_MODEL: ModelInput = {
+  id: '',
+  name: '',
+  provider: 'openai',
+  inputPriceCents: 0,
+  outputPriceCents: 0,
+  cacheReadPriceCents: 0,
+  multimodalSupport: false,
+  upstreamModel: '',
+  enabled: true
+};
+
+const MODEL_PAGE_SIZE = 10;
+
+function ModelEditor({
+  model,
+  onChange,
+  isEdit
+}: {
+  model: ModelInput;
+  onChange: (model: ModelInput) => void;
+  isEdit: boolean;
+}) {
+  const numeric = (key: keyof ModelInput) => ({
+    className: inputClass,
+    type: 'number',
+    min: 0,
+    value: String(model[key] as number),
+    onChange: (event: React.ChangeEvent<HTMLInputElement>) =>
+      onChange({ ...model, [key]: Number(event.target.value) })
+  });
+
+  return (
+    <div className="grid gap-4 sm:grid-cols-2">
+      <Field label="Model id" hint={isEdit ? 'Read-only: identifier cannot change after creation' : 'Lowercase, 2–64, used in the API'}>
+        <input
+          className={inputClass}
+          value={model.id}
+          readOnly={isEdit}
+          disabled={isEdit}
+          onChange={(event) => onChange({ ...model, id: event.target.value })}
+          placeholder="lwrr-text"
+        />
+      </Field>
+      <Field label="Display name">
+        <input
+          className={inputClass}
+          value={model.name}
+          onChange={(event) => onChange({ ...model, name: event.target.value })}
+          placeholder="Lightweight text"
+        />
+      </Field>
+      <Field label="Provider">
+        <select
+          className={inputClass}
+          value={model.provider}
+          onChange={(event) =>
+            onChange({ ...model, provider: event.target.value as ModelInput['provider'] })
+          }
+        >
+          <option value="openai">openai</option>
+          <option value="anthropic">anthropic</option>
+          <option value="google">google</option>
+          <option value="meta">meta</option>
+          <option value="other">other</option>
+        </select>
+      </Field>
+      <Field label="Upstream model">
+        <input
+          className={inputClass}
+          value={model.upstreamModel}
+          onChange={(event) => onChange({ ...model, upstreamModel: event.target.value })}
+          placeholder="auto"
+        />
+      </Field>
+      <Field label="Input (₵ / 1M)">
+        <input {...numeric('inputPriceCents')} />
+      </Field>
+      <Field label="Output (₵ / 1M)">
+        <input {...numeric('outputPriceCents')} />
+      </Field>
+      <Field label="Cache read (₵ / 1M)">
+        <input {...numeric('cacheReadPriceCents')} />
+      </Field>
+      <Field label="Multimodal">
+        <select
+          className={inputClass}
+          value={model.multimodalSupport ? 'yes' : 'no'}
+          onChange={(event) =>
+            onChange({ ...model, multimodalSupport: event.target.value === 'yes' })
+          }
+        >
+          <option value="yes">yes</option>
+          <option value="no">no</option>
+        </select>
+      </Field>
+      <label className="flex items-center gap-2 text-sm sm:col-span-2">
+        <input
+          type="checkbox"
+          className="accent-brand"
+          checked={model.enabled ?? true}
+          onChange={(event) => onChange({ ...model, enabled: event.target.checked })}
+        />
+        Enabled in the gateway
+      </label>
+    </div>
+  );
+}
+
 export function Admin() {
   const toast = useToast();
   const [tab, setTab] = useState('overview');
@@ -188,6 +298,9 @@ export function Admin() {
   const [accounts, setAccounts] = useState<AdminAccount[]>([]);
   const [payments, setPayments] = useState<Array<Record<string, string | number | null>>>([]);
   const [editing, setEditing] = useState<Plan | null>(null);
+  const [modelEditor, setModelEditor] = useState<ModelInput | null>(null);
+  const [modelPage, setModelPage] = useState(1);
+  const [removingModel, setRemovingModel] = useState<string | null>(null);
   const [creditFor, setCreditFor] = useState<AdminAccount | null>(null);
   const [creditTokens, setCreditTokens] = useState(100_000);
   const [creditReason, setCreditReason] = useState('goodwill');
@@ -261,6 +374,61 @@ export function Admin() {
     } finally {
       setBusy(false);
     }
+  }
+
+  async function saveModel() {
+    if (!modelEditor) return;
+    setBusy(true);
+    try {
+      if (modelEditor.id && catalog.some((model) => model.id === modelEditor.id)) {
+        const { id, ...updates } = modelEditor;
+        await api.admin.updateModel(id, updates);
+        toast(`${modelEditor.name} updated`);
+      } else {
+        await api.admin.createModel(modelEditor);
+        toast(`${modelEditor.name} added`);
+      }
+      setModelEditor(null);
+      await load();
+    } catch (error) {
+      toast(error instanceof ApiError ? error.message : 'Could not save the model', 'bad');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteModel(id: string) {
+    setRemovingModel(id);
+    try {
+      await api.admin.deleteModel(id);
+      toast('Model removed');
+      const maxPage = Math.max(1, Math.ceil((catalog.length - 1) / MODEL_PAGE_SIZE));
+      if (modelPage > maxPage) setModelPage(maxPage);
+      await load();
+    } catch (error) {
+      toast(error instanceof ApiError ? error.message : 'Could not remove the model', 'bad');
+    } finally {
+      setRemovingModel(null);
+    }
+  }
+
+  function openModelEditor(model?: (typeof catalog)[number]) {
+    setModelPage(1);
+    setModelEditor(
+      model
+        ? {
+            id: model.id,
+            name: model.name,
+            provider: model.provider as ModelInput['provider'],
+            inputPriceCents: model.inputPriceCents,
+            outputPriceCents: model.outputPriceCents,
+            cacheReadPriceCents: model.cacheReadPriceCents,
+            multimodalSupport: model.multimodalSupport,
+            upstreamModel: model.upstreamModel,
+            enabled: model.enabled
+          }
+        : { ...BLANK_MODEL }
+    );
   }
 
   if (denied) {
@@ -347,22 +515,78 @@ export function Admin() {
 
           {tab === 'models' && (
             <div className="space-y-4">
-              <Card title="Model catalog" subtitle="Registered in the gateway and served through OmniRoute">
+              <Card
+                title="Model catalog"
+                subtitle="Registered in the gateway and served through OmniRoute"
+                action={
+                  <Button icon="plus" onClick={() => openModelEditor()}>
+                    Add model
+                  </Button>
+                }
+              >
                 <Table
-                  headers={['Model', 'Provider', 'In ₵/M', 'Out ₵/M', 'Cache ₵/M', 'Vision']}
+                  headers={['Model', 'Upstream', 'In ₵/M', 'Out ₵/M', 'Cache ₵/M', 'State', '']}
                   empty={catalog.length === 0}
                 >
-                  {catalog.map((model) => (
-                    <tr key={model.id}>
-                      <Cell className="font-mono text-xs">{model.id}</Cell>
-                      <Cell className="text-xs text-muted">{model.provider}</Cell>
-                      <Cell className="tabular-nums">{model.inputPriceCents}</Cell>
-                      <Cell className="tabular-nums">{model.outputPriceCents}</Cell>
-                      <Cell className="tabular-nums">{model.cacheReadPriceCents}</Cell>
-                      <Cell className="text-xs text-muted">{model.multimodalSupport ? 'yes' : 'no'}</Cell>
-                    </tr>
-                  ))}
+                  {catalog
+                    .slice((modelPage - 1) * MODEL_PAGE_SIZE, modelPage * MODEL_PAGE_SIZE)
+                    .map((model) => (
+                      <tr key={model.id}>
+                        <Cell>
+                          <p className="font-medium">{model.name}</p>
+                          <p className="font-mono text-xs text-muted">{model.id}</p>
+                        </Cell>
+                        <Cell className="text-xs text-muted">{model.upstreamModel}</Cell>
+                        <Cell className="tabular-nums">{model.inputPriceCents}</Cell>
+                        <Cell className="tabular-nums">{model.outputPriceCents}</Cell>
+                        <Cell className="tabular-nums">{model.cacheReadPriceCents}</Cell>
+                        <Cell>
+                          <Badge tone={model.enabled ? 'good' : 'neutral'}>
+                            {model.enabled ? 'Enabled' : 'Hidden'}
+                            {model.multimodalSupport ? ' · vision' : ''}
+                          </Badge>
+                        </Cell>
+                        <Cell className="whitespace-nowrap text-right">
+                          <Button variant="outline" onClick={() => openModelEditor(model)}>
+                            Edit
+                          </Button>
+                          <Button
+                            variant="danger"
+                            className="ml-1.5"
+                            busy={removingModel === model.id}
+                            disabled={removingModel !== null}
+                            onClick={() => void deleteModel(model.id)}
+                          >
+                            Remove
+                          </Button>
+                        </Cell>
+                      </tr>
+                    ))}
                 </Table>
+                {catalog.length > MODEL_PAGE_SIZE && (
+                  <div className="flex items-center justify-between border-t border-border/70 px-4 py-3 text-xs text-muted">
+                    <span>
+                      {catalog.length} model{catalog.length === 1 ? '' : 's'} · page {modelPage}/
+                      {Math.ceil(catalog.length / MODEL_PAGE_SIZE)}
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <Button
+                        variant="outline"
+                        disabled={modelPage === 1}
+                        onClick={() => setModelPage((p) => Math.max(1, p - 1))}
+                      >
+                        Prev
+                      </Button>
+                      <Button
+                        variant="outline"
+                        disabled={modelPage >= Math.ceil(catalog.length / MODEL_PAGE_SIZE)}
+                        onClick={() => setModelPage((p) => p + 1)}
+                      >
+                        Next
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </Card>
               <Card title="Entitlements" subtitle="Per tenant model access">
                 <Table headers={['Tenant', 'Model', 'Access', '']} empty={policies.length === 0}>
@@ -500,6 +724,31 @@ export function Admin() {
                   onClick={() => void savePlan()}
                 >
                   Save plan
+                </Button>
+              </div>
+            )}
+          </Modal>
+
+          <Modal
+            open={modelEditor !== null}
+            title={modelEditor && catalog.some((model) => model.id === modelEditor.id) ? 'Edit model' : 'Add model'}
+            onClose={() => setModelEditor(null)}
+          >
+            {modelEditor && (
+              <div className="space-y-4">
+                <ModelEditor
+                  model={modelEditor}
+                  onChange={setModelEditor}
+                  isEdit={catalog.some((model) => model.id === modelEditor.id)}
+                />
+                <Button
+                  className="w-full"
+                  icon="check"
+                  busy={busy}
+                  disabled={modelEditor.id.trim().length === 0 || modelEditor.name.trim().length === 0}
+                  onClick={() => void saveModel()}
+                >
+                  Save model
                 </Button>
               </div>
             )}

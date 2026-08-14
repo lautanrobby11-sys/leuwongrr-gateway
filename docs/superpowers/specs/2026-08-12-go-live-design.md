@@ -55,9 +55,9 @@ bisnis lain harus berada di database dan dapat diubah admin tanpa restart.
 
 ### Slice A — A19 release blocker
 
-Vegeta menulis regression test untuk streaming response non-2xx yang memiliki
+Owner menulis regression test untuk streaming response non-2xx yang memiliki
 body, membuktikan semaphore permit dapat dipakai kembali setelah error. Test harus
-gagal sebelum fix. Setelah itu Vegeta menerapkan perubahan minimal, menjalankan
+gagal sebelum fix. Setelah itu owner menerapkan perubahan minimal, menjalankan
 focused test, `npm run validate`, dan meninjau diff. Tidak ada deploy bila test
 atau gate lain merah.
 
@@ -82,7 +82,7 @@ behavior yang benar-benar terverifikasi melalui source/test.
 Worker OTP hanya boleh di-commit setelah source, secret boundary, error mapping,
 dan deployment procedure direview. Resend key, verified sender, Cloudflare API
 token, Access domain, audience, dan OTP token tidak boleh masuk repo, Notion,
-terminal transcript, artifact, atau log. Vegeta hanya memasang nilai ke
+terminal transcript, artifact, atau log. Owner memasang nilai ke
 `gateway.env` setelah semua pasangan config tersedia. `CONSOLE_ENABLED` tetap
 false selama preflight.
 
@@ -105,22 +105,15 @@ Kegagalan setelah release directory, dependency install, application preflight,
 activation, restart, health check, atau traffic berarti SHA ditinggalkan. Buat
 commit baru, ulangi seluruh gate, dan jangan retry SHA yang gagal.
 
-## 5. Peran dan komunikasi agent
+## 5. Peran dan komunikasi
 
-- **Goku — planner/chat:** desain, keputusan kontrak, Notion, dan jawaban desain
-  untuk Vegeta. Tidak mengubah source atau release. Hanya mencatat bukti yang
-  terverifikasi.
-- **Vegeta — code/release/VPS:** perubahan source, tests, commit, artifact,
-  deployment, host verification, backup/rollback evidence. Tidak mengubah Notion
-  menjadi status DONE tanpa bukti.
-- **Boss/current terminal — release authority dan coordinator:** memberi approval
-  activation, memonitor Goku dan Vegeta bergilir, menyelesaikan pertanyaan yang
-  sudah diringkas Goku, dan menghentikan pekerjaan saat gate merah.
+- **Owner — full control:** perencanaan, desain, keputusan kontrak, coding, test,
+  commit, artifact, release, deploy, host verification, backup/rollback evidence,
+  monitoring, dan pencatatan status Notion. Satu peran tunggal; tidak ada aktor
+  kedua.
 
-Pertanyaan teknis agent dikirim sekali ke Goku. Goku menjawab dalam konteks
-planner lalu mencatat keputusan ke Notion. Vegeta tidak mengirim pertanyaan yang
-sama ke Boss dan Goku. Laporan hanya berupa checkpoint: perubahan, bukti,
-blocker, dan next gate.
+Keputusan desain dicatat langsung ke Notion; laporan berupa checkpoint: perubahan,
+bukti, blocker, dan next gate.
 
 ## 6. Notion/GitHub/local synchronization
 
@@ -133,9 +126,9 @@ Setiap slice memiliki catatan yang sama:
 - VPS active SHA, health, migrations, restarts, backup, rollback target;
 - item yang belum diverifikasi, tanpa klaim DONE.
 
-Goku memperbarui Notion setelah checkpoint Vegeta. Vegeta memperbarui GitHub dan
-worktree melalui commit atomic. Local/GitHub/VPS/Notion dianggap selaras hanya
-setelah full SHA dan bukti gate sama.
+Owner memperbarui Notion, GitHub, dan worktree melalui commit atomic.
+Local/GitHub/VPS/Notion dianggap selaras hanya setelah full SHA dan bukti gate
+sama.
 
 ## 7. Final go-live definition
 

@@ -16,8 +16,8 @@ evidence that the VPS is running that commit.
 
 | Item | Verified state |
 | --- | --- |
-| Local/GitHub `main` | `829b24fe8b809d19a5e62b63974b9ba742038a66` |
-| Production active SHA (VPS#2) | `829b24fe8b809d19a5e62b63974b9ba742038a66` (deployed 14 Aug 2026; previous `5160be5`) |
+| Local/GitHub `main` | `d8f1b5935848816cf1457816a7a88411746867f5` |
+| Production active SHA (VPS#2) | `d8f1b5935848816cf1457816a7a88411746867f5` (verified via SSH 14 Aug 2026; previous `829b24f`) |
 | API | LIVE, verified 200 on loopback health/readiness |
 | Console | **ON for Gate 3 OTP/acceptance evidence**; `/admin*` remains protected by Cloudflare Access and final exposure approval is pending |
 | Gate 3 — OTP / Cloudflare Access / acceptance | **BLOCKED**; SMTP OTP, Access negative auth, backup/restore, rollback, and the current acceptance/soak evidence are recorded, but security rotation, Fase 11 review, remaining acceptance/soak duration, and final approval are still outstanding |

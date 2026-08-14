@@ -8,7 +8,7 @@ web console for administration, member self-service and chat.
 client  ->  router.leuwongrr.cloud  ->  api.leuwongrr.cloud  ->  /v1/*  ->  gateway (127.0.0.1:2080)  ->  OmniRoute (127.0.0.1:20128)
 ```
 
-## Canonical status — 13 August 2026
+## Canonical status — 14 August 2026
 
 This status separates repository state from independently verified production
 state. It is intentionally conservative: a newer repository commit is not
@@ -16,11 +16,11 @@ evidence that the VPS is running that commit.
 
 | Item | Verified state |
 | --- | --- |
-| Local/GitHub `main` | `cc93a86b37fd887ef3288330947161add3d23c10` |
-| Production active SHA (VPS#2) | `cc93a86b37fd887ef3288330947161add3d23c10` (deployed 13 Aug 2026; previous `5160be5`) |
+| Local/GitHub `main` | `829b24fe8b809d19a5e62b63974b9ba742038a66` |
+| Production active SHA (VPS#2) | `829b24fe8b809d19a5e62b63974b9ba742038a66` (deployed 14 Aug 2026; previous `5160be5`) |
 | API | LIVE, verified 200 on loopback health/readiness |
-| Console | **OFF**; `/login`, `/member`, and `/chat` remain unavailable in production |
-| Gate 3 — OTP / Cloudflare Access / acceptance | **BLOCKED**; required credentials and runtime acceptance evidence are not recorded as complete |
+| Console | **ON for Gate 3 OTP/acceptance evidence**; `/admin*` remains protected by Cloudflare Access and final exposure approval is pending |
+| Gate 3 — OTP / Cloudflare Access / acceptance | **BLOCKED**; SMTP OTP, Access negative auth, backup/restore, rollback, and the current acceptance/soak evidence are recorded, but security rotation, Fase 11 review, remaining acceptance/soak duration, and final approval are still outstanding |
 | Final go-live | **NOT DECLARED** |
 
 The canonical status record is the [Notion API status page](https://app.notion.com/p/7929024abd2483f8bfb181327c508e4d).

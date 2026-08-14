@@ -36,7 +36,10 @@ The focused suite emits existing Fastify `FSTDEP023` deprecation warnings about 
 - Settlement validates method, payment/account scope, integer non-negative amounts, and preserves non-negative token/cents balances.
 - Token-pack payment ledger entries now retain token currency while recording equivalent cents metadata; ledger reads expose currency and cents fields.
 - Review-fix commit: `1b0bb7d4b800e351a6354658032ebd56a8ec27bc` (`fix: make payment settlement reconciliation safe`).
-- Re-ran typecheck, required focused suite (32 tests passed), and `git diff --check`.
+- Re-ran typecheck, required focused suite (35 tests passed), and `git diff --check`.
+- Snapshot parsing is now reconciliation-safe: malformed or non-object JSON gets durable `entitlement_snapshot_invalid` state and controlled HTTP 409.
+- Added webhook coverage for malformed snapshots, invalid scope/amount handling, and atomic rollback with durable reconciliation.
+- Follow-up commit: `fb57ed43cc250b68bdd0c0df8470fc25886db529` (`fix: reconcile malformed payment snapshots`).
 
 ## Concerns
 - Full `npm run validate` was not run because the task requested focused tests and typecheck only.

@@ -55,4 +55,25 @@ describe('model group catalog', () => {
     expect(db.db.prepare("SELECT group_id FROM models WHERE public_id = 'lwrr-text'").get()).toEqual({ group_id: 'value' });
     db.close();
   });
+
+  it('refuses deleting a group referenced only by a subscription snapshot', () => {
+    const db = open();
+    const groups = new ModelGroupCatalog(db.db);
+    groups.create({ id: 'value', name: 'Value', multiplierBps: 12500, enabled: true });
+    db.tenants.upsertTenant('tenant-a', 'Tenant A');
+    db.db.prepare(`INSERT INTO plans (id, name, monthly_price_cents, included_tokens, overage_cents_per_million, max_concurrent, rate_limit_rpm, daily_budget_units, models_json, active, updated_at, model_group_id) VALUES ('plan-a', 'Plan A', 0, 0, 0, 1, 1, 1, '[]', 1, datetime('now'), NULL)`).run();
+    db.db.prepare(`INSERT INTO accounts (id, tenant_id, email, display_name, role, status, created_at) VALUES ('account-a', 'tenant-a', 'a@example.test', 'A', 'member', 'active', datetime('now'))`).run();
+    db.db.prepare(`INSERT INTO subscriptions (id, account_id, plan_id, status, period_start, period_end, included_tokens, used_tokens, auto_renew, created_at, updated_at, model_group_id) VALUES ('sub-a', 'account-a', 'plan-a', 'active', datetime('now'), datetime('now', '+1 day'), 0, 0, 1, datetime('now'), datetime('now'), 'value')`).run();
+    expect(() => groups.remove('value')).toThrowError('group_in_use');
+    db.close();
+  });
+
+  it('preserves disabled state when updating without enabled', () => {
+    const db = open();
+    const groups = new ModelGroupCatalog(db.db);
+    groups.create({ id: 'value', name: 'Value', multiplierBps: 12500, enabled: false });
+    const updated = groups.update('value', { name: 'Value+', multiplierBps: 13000 });
+    expect(updated.enabled).toBe(false);
+    db.close();
+  });
 });

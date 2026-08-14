@@ -30,7 +30,7 @@ export interface Plan {
   durationHours?: number | null;
   timerBasis?: 'from_payment' | 'from_first_use';
   resetsAllowed?: number;
-  method?: 'rolling_time' | 'token_pack' | 'monetary_pack';
+  method?: 'rolling_time' | 'token_pack' | 'monetary_pack' | 'payg';
   tierLabel?: string;
 }
 
@@ -96,7 +96,7 @@ interface PlanRow {
   duration_hours: number | null;
   timer_basis: 'from_payment' | 'from_first_use';
   resets_allowed: number;
-  method: 'rolling_time' | 'token_pack' | 'monetary_pack';
+  method: 'rolling_time' | 'token_pack' | 'monetary_pack' | 'payg';
   tier_label: string;
 }
 
@@ -619,7 +619,7 @@ export class BillingService {
           this.db
             .prepare('UPDATE wallets SET balance_cents = ?, updated_at = ? WHERE account_id = ?')
             .run(balanceCentsAfter, this.iso(), accountId);
-          remaining -= coveredTokens;
+          remaining -= Math.min(coveredTokens, remaining);
         }
       }
     }
@@ -783,6 +783,9 @@ export class BillingService {
         if (!Number.isInteger(equivalentCents) || equivalentCents < 0) throw new BillingError('payment_amount_invalid', 409);
         this.db.prepare("UPDATE ledger_entries SET cents = ?, currency = 'tokens' WHERE account_id = ? AND source = 'payment' AND reference = ?").run(equivalentCents, accountId, reference);
         return { tokensGranted: tokens, centsGranted: 0, subscription: null };
+      }
+      if ((method === 'monetary_pack' || method === 'payg') && !this.paygRatePlan(accountId)) {
+        throw new BillingError('payg_rate_missing', 409);
       }
       if (cents <= 0) throw new BillingError('payment_cents_missing', 409);
       this.db.prepare('INSERT INTO wallets (account_id, balance_tokens, balance_cents, updated_at) VALUES (?, 0, ?, ?) ON CONFLICT(account_id) DO UPDATE SET balance_cents = wallets.balance_cents + excluded.balance_cents, updated_at = excluded.updated_at').run(accountId, cents, this.iso());

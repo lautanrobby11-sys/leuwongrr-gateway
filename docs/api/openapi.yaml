@@ -454,10 +454,10 @@ paths:
           description: Model group created.
         '400':
           description: Group payload invalid.
-         '409':
-           description: Group id already exists.
-         '403':
-           description: Origin is not allowed, or the Access assertion failed.
+        '409':
+          description: Group id already exists.
+        '403':
+          description: Origin is not allowed, or the Access assertion failed.
   /console/api/admin/model-groups/{id}:
     put:
       summary: Update a model group
@@ -469,10 +469,10 @@ paths:
           description: Model group updated.
         '400':
           description: Group payload invalid.
-         '404':
-           description: Group not found.
-         '403':
-           description: Origin is not allowed, or the Access assertion failed.
+        '404':
+          description: Group not found.
+        '403':
+          description: Origin is not allowed, or the Access assertion failed.
     delete:
       summary: Remove a model group
       description: Requires an allowed Origin. Groups referenced by plans cannot be removed.
@@ -483,10 +483,10 @@ paths:
           description: Model group removed.
         '404':
           description: Group not found.
-         '409':
-           description: Group is referenced by a plan.
-         '403':
-           description: Origin is not allowed, or the Access assertion failed.
+        '409':
+          description: Group is referenced by a plan.
+        '403':
+          description: Origin is not allowed, or the Access assertion failed.
   /console/api/admin/model-groups/{id}/models:
     post:
       summary: Assign a model to a group
@@ -496,10 +496,10 @@ paths:
       responses:
         '200':
           description: Model assigned.
-         '404':
-           description: Group or model not found.
-         '403':
-           description: Origin is not allowed, or the Access assertion failed.
+        '404':
+          description: Group or model not found.
+        '403':
+          description: Origin is not allowed, or the Access assertion failed.
   /console/api/admin/model-groups/{id}/models/{modelId}:
     delete:
       summary: Remove a model from its group
@@ -509,10 +509,10 @@ paths:
       responses:
         '200':
           description: Model unassigned.
-         '404':
-           description: Model not found.
-         '403':
-           description: Origin is not allowed, or the Access assertion failed.
+        '404':
+          description: Model not found.
+        '403':
+          description: Origin is not allowed, or the Access assertion failed.
   /console/api/admin/accounts:
     get:
       summary: List accounts

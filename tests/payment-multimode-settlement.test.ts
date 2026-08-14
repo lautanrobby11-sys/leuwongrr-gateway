@@ -25,6 +25,7 @@ function createPayment() {
 
 function settle(kind: 'token_pack' | 'monetary_pack' | 'rolling_time' | 'payg') {
   const payment = createPayment();
+  if (kind === 'monetary_pack' || kind === 'payg') payment.billing.startSubscription(payment.account.id, 'pack');
   const result = payment.billing.settlePaymentSnapshot(payment.account.id, payment.paymentId, { method: kind, planId: kind === 'rolling_time' ? 'rolling' : 'pack', modelGroupId: 'value', tokens: kind === 'token_pack' ? 500000 : 0, balanceCents: kind === 'monetary_pack' || kind === 'payg' ? 1000 : 0 });
   return { ...result, ...payment };
 }

@@ -50,9 +50,13 @@ export function resolveCatalogModel(
         `SELECT s.model_group_id AS subscription_group_id, p.model_group_id AS plan_group_id
            FROM subscriptions s
            LEFT JOIN plans p ON p.id = s.plan_id
-          WHERE s.account_id = ?
-            AND s.status = 'active'
-            AND datetime(s.period_end) > datetime('now')
+           WHERE s.account_id = ?
+             AND s.status IN ('active', 'past_due')
+             AND (
+               (s.duration_hours IS NOT NULL AND s.activated_at IS NULL AND s.timer_basis = 'from_first_use')
+               OR (s.duration_hours IS NOT NULL AND s.expires_at IS NOT NULL AND datetime(s.expires_at) > datetime('now'))
+               OR (s.duration_hours IS NULL AND datetime(s.period_end) > datetime('now'))
+             )
           ORDER BY s.created_at, s.id`
       )
       .all(accountId) as Array<{ subscription_group_id: string | null; plan_group_id: string | null }>;
@@ -64,15 +68,19 @@ export function resolveCatalogModel(
     // Non-console deployments retain the pre-billing tenant allow-list. An API
     // key without a console account must never become entitled merely because
     // the catalog model and its legacy group exist.
-    const legacyPolicy = db
+    const policy = db
       .prepare('SELECT enabled FROM model_policies WHERE tenant_id = ? AND model_id = ?')
       .get(tenantId, publicId) as { enabled: number } | undefined;
-    if (legacyPolicy?.enabled !== 1) throw new ModelResolutionError('model_not_entitled', 403);
+    if (policy?.enabled !== 1) throw new ModelResolutionError('model_not_entitled', 403);
   }
 
   const denied = db.prepare('SELECT enabled FROM model_policies WHERE tenant_id = ? AND model_id = ?').get(tenantId, publicId) as { enabled: number } | undefined;
   if (denied?.enabled === 0) throw new ModelResolutionError('model_not_entitled', 403);
 
+  return resolveCapabilities(model, required);
+}
+
+function resolveCapabilities(model: ModelRow, required: readonly Capability[] = []): ResolvedCatalogModel {
   let capabilities: Capability[];
   try {
     const parsed = JSON.parse(model.capabilities_json) as unknown;

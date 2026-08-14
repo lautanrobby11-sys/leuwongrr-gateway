@@ -72,12 +72,13 @@ export class ModelGroupCatalog {
     if (result.changes === 0) throw new ModelGroupError('model_not_found', 404);
   }
 
-remove(id: string): void {
-  if ((this.db.prepare('SELECT 1 FROM plans WHERE model_group_id = ? LIMIT 1').get(id))) throw new ModelGroupError('group_in_use', 409);
-  // A group can own models without any plan referencing it; the foreign key
-  // would turn that into an unhandled 500, so reject the deletion up front.
-  if ((this.db.prepare('SELECT 1 FROM models WHERE group_id = ? LIMIT 1').get(id))) throw new ModelGroupError('group_has_models', 409);
-  const result = this.db.prepare('DELETE FROM model_groups WHERE id = ?').run(id);
-  if (result.changes === 0) throw new ModelGroupError('group_not_found', 404);
-}
+  remove(id: string): void {
+    if (this.db.prepare('SELECT 1 FROM plans WHERE model_group_id = ? LIMIT 1').get(id)) throw new ModelGroupError('group_in_use', 409);
+    if (this.db.prepare('SELECT 1 FROM subscriptions WHERE model_group_id = ? LIMIT 1').get(id)) throw new ModelGroupError('group_in_use', 409);
+    // A group can own models without any plan referencing it; the foreign key
+    // would turn that into an unhandled 500, so reject the deletion up front.
+    if (this.db.prepare('SELECT 1 FROM models WHERE group_id = ? LIMIT 1').get(id)) throw new ModelGroupError('group_has_models', 409);
+    const result = this.db.prepare('DELETE FROM model_groups WHERE id = ?').run(id);
+    if (result.changes === 0) throw new ModelGroupError('group_not_found', 404);
+  }
 }

@@ -22,7 +22,7 @@ describe('database model resolver', () => {
     db.db.prepare("UPDATE models SET group_id = 'value' WHERE public_id = 'lwrr-text'").run();
     db.db.prepare("UPDATE plans SET model_group_id = 'value' WHERE id = 'missing'").run();
     db.db.prepare("INSERT INTO plans (id, name, monthly_price_cents, included_tokens, overage_cents_per_million, max_concurrent, rate_limit_rpm, daily_budget_units, models_json, active, updated_at, model_group_id) VALUES ('plan-1', 'Plan', 0, 100, 1, 1, 1, 1, '[]', 1, datetime('now'), 'value')").run();
-    db.db.prepare("INSERT INTO subscriptions (id, account_id, plan_id, status, period_start, period_end, included_tokens, used_tokens, auto_renew, created_at, updated_at) VALUES ('sub-1', 'account-1', 'plan-1', 'active', datetime('now'), datetime('now', '+1 day'), 100, 0, 1, datetime('now'), datetime('now'))").run();
+    db.db.prepare("INSERT INTO subscriptions (id, account_id, plan_id, status, period_start, period_end, included_tokens, used_tokens, auto_renew, created_at, updated_at, model_group_id) VALUES ('sub-1', 'account-1', 'plan-1', 'active', datetime('now'), datetime('now', '+1 day'), 100, 0, 1, datetime('now'), datetime('now'), 'value')").run();
     expect(resolveCatalogModel(db.db, 'lwrr-text', [], 'tenant-1', 'account-1').upstreamModel).toBe('auto');
     db.close();
   });
@@ -37,6 +37,20 @@ describe('database model resolver', () => {
     db.db.prepare("INSERT INTO subscriptions (id, account_id, plan_id, status, period_start, period_end, included_tokens, used_tokens, auto_renew, created_at, updated_at) VALUES ('sub-1', 'account-1', 'plan-1', 'active', datetime('now'), datetime('now', '+1 day'), 100, 0, 1, datetime('now'), datetime('now'))").run();
     expect(resolveCatalogModel(db.db, 'lwrr-text', [], 'tenant-1', 'account-1').id).toBe('lwrr-text');
     db.tenants.setModelPolicy('tenant-1', 'lwrr-text', false);
+    expect(() => resolveCatalogModel(db.db, 'lwrr-text', [], 'tenant-1', 'account-1')).toThrowError(new ModelResolutionError('model_not_entitled', 403));
+    db.close();
+  });
+
+  it('uses a live timed snapshot and rejects an expired legacy window', () => {
+    const db = open();
+    db.tenants.upsertTenant('tenant-1', 'Tenant');
+    db.db.prepare("INSERT INTO accounts (id, tenant_id, email, display_name, role, status, created_at) VALUES ('account-1', 'tenant-1', 'a@example.test', 'A', 'member', 'active', datetime('now'))").run();
+    db.db.prepare("INSERT INTO model_groups (id, name, multiplier_bps, enabled, created_at, updated_at) VALUES ('value', 'Value', 12500, 1, datetime('now'), datetime('now'))").run();
+    db.db.prepare("UPDATE models SET group_id = 'value' WHERE public_id = 'lwrr-text'").run();
+    db.db.prepare("INSERT INTO plans (id, name, monthly_price_cents, included_tokens, overage_cents_per_million, max_concurrent, rate_limit_rpm, daily_budget_units, models_json, active, updated_at, model_group_id) VALUES ('plan-1', 'Plan', 0, 100, 1, 1, 1, 1, '[]', 1, datetime('now'), 'value')").run();
+    db.db.prepare("INSERT INTO subscriptions (id, account_id, plan_id, status, period_start, period_end, included_tokens, used_tokens, auto_renew, method, duration_hours, timer_basis, activated_at, expires_at, created_at, updated_at, model_group_id) VALUES ('sub-1', 'account-1', 'plan-1', 'active', datetime('now'), datetime('now', '-1 day'), 100, 0, 1, 'rolling_time', 24, 'from_payment', datetime('now'), datetime('now', '+1 day'), datetime('now'), datetime('now'), 'value')").run();
+    expect(resolveCatalogModel(db.db, 'lwrr-text', [], 'tenant-1', 'account-1').id).toBe('lwrr-text');
+    db.db.prepare("UPDATE subscriptions SET expires_at = datetime('now', '-1 day') WHERE id = 'sub-1'").run();
     expect(() => resolveCatalogModel(db.db, 'lwrr-text', [], 'tenant-1', 'account-1')).toThrowError(new ModelResolutionError('model_not_entitled', 403));
     db.close();
   });

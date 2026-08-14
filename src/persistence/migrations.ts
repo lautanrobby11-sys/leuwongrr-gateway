@@ -327,7 +327,7 @@ CREATE TABLE plan_new (
   duration_hours INTEGER CHECK(duration_hours IS NULL OR duration_hours > 0),
   timer_basis TEXT CHECK(timer_basis IN ('from_payment', 'from_first_use')) DEFAULT 'from_payment',
   resets_allowed INTEGER NOT NULL DEFAULT 0 CHECK(resets_allowed >= 0),
-  method TEXT NOT NULL CHECK(method IN ('rolling_time', 'token_pack', 'monetary_pack')) DEFAULT 'token_pack',
+  method TEXT NOT NULL CHECK(method IN ('rolling_time', 'token_pack', 'monetary_pack', 'payg')) DEFAULT 'token_pack',
   tier_label TEXT NOT NULL DEFAULT '',
   model_group_id TEXT REFERENCES model_groups(id)
 );
@@ -347,7 +347,7 @@ CREATE TABLE subscription_new (
   auto_renew INTEGER NOT NULL CHECK(auto_renew IN (0,1)) DEFAULT 1,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  method TEXT CHECK(method IN ('rolling_time', 'token_pack', 'monetary_pack')),
+  method TEXT CHECK(method IN ('rolling_time', 'token_pack', 'monetary_pack', 'payg')),
   duration_hours INTEGER,
   timer_basis TEXT CHECK(timer_basis IN ('from_payment', 'from_first_use')),
   activated_at TEXT,

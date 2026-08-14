@@ -27,8 +27,9 @@ fallback: an invalid choice fails and the administrator fixes the configuration.
 2. A plan references exactly one group (`plans.model_group_id`).
 3. A model belongs to exactly one group (`models.group_id`, single value).
 4. No fallback on failure — the request fails with a structured error.
-5. Legacy migration: create one `legacy-default` group, move existing models
-   into it, point existing plans at it. No guessing of tiers.
+5. Legacy migration: create `legacy-default` only when a preflight proves the
+   transformation preserves every existing plan entitlement; otherwise fail
+   before commit and require owner cleanup. No guessing of tiers.
 6. Database catalog is the single request-path source of truth (approach A).
 7. Anti-overlap: one owner per datum, one relation column, one canonical
    endpoint, one runtime resolver, one icon source.
@@ -212,13 +213,14 @@ recompute price. The helper is called at one billing boundary; other callers
 receive the result. Example invariant: `101 × 12500 / 10000 → ceil(126.25) = 127`
 (never 158, never multiplied twice).
 
-## Frontend — light Bootstrap 5, single icon source
+## Frontend — lightweight existing design system, single icon source
 
-The console currently ships its own UI primitives and a single icon component.
-New/changed UI adopts light Bootstrap 5 primitives consistently (`.container`,
-`.row/.col-*`, `.card`, `.table`, `.form-select`, `.form-control`, `.btn*`,
-`.badge`, `.alert`, `.modal`). Modals/dropdowns are driven by React state, not
-Bootstrap JS, to avoid a second UI-state source and keep the bundle light.
+The console currently ships its own React UI primitives, utility styling, Motion,
+and a single icon component. New/changed UI reuses those primitives with
+Bootstrap-inspired responsive semantics where useful (`card`, `table`,
+`form-select`, `form-control`, `btn`, `badge`, `alert`, and `modal` patterns),
+but adds no Bootstrap runtime and no second UI-state source. Modals/dropdowns
+remain React-controlled so the bundle stays light.
 
 Icon policy (anti-double / anti-duplicate):
 
@@ -316,3 +318,164 @@ repo, DB, logs, responses, or Notion.
 - Notion canonical (`7929024abd2483f8bfb181327c508e4d`) and Gate 3
   (`3ba9024abd24817eb0c5e4cb2baf7d85`) updated per progress, no secrets.
 - Red gate = STOP: no merge/deploy without green gates and local evidence.
+
+## Revision 2 — multi-mode accounting and corrected migration safety
+
+This section supersedes any earlier statement that a single legacy group may be
+used unconditionally, that the multiplier is display-only, or that Bootstrap is
+a required frontend dependency. It incorporates the owner-approved billing
+choices from 2026-08-14.
+
+### Project language
+
+Conversation and coordination may use Indonesian. New or modified
+project-facing content uses English: web copy, API errors/messages, new types,
+tests, OpenAPI descriptions, migration comments, and runbook/spec content.
+Unrelated existing Indonesian copy is not rewritten.
+
+### Legacy migration is fail-closed
+
+The migration must inspect every existing `plans.models_json` value before
+assigning groups. It normalizes and validates all referenced model IDs and
+compares plan memberships. It aborts inside the migration transaction, before
+committing any catalog or group changes, when any of these is true:
+
+- a plan references a model absent from `models`/the request catalog;
+- legacy plan memberships overlap partially in a way that one-model/one-group
+  cannot represent without expanding a plan's entitlement;
+- an active plan has no safely representable model set;
+- existing tenant policies contradict the legacy plan entitlement;
+- the backfill would enable a model that the plan did not previously allow.
+
+A single `legacy-default` group is created only when the transformation is
+entitlement-preserving. The migration never unions all legacy models into every
+plan, never guesses tiers, and never enables a previously unentitled model.
+Owner cleanup is required before retrying an ambiguous production database.
+
+### Subscription entitlement snapshot
+
+A subscription stores `model_group_id` at purchase time. `plan_id` remains for
+history/display, but request authorization uses the snapshot. Existing
+subscriptions therefore do not silently change when a plan or group is edited.
+Live safety controls still apply: disabling a model or group blocks the next
+request, with no model replacement.
+
+The existing engine's multiple-subscription behavior is made explicit:
+valid active subscriptions contribute candidate funding sources; rolling-time
+subscriptions are checked first, then token packs by earliest expiry, then
+monetary subscriptions, then the shared PAYG wallet. A `past_due` subscription
+cannot grant new allowance. Expired windows and exhausted packs are skipped.
+
+### Three funding modes and currencies
+
+The accounting engine keeps currencies separate:
+
+- `token_pack`: raw token allowance (`included_tokens`, `used_tokens`);
+- `monetary_pack`: cents allowance (`balance_cents`);
+- `rolling_time`: time window (`activated_at`, `expires_at`);
+- PAYG: one shared account wallet (`wallets.balance_cents`).
+
+API keys never own balances or subscriptions. All keys under one tenant share
+these instruments; each key still has its own scope, lifecycle, rate-limit
+identity, and safe log identifier.
+
+Funding priority is fixed:
+
+```text
+rolling_time -> token_pack -> monetary_pack -> PAYG wallet -> 402 insufficient_balance
+```
+
+A token pack may fund only part of a request. The remaining actual/estimated
+usage proceeds to the next source. For example, an 800-token reservation from
+a pack can be followed by a 400-token-equivalent monetary/PAYG reservation.
+This is funding-source chaining, not model fallback.
+
+### Reservation and settlement safety
+
+Funding is reserved atomically before the upstream call. Actual usage replaces
+the estimate; unused reservations are released. No wallet or monetary balance
+may become negative. If actual usage exceeds all reservations and the monetary
+shortfall cannot be covered, the request is not retried and the record is marked
+`settlement_failed`; no negative debit and no silent correction are allowed.
+The immutable usage record stores the unresolved amount, a sanitized reason,
+and an operator reconciliation reference. Subsequent requests are blocked until
+reconciliation clears the unresolved state. Reconciliation itself is an audited
+ledger operation, never a direct balance edit.
+
+### Model-price settlement
+
+Model prices are cents per million tokens. For monetary funding, aggregate all
+usage categories before one final ceiling:
+
+```text
+base_numerator = input_tokens * input_price_cents
+               + output_tokens * output_price_cents
+               + cache_read_tokens * cache_read_price_cents
+effective_numerator = base_numerator * multiplier_bps
+effective_cost_cents = ceil(effective_numerator / 10_000 / 1_000_000)
+```
+
+The multiplier is applied exactly once. A raw token pack deducts raw tokens and
+records the same effective cost as an informational equivalent; it does not
+deduct money. Monetary subscriptions and PAYG deduct effective cents.
+Historical usage stores the model/group IDs, three base prices,
+`multiplier_bps`, token breakdown, numerator, final cost, funding breakdown,
+and settlement status. Later admin price changes cannot rewrite history.
+
+### Accounting schema additions (forward-only)
+
+The implementation plan must introduce, with explicit invariants and indexes:
+
+- `models.group_id`, catalog capability data, and `max_output_tokens`;
+- `plans.model_group_id`;
+- `subscriptions.model_group_id` and `subscriptions.balance_cents`;
+- `wallets.balance_cents` without deleting legacy token fields;
+- usage token breakdown, pricing snapshot, funding breakdown, cost, reservation,
+  and settlement status;
+- currency-aware ledger linkage so token and cents entries cannot be confused.
+
+Nullable foreign keys are allowed only where the business state explicitly
+allows `Ungrouped` models or legacy transition rows. Startup/release preflight
+must separately reject enabled models, active plans, or active subscriptions
+that lack a valid group snapshot.
+
+### Dashboard contract
+
+The member dashboard has separate English sections for `Usage`, `Cost`, and
+`Request logs`. Usage and cost data are read from immutable sanitized usage
+records, not recomputed from mutable current catalog values.
+
+Usage includes timestamp, model, group, input/output/cache tokens, total
+units, funding source, and status. Cost includes base prices, multiplier,
+effective prices, equivalent cost, charged amount, currency, and settlement
+status. Logs include request ID, timestamp, safe API-key label, model/group,
+status, duration, usage, funding source, settlement status, and error code.
+
+For raw token funding, the UI labels the amount as `Equivalent cost` and shows
+`Charged to balance: 0`. For monetary/PAYG funding it shows the actual cents
+debited. Prompt, response, plaintext key, upstream identifier, credentials,
+and payment secrets are never stored or displayed.
+
+### Frontend scope correction
+
+The repository keeps its existing React UI primitives, utility styling,
+Motion usage, and single Lucide wrapper. No Bootstrap runtime or second icon
+library is added. New/changed screens use English copy, responsive existing
+components, one canonical icon owner, and React-controlled modal/select state.
+A full Bootstrap design-system migration is explicitly out of scope.
+
+### Revised acceptance gates
+
+In addition to the earlier gates, implementation must prove:
+
+- ambiguous legacy membership fails before migration commit;
+- multiple API keys share one tenant/account balance without duplication;
+- all three subscription modes and PAYG use the fixed priority order;
+- token shortfall chains to the next source without model fallback;
+- actual overrun produces `settlement_failed` without negative balance;
+- historical pricing snapshots remain unchanged after catalog edits;
+- dashboard usage, cost, and logs are sourced from immutable sanitized records;
+- unresolved settlement blocks subsequent requests until audited reconciliation;
+- runtime read-only checks cover wallet/ledger currency, active subscription
+  snapshots, capability JSON, multiplier bounds, pricing snapshots, and stale
+  policy references, not only foreign keys.

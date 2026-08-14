@@ -70,12 +70,18 @@ export class GatewayDatabase {
     );
     const applied = this.db.prepare('SELECT 1 FROM schema_migrations WHERE id=?');
     const record = this.db.prepare('INSERT INTO schema_migrations(id,applied_at) VALUES(?,?)');
-    for (const migration of MIGRATIONS) {
-      if (applied.get(migration.id)) continue;
-      this.db.transaction(() => {
-        this.db.exec(migration.sql);
-        record.run(migration.id, new Date().toISOString());
-      })();
+    try {
+      for (const migration of MIGRATIONS) {
+        if (applied.get(migration.id)) continue;
+        this.db.transaction(() => {
+          this.db.exec(migration.sql);
+          migration.run?.(this.db);
+          record.run(migration.id, new Date().toISOString());
+        })();
+      }
+    } catch (error) {
+      this.db.close();
+      throw error;
     }
     this.tenants = new TenantStore(this.db, pepper);
   }

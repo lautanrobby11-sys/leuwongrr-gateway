@@ -1,4 +1,6 @@
-export interface Migration { id:string; sql:string }
+import type Database from 'better-sqlite3';
+
+export interface Migration { id:string; sql:string; run?: (db: Database.Database) => void }
 export const MIGRATIONS: readonly Migration[] = [{
   id: '0001_gateway_core',
   sql: `
@@ -235,4 +237,68 @@ UPDATE exchange_rates SET updated_by = NULL
 WHERE updated_by IS NOT NULL
   AND updated_by NOT IN (SELECT id FROM accounts);
 `
+}, {
+  id: '0010_model_groups',
+  sql: `
+CREATE TABLE model_groups (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  multiplier_bps INTEGER NOT NULL CHECK(multiplier_bps > 0),
+  enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+ALTER TABLE models ADD COLUMN group_id TEXT REFERENCES model_groups(id);
+ALTER TABLE models ADD COLUMN capabilities_json TEXT NOT NULL DEFAULT '["text","stream"]';
+ALTER TABLE models ADD COLUMN max_output_tokens INTEGER NOT NULL DEFAULT 4096 CHECK(max_output_tokens > 0);
+ALTER TABLE plans ADD COLUMN model_group_id TEXT REFERENCES model_groups(id);
+CREATE INDEX models_group_idx ON models(group_id);
+CREATE INDEX plans_group_idx ON plans(model_group_id);
+`,
+  run: runModelGroupBackfill
 }];
+
+export function runModelGroupBackfill(db: Database.Database): void {
+    type PlanRow = { id: string; models_json: string; active: number };
+    const plans = db.prepare('SELECT id, models_json, active FROM plans ORDER BY id').all() as PlanRow[];
+    const modelIds = new Set(
+      (db.prepare('SELECT public_id FROM models').all() as Array<{ public_id: string }>).map((row) => row.public_id)
+    );
+    const memberships = plans.map((plan) => {
+      let parsed: unknown;
+      try { parsed = JSON.parse(plan.models_json); } catch { throw new Error('legacy_membership_invalid'); }
+      if (!Array.isArray(parsed) || parsed.some((id) => typeof id !== 'string' || id.trim() === '')) {
+        throw new Error('legacy_membership_invalid');
+      }
+      const ids = [...new Set(parsed.map((id) => id.trim()))];
+      if (ids.some((id) => !modelIds.has(id))) throw new Error('legacy_membership_model_missing');
+      if (plan.active === 1 && ids.length === 0) throw new Error('legacy_membership_ambiguous');
+      return { plan, ids };
+    });
+    const activeSets = memberships.filter(({ plan }) => plan.active === 1).map(({ ids }) => ids);
+    if (modelIds.size > 1 && activeSets.some((ids) => ids.length !== modelIds.size || ids.some((id) => !modelIds.has(id)))) {
+      throw new Error('legacy_membership_ambiguous');
+    }
+    db.prepare(`
+      INSERT INTO model_groups (id, name, multiplier_bps, enabled, created_at, updated_at)
+      VALUES ('legacy-default', 'Legacy Default', 10000, 1, datetime('now'), datetime('now'))
+      ON CONFLICT(id) DO NOTHING
+    `).run();
+    db.prepare("UPDATE models SET group_id = 'legacy-default' WHERE group_id IS NULL").run();
+    db.prepare("UPDATE plans SET model_group_id = 'legacy-default' WHERE model_group_id IS NULL").run();
+    const modelCount = (db.prepare('SELECT COUNT(*) AS count FROM models').get() as { count: number }).count;
+    if (modelCount === 0) {
+      db.prepare(`
+        INSERT INTO models (
+          id, public_id, display_name, provider, multimodal,
+          input_price_per_m, output_price_per_m, cache_read_price_per_m,
+          cache_write_price_per_m, enabled, input_price_cents,
+          output_price_cents, cache_read_price_cents, upstream_model,
+          group_id, capabilities_json, max_output_tokens, created_at, updated_at
+        ) VALUES ('legacy-lwrr-text', 'lwrr-text', 'LeuwongRR Text', 'other', 0,
+          0, 0, 0, 0, 1, 0, 0, 0, 'auto', 'legacy-default',
+          '["text","stream"]', 4096, datetime('now'), datetime('now'))
+        ON CONFLICT(public_id) DO NOTHING
+      `).run();
+    }
+}

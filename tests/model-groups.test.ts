@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { GatewayDatabase } from '../src/persistence/database.js';
 import { ModelGroupCatalog } from '../src/models/groups.js';
+import { BillingService } from '../src/billing/service.js';
 import { testConfig } from './support/harness.js';
 
 let root: string | null = null;
@@ -74,6 +75,16 @@ describe('model group catalog', () => {
     groups.create({ id: 'value', name: 'Value', multiplierBps: 12500, enabled: false });
     const updated = groups.update('value', { name: 'Value+', multiplierBps: 13000 });
     expect(updated.enabled).toBe(false);
+    db.close();
+  });
+
+  it('persists a plan model group through upsert', () => {
+    const db = open();
+    const billing = new BillingService(db.db);
+    const group = new ModelGroupCatalog(db.db);
+    group.create({ id: 'value', name: 'Value', multiplierBps: 10000, enabled: true });
+    billing.upsertPlan({ id: 'plan-value', name: 'Value plan', monthlyPriceCents: 100, includedTokens: 10, overageCentsPerMillion: 1, maxConcurrent: 1, rateLimitRpm: 1, dailyBudgetUnits: 1, models: [], modelGroupId: 'value', active: true });
+    expect(db.db.prepare('SELECT model_group_id FROM plans WHERE id = ?').get('plan-value')).toEqual({ model_group_id: 'value' });
     db.close();
   });
 });

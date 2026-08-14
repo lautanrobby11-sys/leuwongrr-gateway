@@ -228,8 +228,8 @@ export class BillingService {
   upsertPlan(plan: Omit<Plan, 'active'> & { active?: boolean }): Plan {
     this.db
       .prepare(
-        `INSERT INTO plans (id, name, monthly_price_cents, included_tokens, overage_cents_per_million, max_concurrent, rate_limit_rpm, daily_budget_units, models_json, active, price_cents, duration_hours, timer_basis, resets_allowed, method, tier_label, updated_at)
-         VALUES (@id, @name, @price, @included, @overage, @concurrent, @rpm, @daily, @models, @active, @priceCents, @durationHours, @timerBasis, @resetsAllowed, @method, @tierLabel, @updated)
+        `INSERT INTO plans (id, name, monthly_price_cents, included_tokens, overage_cents_per_million, max_concurrent, rate_limit_rpm, daily_budget_units, models_json, active, price_cents, duration_hours, timer_basis, resets_allowed, method, tier_label, model_group_id, updated_at)
+         VALUES (@id, @name, @price, @included, @overage, @concurrent, @rpm, @daily, @models, @active, @priceCents, @durationHours, @timerBasis, @resetsAllowed, @method, @tierLabel, @modelGroupId, @updated)
          ON CONFLICT(id) DO UPDATE SET
            name = excluded.name,
            monthly_price_cents = excluded.monthly_price_cents,
@@ -246,6 +246,7 @@ export class BillingService {
            resets_allowed = excluded.resets_allowed,
            method = excluded.method,
            tier_label = excluded.tier_label,
+           model_group_id = excluded.model_group_id,
            updated_at = excluded.updated_at`
       )
       .run({
@@ -265,6 +266,7 @@ export class BillingService {
         resetsAllowed: plan.resetsAllowed ?? 0,
         method: plan.method ?? 'token_pack',
         tierLabel: plan.tierLabel ?? '',
+        modelGroupId: plan.modelGroupId ?? null,
         updated: this.iso()
       });
     const stored = this.getPlan(plan.id);

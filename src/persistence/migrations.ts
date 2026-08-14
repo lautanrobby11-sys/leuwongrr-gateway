@@ -399,7 +399,7 @@ export function runModelGroupBackfill(db: Database.Database): void {
     const policies = db.prepare('SELECT tenant_id, model_id, enabled FROM model_policies ORDER BY tenant_id, model_id').all() as Array<{ tenant_id: string; model_id: string; enabled: number }>;
     for (const policy of policies) {
       if (!modelIds.has(policy.model_id)) throw new Error('legacy_policy_model_missing');
-      if (policy.enabled === 1 && modelIds.size > 1) throw new Error('legacy_membership_ambiguous');
+      if (policy.enabled === 1 && modelIds.size > 1) throw new Error('legacy_policy_ambiguous');
     }
     db.prepare(`
       INSERT INTO model_groups (id, name, multiplier_bps, enabled, created_at, updated_at)

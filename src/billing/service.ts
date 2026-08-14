@@ -61,6 +61,9 @@ export interface LedgerEntry {
   tokens: number;
   reference: string;
   balanceAfter: number;
+  currency: 'tokens' | 'cents';
+  cents: number;
+  balanceAfterCents: number;
   createdAt: string;
 }
 
@@ -509,12 +512,15 @@ export class BillingService {
       tokens: number;
       reference: string;
       balanceAfter: number;
+      currency?: 'tokens' | 'cents';
+      cents?: number;
+      balanceAfterCents?: number;
     }
   ): void {
     this.db
       .prepare(
-        `INSERT OR IGNORE INTO ledger_entries (id, account_id, kind, source, tokens, reference, balance_after, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT OR IGNORE INTO ledger_entries (id, account_id, kind, source, tokens, reference, balance_after, created_at, currency, cents, balance_after_cents)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         randomUUID(),
@@ -524,7 +530,10 @@ export class BillingService {
         entry.tokens,
         entry.reference,
         entry.balanceAfter,
-        this.iso()
+        this.iso(),
+        entry.currency ?? 'tokens',
+        entry.cents ?? 0,
+        entry.balanceAfterCents ?? 0
       );
   }
 
@@ -571,10 +580,14 @@ export class BillingService {
       modelGroupId?: string | null;
       tokens?: number;
       balanceCents?: number;
+      amountCents?: number;
     }
   ): { tokensGranted: number; centsGranted: number; subscription: Subscription | null } {
-    const method = snapshot.method ?? 'token_pack';
+    const method = snapshot.method;
     const reference = paymentId;
+    if (!method || !['rolling_time', 'token_pack', 'monetary_pack', 'payg'].includes(method)) throw new BillingError('payment_method_invalid', 409);
+    const payment = this.db.prepare('SELECT account_id, order_id FROM payments WHERE id = ?').get(paymentId) as { account_id: string; order_id: string } | undefined;
+    if (!payment || payment.account_id !== accountId || !payment.order_id) throw new BillingError('payment_scope_invalid', 409);
     return this.db.transaction(() => {
       const existing = this.db.prepare("SELECT currency FROM ledger_entries WHERE account_id = ? AND source = 'payment' AND reference = ?").get(accountId, reference) as { currency: string } | undefined;
       if (existing) return { tokensGranted: 0, centsGranted: 0, subscription: null };
@@ -588,11 +601,15 @@ export class BillingService {
         this.db.prepare("INSERT INTO ledger_entries (id, account_id, kind, source, tokens, reference, balance_after, created_at, currency, cents, balance_after_cents) VALUES (?, ?, 'grant', 'payment', 0, ?, ?, ?, 'tokens', 0, 0)").run(randomUUID(), accountId, reference, this.walletBalance(accountId), this.iso());
         return { tokensGranted: 0, centsGranted: 0, subscription };
       }
-      const tokens = Math.max(0, snapshot.tokens ?? 0);
-      const cents = Math.max(0, snapshot.balanceCents ?? 0);
+      const tokens = snapshot.tokens ?? 0;
+      const cents = snapshot.balanceCents ?? 0;
+      if (!Number.isInteger(tokens) || !Number.isInteger(cents) || tokens < 0 || cents < 0) throw new BillingError('payment_amount_invalid', 409);
       if (method === 'token_pack') {
         if (tokens <= 0) throw new BillingError('payment_tokens_missing', 409);
-        this.credit(accountId, tokens, 'payment', reference);
+        this.credit(accountId, tokens, 'payment', reference, 'purchase');
+        const equivalentCents = snapshot.amountCents ?? cents;
+        if (!Number.isInteger(equivalentCents) || equivalentCents < 0) throw new BillingError('payment_amount_invalid', 409);
+        this.db.prepare("UPDATE ledger_entries SET cents = ?, currency = 'tokens' WHERE account_id = ? AND source = 'payment' AND reference = ?").run(equivalentCents, accountId, reference);
         return { tokensGranted: tokens, centsGranted: 0, subscription: null };
       }
       if (cents <= 0) throw new BillingError('payment_cents_missing', 409);
@@ -605,7 +622,7 @@ export class BillingService {
   ledger(accountId: string, limit = 50): LedgerEntry[] {
     const rows = this.db
       .prepare(
-        'SELECT id, kind, source, tokens, reference, balance_after, created_at FROM ledger_entries WHERE account_id = ? ORDER BY created_at DESC LIMIT ?'
+        'SELECT id, kind, source, tokens, reference, balance_after, currency, cents, balance_after_cents, created_at FROM ledger_entries WHERE account_id = ? ORDER BY created_at DESC LIMIT ?'
       )
       .all(accountId, limit) as Array<{
       id: string;
@@ -614,6 +631,9 @@ export class BillingService {
       tokens: number;
       reference: string;
       balance_after: number;
+      currency: 'tokens' | 'cents';
+      cents: number;
+      balance_after_cents: number;
       created_at: string;
     }>;
     return rows.map((row) => ({
@@ -623,6 +643,9 @@ export class BillingService {
       tokens: row.tokens,
       reference: row.reference,
       balanceAfter: row.balance_after,
+      currency: row.currency as 'tokens' | 'cents',
+      cents: row.cents,
+      balanceAfterCents: row.balance_after_cents,
       createdAt: row.created_at
     }));
   }
@@ -785,6 +808,9 @@ export class BillingService {
       .all(tenantId, since, accountId, RECONCILE_BATCH) as Array<{
       id: string;
       units: number;
+      currency: 'tokens' | 'cents';
+      cents: number;
+      balance_after_cents: number;
       created_at: string;
     }>;
     if (rows.length === 0) return;

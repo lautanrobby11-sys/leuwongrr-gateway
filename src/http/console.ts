@@ -1146,7 +1146,7 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
     const digest = `${orderId}:${status}:${String(payload.sign)}`;
     const seenAt = new Date().toISOString();
     try {
-      const outcome = db.db.transaction((): 'duplicate' | 'settled' | 'recorded' => {
+      const outcome = db.db.transaction((): 'duplicate' | 'settled' | 'recorded' | 'reconciliation' => {
         const inserted = db.db
           .prepare(
             'INSERT OR IGNORE INTO payment_events (id, payment_id, digest, status, created_at) VALUES (?, ?, ?, ?, ?)'
@@ -1164,14 +1164,21 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
           db.db
             .prepare('UPDATE payments SET status = ?, settled_at = ? WHERE id = ?')
             .run(status, seenAt, payment.id);
-          db.db.prepare("UPDATE payments SET settlement_status = 'settled', settlement_error = NULL WHERE id = ?").run(payment.id);
           const snapshot = JSON.parse(payment.entitlement_snapshot_json || '{}') as Record<string, unknown>;
           if (Object.keys(snapshot).length === 0) {
             snapshot.method = payment.purpose === 'subscription' ? 'rolling_time' : 'token_pack';
             snapshot.planId = payment.plan_id;
             snapshot.tokens = payment.tokens;
           }
+          try {
+            snapshot.amountCents ??= payment.amount_cents;
           billing.settlePaymentSnapshot(payment.account_id, payment.id, snapshot);
+          } catch (error) {
+            const reason = error instanceof BillingError ? error.code : 'settlement_failed';
+            db.db.prepare("UPDATE payments SET settlement_status = 'reconciliation_required', settlement_error = ?, status = ?, settled_at = NULL WHERE id = ?").run(reason, status, payment.id);
+            return 'reconciliation';
+          }
+          db.db.prepare("UPDATE payments SET settlement_status = 'settled', settlement_error = NULL WHERE id = ?").run(payment.id);
           return 'settled';
         }
 
@@ -1180,6 +1187,7 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
         db.db.prepare('UPDATE payments SET status = ? WHERE id = ?').run(status, payment.id);
         return 'recorded';
       })();
+      if (outcome === 'reconciliation') return fail(reply, 409, 'payment_reconciliation_required', 'Payment requires reconciliation', req.id);
       return reply.send({ accepted: true, duplicate: outcome === 'duplicate' });
     } catch (error) {
       return handle(error, reply, req.id);
@@ -1254,7 +1262,7 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
     const digest = `${orderId}:${status}:${signatureStr}`;
     const seenAt = new Date().toISOString();
     try {
-      const outcome = db.db.transaction((): 'duplicate' | 'settled' | 'recorded' => {
+      const outcome = db.db.transaction((): 'duplicate' | 'settled' | 'recorded' | 'reconciliation' => {
         const inserted = db.db
           .prepare(
             'INSERT OR IGNORE INTO payment_events (id, payment_id, digest, status, created_at) VALUES (?, ?, ?, ?, ?)'
@@ -1278,6 +1286,7 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
         db.db.prepare('UPDATE payments SET status = ? WHERE id = ?').run(status, payment.id);
         return 'recorded';
       })();
+      if (outcome === 'reconciliation') return fail(reply, 409, 'payment_reconciliation_required', 'Payment requires reconciliation', req.id);
       return reply.send({ accepted: true, duplicate: outcome === 'duplicate' });
     } catch (error) {
       return handle(error, reply, req.id);

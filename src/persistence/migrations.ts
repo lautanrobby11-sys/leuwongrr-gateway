@@ -269,6 +269,16 @@ CREATE INDEX subscriptions_group_idx ON subscriptions(model_group_id);
       SELECT model_group_id FROM plans WHERE plans.id = subscriptions.plan_id
     ) WHERE model_group_id IS NULL`).run();
   }
+}, {
+  id: '0012_payment_order_snapshot',
+  sql: `
+ALTER TABLE payments ADD COLUMN entitlement_snapshot_json TEXT NOT NULL DEFAULT '{}';
+ALTER TABLE payments ADD COLUMN balance_cents INTEGER NOT NULL DEFAULT 0 CHECK(balance_cents >= 0);
+ALTER TABLE payments ADD COLUMN token_amount INTEGER NOT NULL DEFAULT 0 CHECK(token_amount >= 0);
+ALTER TABLE payments ADD COLUMN settlement_status TEXT NOT NULL DEFAULT 'pending' CHECK(settlement_status IN ('pending','settled','failed','reconciliation_required'));
+ALTER TABLE payments ADD COLUMN settlement_error TEXT;
+CREATE INDEX payments_settlement_idx ON payments(settlement_status, created_at);
+`
 }];
 
 export function runModelGroupBackfill(db: Database.Database): void {

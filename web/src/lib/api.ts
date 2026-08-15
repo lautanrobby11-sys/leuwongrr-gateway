@@ -9,6 +9,8 @@ export interface Plan {
   dailyBudgetUnits: number;
   models: string[];
   active: boolean;
+  /** The model group the plan entitles. Read/written with the row. */
+  modelGroupId?: string | null;
 }
 
 export interface Subscription {
@@ -50,6 +52,8 @@ export interface ModelInput {
   multimodalSupport: boolean;
   upstreamModel: string;
   enabled?: boolean;
+  /** Model group to place the model in; defaults to legacy-default on create. */
+  groupId?: string;
 }
 
 export type ModelUpdate = Partial<Omit<ModelInput, 'id'>>;
@@ -227,6 +231,7 @@ export const api = {
           multimodalSupport: boolean;
           upstreamModel: string;
           enabled: boolean;
+          groupId: string | null;
         }>;
         policies: Array<{ tenant_id: string; model_id: string; enabled: number }>;
       }>('/console/api/admin/models'),
@@ -243,6 +248,18 @@ export const api = {
       }),
     setModelPolicy: (tenantId: string, modelId: string, enabled: boolean) =>
       post<{ updated: boolean }>('/console/api/admin/models/policy', { tenantId, modelId, enabled }),
+    modelGroups: () =>
+      get<{
+        groups: Array<{
+          id: string;
+          name: string;
+          multiplierBps: number;
+          enabled: boolean;
+          modelsCount: number;
+          activeModelsCount: number;
+          plansCount: number;
+        }>;
+      }>('/console/api/admin/model-groups'),
     accounts: () =>
       get<{
         accounts: Array<{

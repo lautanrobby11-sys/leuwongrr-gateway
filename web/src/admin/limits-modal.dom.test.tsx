@@ -78,6 +78,10 @@ vi.mock('../lib/api', () => {
         }),
       plans: () => Promise.resolve({ plans: [] }),
       models: () => Promise.resolve({ catalog: [], policies: [] }),
+      modelGroups: () =>
+        Promise.resolve({
+          groups: [{ id: 'legacy-default', name: 'Legacy Default', multiplierBps: 10000, enabled: true, modelsCount: 0, activeModelsCount: 0, plansCount: 0 }]
+        }),
       accounts: () => Promise.resolve({ accounts: [account] }),
       payments: () => Promise.resolve({ payments: [] }),
       setLimits: () => Promise.resolve({ ok: true })

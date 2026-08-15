@@ -61,7 +61,8 @@ vi.mock('../lib/api', () => {
     cacheReadPriceCents: 5,
     multimodalSupport: false,
     upstreamModel: 'auto',
-    enabled: true
+    enabled: true,
+    groupId: 'legacy-default'
   };
   const api = {
     admin: {
@@ -72,6 +73,10 @@ vi.mock('../lib/api', () => {
         }),
       plans: () => Promise.resolve({ plans: [] }),
       models: () => Promise.resolve({ catalog: [model], policies: [] }),
+      modelGroups: () =>
+        Promise.resolve({
+          groups: [{ id: 'legacy-default', name: 'Legacy Default', multiplierBps: 10000, enabled: true, modelsCount: 1, activeModelsCount: 1, plansCount: 0 }]
+        }),
       accounts: () => Promise.resolve({ accounts: [] }),
       payments: () => Promise.resolve({ payments: [] }),
       createModel: vi.fn(() => Promise.resolve({ model })),

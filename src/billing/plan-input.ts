@@ -38,6 +38,11 @@ export const planInputSchema = z
       .max(DAILY_BUDGET_UNITS.max),
     models: z.array(z.string().min(1).max(64)),
     active: z.boolean().optional(),
+    // The model group the plan entitles. Read back from `listPlans` alongside
+    // the Release 2 purchase fields, so the console edit form echoes it into
+    // this schema on save; without it the strict schema rejected the round-trip
+    // with `400 invalid_request` and every plan edit silently failed.
+    modelGroupId: z.string().regex(/^[a-z0-9-]{2,32}$/).nullable().optional(),
     // Release 2 (spec 20.1): subscription purchase metadata. Optional so the
     // operator CLI and older clients keep working; `upsertPlan` applies the
     // same defaults a missing field would otherwise rely on.

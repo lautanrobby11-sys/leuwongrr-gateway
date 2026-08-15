@@ -33,7 +33,7 @@ Commands:
   account:role    --email <address> --role ${ACCOUNT_ROLES.join('|')}
   plan:upsert     --plan <id> --name <label> --price-cents N --included-tokens N
                   --overage-cents N --daily-units N --max-concurrent N --rpm N
-                  [--models a,b] [--inactive]
+                  [--models a,b] [--model-group <id>] [--inactive]
 
 Notes:
   account:role only sets the database role. Admin console routes additionally
@@ -114,6 +114,7 @@ const { values, positionals } = parseArgs({
     'daily-units': { type: 'string' },
     'max-concurrent': { type: 'string' },
     rpm: { type: 'string' },
+    'model-group': { type: 'string' },
     email: { type: 'string' },
     role: { type: 'string' },
     plan: { type: 'string' },
@@ -254,6 +255,7 @@ try {
         rateLimitRpm: positiveInteger(values.rpm, 'rpm'),
         dailyBudgetUnits: nonNegativeInteger(values['daily-units'], 'daily-units'),
         models: parseModelList(values.models ?? 'lwrr-text'),
+        modelGroupId: values['model-group'] ?? 'legacy-default',
         active: !values.inactive
       });
       if (!candidate.success) {

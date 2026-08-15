@@ -226,6 +226,18 @@ export class BillingService {
   }
 
   upsertPlan(plan: Omit<Plan, 'active'> & { active?: boolean }): Plan {
+    // A plan is entitled by a model group, not by a hand-maintained model list.
+    // Existing edits must never silently drop their group: the console echoes it
+    // back, but the CLI or an older client can omit it, and overwriting with
+    // NULL would break every subscription that resolves through this plan.
+    const existing = this.getPlan(plan.id);
+    const modelGroupId = plan.modelGroupId ?? existing?.modelGroupId ?? null;
+    // Keep `models_json` as the row conveniences the delete-guard and member
+    // listing: derive it from the group's actual members so a plan edit never
+    // stores a stale model set. A plan without a group keeps its own list.
+    const models = modelGroupId
+      ? (this.db.prepare('SELECT public_id FROM models WHERE group_id = ?').all(modelGroupId) as Array<{ public_id: string }>).map((row) => row.public_id)
+      : plan.models;
     this.db
       .prepare(
         `INSERT INTO plans (id, name, monthly_price_cents, included_tokens, overage_cents_per_million, max_concurrent, rate_limit_rpm, daily_budget_units, models_json, active, price_cents, duration_hours, timer_basis, resets_allowed, method, tier_label, model_group_id, updated_at)
@@ -258,7 +270,7 @@ export class BillingService {
         concurrent: plan.maxConcurrent,
         rpm: plan.rateLimitRpm,
         daily: plan.dailyBudgetUnits,
-        models: JSON.stringify(plan.models),
+        models: JSON.stringify(models),
         active: plan.active === false ? 0 : 1,
         priceCents: plan.priceCents ?? 0,
         durationHours: plan.durationHours ?? null,
@@ -266,7 +278,7 @@ export class BillingService {
         resetsAllowed: plan.resetsAllowed ?? 0,
         method: plan.method ?? 'token_pack',
         tierLabel: plan.tierLabel ?? '',
-        modelGroupId: plan.modelGroupId ?? null,
+        modelGroupId,
         updated: this.iso()
       });
     const stored = this.getPlan(plan.id);

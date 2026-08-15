@@ -45,19 +45,6 @@ const NAV: NavItem[] = [
   { id: 'payments', label: 'Payments', icon: 'wallet' }
 ];
 
-const BLANK_PLAN: Plan = {
-  id: '',
-  name: '',
-  monthlyPriceCents: 0,
-  includedTokens: 0,
-  overageCentsPerMillion: 200,
-  maxConcurrent: 2,
-  rateLimitRpm: 120,
-  dailyBudgetUnits: 100_000,
-  models: ['lwrr-text'],
-  active: true
-};
-
 interface AdminAccount {
   id: string;
   email: string;
@@ -78,9 +65,11 @@ const BLANK_LIMITS: TenantLimits = { dailyBudgetUnits: 100_000, maxConcurrent: 2
 
 function PlanEditor({
   plan,
+  groups,
   onChange
 }: {
   plan: Plan;
+  groups: Array<{ id: string; name: string; enabled: boolean }>;
   onChange: (plan: Plan) => void;
 }) {
   const numeric = (key: keyof Plan) => ({
@@ -128,20 +117,22 @@ function PlanEditor({
         <input {...numeric('maxConcurrent')} />
       </Field>
       <div className="sm:col-span-2">
-        <Field label="Models" hint="Comma separated. Subscribers are entitled to these on activation.">
-          <input
+        <Field
+          label="Model group"
+          hint="Subscribers to this plan are entitled to every model in the group"
+        >
+          <select
             className={inputClass}
-            value={plan.models.join(', ')}
-            onChange={(event) =>
-              onChange({
-                ...plan,
-                models: event.target.value
-                  .split(',')
-                  .map((value) => value.trim())
-                  .filter(Boolean)
-              })
-            }
-          />
+            value={plan.modelGroupId ?? ''}
+            onChange={(event) => onChange({ ...plan, modelGroupId: event.target.value })}
+          >
+            <option value="">— no group —</option>
+            {groups.map((group) => (
+              <option key={group.id} value={group.id}>
+                {group.name}
+              </option>
+            ))}
+          </select>
         </Field>
       </div>
       <label className="flex items-center gap-2 text-sm sm:col-span-2">
@@ -157,6 +148,20 @@ function PlanEditor({
   );
 }
 
+const BLANK_PLAN: Plan = {
+  id: '',
+  name: '',
+  monthlyPriceCents: 0,
+  includedTokens: 0,
+  overageCentsPerMillion: 200,
+  maxConcurrent: 2,
+  rateLimitRpm: 120,
+  dailyBudgetUnits: 100_000,
+  models: [],
+  modelGroupId: 'legacy-default',
+  active: true
+};
+
 const BLANK_MODEL: ModelInput = {
   id: '',
   name: '',
@@ -166,17 +171,20 @@ const BLANK_MODEL: ModelInput = {
   cacheReadPriceCents: 0,
   multimodalSupport: false,
   upstreamModel: '',
-  enabled: true
+  enabled: true,
+  groupId: 'legacy-default'
 };
 
 const MODEL_PAGE_SIZE = 10;
 
 function ModelEditor({
   model,
+  groups,
   onChange,
   isEdit
 }: {
   model: ModelInput;
+  groups: Array<{ id: string; name: string; enabled: boolean }>;
   onChange: (model: ModelInput) => void;
   isEdit: boolean;
 }) {
@@ -232,6 +240,20 @@ function ModelEditor({
           placeholder="auto"
         />
       </Field>
+      <Field label="Model group" hint="A model outside a group cannot be resolved by a tenant">
+        <select
+          className={inputClass}
+          value={model.groupId ?? ''}
+          onChange={(event) => onChange({ ...model, groupId: event.target.value })}
+        >
+          <option value="">— no group —</option>
+          {groups.map((group) => (
+            <option key={group.id} value={group.id}>
+              {group.name}
+            </option>
+          ))}
+        </select>
+      </Field>
       <Field label="Input (₵ / 1M)">
         <input {...numeric('inputPriceCents')} />
       </Field>
@@ -271,6 +293,7 @@ export function Admin() {
   const [tab, setTab] = useState('overview');
   const [loading, setLoading] = useState(true);
   const [denied, setDenied] = useState<string | null>(null);
+  const [groups, setGroups] = useState<Array<{ id: string; name: string; enabled: boolean }>>([]);
   const [totals, setTotals] = useState<{
     accounts: number;
     active_subscriptions: number;
@@ -290,6 +313,7 @@ export function Admin() {
         multimodalSupport: boolean;
         upstreamModel: string;
         enabled: boolean;
+        groupId: string | null;
       }>
     >([]);
   const [policies, setPolicies] = useState<
@@ -301,6 +325,7 @@ export function Admin() {
   const [modelEditor, setModelEditor] = useState<ModelInput | null>(null);
   const [modelPage, setModelPage] = useState(1);
   const [removingModel, setRemovingModel] = useState<string | null>(null);
+  const [modelFilter, setModelFilter] = useState('');
   const [creditFor, setCreditFor] = useState<AdminAccount | null>(null);
   const [creditTokens, setCreditTokens] = useState(100_000);
   const [creditReason, setCreditReason] = useState('goodwill');
@@ -311,10 +336,11 @@ export function Admin() {
   async function load() {
     setLoading(true);
     try {
-      const [overview, planList, modelList, accountList, paymentList] = await Promise.all([
+      const [overview, planList, modelList, groupList, accountList, paymentList] = await Promise.all([
         api.admin.overview(),
         api.admin.plans(),
         api.admin.models(),
+        api.admin.modelGroups(),
         api.admin.accounts(),
         api.admin.payments()
       ]);
@@ -322,6 +348,7 @@ export function Admin() {
       setRevenue(overview.revenue_cents);
       setPlans(planList.plans);
       setCatalog(modelList.catalog);
+      setGroups(groupList.groups);
       setPolicies(modelList.policies);
       setAccounts(accountList.accounts);
       setPayments(paymentList.payments);
@@ -425,7 +452,8 @@ export function Admin() {
             cacheReadPriceCents: model.cacheReadPriceCents,
             multimodalSupport: model.multimodalSupport,
             upstreamModel: model.upstreamModel,
-            enabled: model.enabled
+            enabled: model.enabled,
+            groupId: model.groupId ?? 'legacy-default'
           }
         : { ...BLANK_MODEL }
     );
@@ -445,6 +473,19 @@ export function Admin() {
       </div>
     );
   }
+
+  // 663 models paginate across dozens of pages; the filter lets an admin find a
+  // model by id, display name, provider, or upstream path without paging.
+  const query = modelFilter.trim().toLowerCase();
+  const filteredCatalog = query
+    ? catalog.filter(
+        (model) =>
+          model.id.toLowerCase().includes(query) ||
+          model.name.toLowerCase().includes(query) ||
+          model.provider.toLowerCase().includes(query) ||
+          model.upstreamModel.toLowerCase().includes(query)
+      )
+    : catalog;
 
   return (
     <Shell title="Admin" subtitle="LeuwongRR gateway" items={NAV} active={tab} onSelect={setTab}>
@@ -489,7 +530,10 @@ export function Admin() {
                   <tr key={plan.id}>
                     <Cell className="font-medium">
                       {plan.name}
-                      <span className="ml-1.5 font-mono text-xs text-muted">{plan.id}</span>
+                      <span className="ml-1.5 font-mono text-xs text-muted">
+                        {plan.id}
+                        {plan.modelGroupId ? ` · ${plan.modelGroupId}` : ''}
+                      </span>
                     </Cell>
                     <Cell className="tabular-nums">{money(plan.monthlyPriceCents)}</Cell>
                     <Cell className="tabular-nums">{tokens(plan.includedTokens)}</Cell>
@@ -524,11 +568,22 @@ export function Admin() {
                   </Button>
                 }
               >
+                <div className="border-b border-border/70 px-4 py-3">
+                  <input
+                    className={inputClass}
+                    value={modelFilter}
+                    onChange={(event) => {
+                      setModelFilter(event.target.value);
+                      setModelPage(1);
+                    }}
+                    placeholder="Filter models by id, name, provider, or upstream…"
+                  />
+                </div>
                 <Table
-                  headers={['Model', 'Upstream', 'In ₵/M', 'Out ₵/M', 'Cache ₵/M', 'State', '']}
-                  empty={catalog.length === 0}
+                  headers={['Model', 'Upstream', 'Group', 'In ₵/M', 'Out ₵/M', 'Cache ₵/M', 'State', '']}
+                  empty={filteredCatalog.length === 0}
                 >
-                  {catalog
+                  {filteredCatalog
                     .slice((modelPage - 1) * MODEL_PAGE_SIZE, modelPage * MODEL_PAGE_SIZE)
                     .map((model) => (
                       <tr key={model.id}>
@@ -537,6 +592,7 @@ export function Admin() {
                           <p className="font-mono text-xs text-muted">{model.id}</p>
                         </Cell>
                         <Cell className="text-xs text-muted">{model.upstreamModel}</Cell>
+                        <Cell className="text-xs text-muted">{model.groupId}</Cell>
                         <Cell className="tabular-nums">{model.inputPriceCents}</Cell>
                         <Cell className="tabular-nums">{model.outputPriceCents}</Cell>
                         <Cell className="tabular-nums">{model.cacheReadPriceCents}</Cell>
@@ -563,11 +619,11 @@ export function Admin() {
                       </tr>
                     ))}
                 </Table>
-                {catalog.length > MODEL_PAGE_SIZE && (
+                {filteredCatalog.length > MODEL_PAGE_SIZE && (
                   <div className="flex items-center justify-between border-t border-border/70 px-4 py-3 text-xs text-muted">
                     <span>
-                      {catalog.length} model{catalog.length === 1 ? '' : 's'} · page {modelPage}/
-                      {Math.ceil(catalog.length / MODEL_PAGE_SIZE)}
+                      {filteredCatalog.length} model{filteredCatalog.length === 1 ? '' : 's'} · page {modelPage}/
+                      {Math.ceil(filteredCatalog.length / MODEL_PAGE_SIZE)}
                     </span>
                     <div className="flex items-center gap-1.5">
                       <Button
@@ -579,7 +635,7 @@ export function Admin() {
                       </Button>
                       <Button
                         variant="outline"
-                        disabled={modelPage >= Math.ceil(catalog.length / MODEL_PAGE_SIZE)}
+                        disabled={modelPage >= Math.ceil(filteredCatalog.length / MODEL_PAGE_SIZE)}
                         onClick={() => setModelPage((p) => p + 1)}
                       >
                         Next
@@ -715,7 +771,7 @@ export function Admin() {
           <Modal open={editing !== null} title="Plan" onClose={() => setEditing(null)}>
             {editing && (
               <div className="space-y-4">
-                <PlanEditor plan={editing} onChange={setEditing} />
+                <PlanEditor plan={editing} groups={groups} onChange={setEditing} />
                 <Button
                   className="w-full"
                   icon="check"
@@ -738,6 +794,7 @@ export function Admin() {
               <div className="space-y-4">
                 <ModelEditor
                   model={modelEditor}
+                  groups={groups}
                   onChange={setModelEditor}
                   isEdit={catalog.some((model) => model.id === modelEditor.id)}
                 />

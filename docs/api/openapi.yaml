@@ -392,6 +392,28 @@ paths:
           description: Model id already exists.
         '403':
           description: Origin is not allowed, or the Access assertion failed.
+  /console/api/admin/models/sync:
+    post:
+      summary: Import the OmniRoute model catalog
+      description: >-
+        One-way, admin-triggered import over the loopback OmniRoute client
+        (`GET /v1/models`). New models land **disabled** so an admin must
+        switch them on explicitly. Ids are lower-cased and slugified; a 2-64
+        character lower-case id is required. 503 when the upstream client is
+        not configured; 502 when OmniRoute cannot be read.
+      security:
+        - accessAssertion: []
+      responses:
+        '200':
+          description: >-
+            Sync completed. Body: `{ "synced": true, "added": string[],
+            "skipped": number }`.
+        '502':
+          description: OmniRoute model list could not be read.
+        '503':
+          description: Upstream client is not configured.
+        '403':
+          description: Origin is not allowed, or the Access assertion failed.
   /console/api/admin/models/{id}:
     put:
       summary: Amend a model

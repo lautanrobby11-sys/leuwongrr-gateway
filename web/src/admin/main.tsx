@@ -171,7 +171,7 @@ const BLANK_MODEL: ModelInput = {
   cacheReadPriceCents: 0,
   multimodalSupport: false,
   upstreamModel: '',
-  enabled: true,
+  enabled: false,
   groupId: 'legacy-default'
 };
 
@@ -279,7 +279,7 @@ function ModelEditor({
         <input
           type="checkbox"
           className="accent-brand"
-          checked={model.enabled ?? true}
+          checked={model.enabled ?? false}
           onChange={(event) => onChange({ ...model, enabled: event.target.checked })}
         />
         Enabled in the gateway
@@ -326,6 +326,7 @@ export function Admin() {
   const [modelPage, setModelPage] = useState(1);
   const [removingModel, setRemovingModel] = useState<string | null>(null);
   const [modelFilter, setModelFilter] = useState('');
+  const [syncingModels, setSyncingModels] = useState(false);
   const [creditFor, setCreditFor] = useState<AdminAccount | null>(null);
   const [creditTokens, setCreditTokens] = useState(100_000);
   const [creditReason, setCreditReason] = useState('goodwill');
@@ -421,6 +422,24 @@ export function Admin() {
       toast(error instanceof ApiError ? error.message : 'Could not save the model', 'bad');
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function syncModels() {
+    setSyncingModels(true);
+    try {
+      const result = await api.admin.syncModels();
+      const added = result.added.length;
+      toast(
+        added > 0
+          ? `${added} model${added === 1 ? '' : 's'} synced from OmniRoute`
+          : 'No new models from OmniRoute'
+      );
+      await load();
+    } catch (error) {
+      toast(error instanceof ApiError ? error.message : 'Could not sync models from OmniRoute', 'bad');
+    } finally {
+      setSyncingModels(false);
     }
   }
 
@@ -563,9 +582,19 @@ export function Admin() {
                 title="Model catalog"
                 subtitle="Registered in the gateway and served through OmniRoute"
                 action={
-                  <Button icon="plus" onClick={() => openModelEditor()}>
-                    Add model
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      busy={syncingModels}
+                      disabled={syncingModels}
+                      onClick={() => void syncModels()}
+                    >
+                      Sync from OmniRoute
+                    </Button>
+                    <Button icon="plus" onClick={() => openModelEditor()}>
+                      Add model
+                    </Button>
+                  </div>
                 }
               >
                 <div className="border-b border-border/70 px-4 py-3">

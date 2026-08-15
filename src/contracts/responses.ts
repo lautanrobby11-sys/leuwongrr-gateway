@@ -1,6 +1,10 @@
 import { z } from 'zod';
 
-/** Bounded OpenAI Responses contract. */
+/**
+ * Bounded OpenAI Responses contract. Known fields are validated tightly;
+ * anything else passes through so standard OpenAI clients keep working (see
+ * chat.ts for the rationale). Provider routing stays with OmniRoute.
+ */
 export const responsesRequestSchema = z
   .object({
     model: z.string().min(1).max(128),
@@ -21,6 +25,6 @@ export const responsesRequestSchema = z
     user: z.string().max(256).optional(),
     metadata: z.record(z.string().max(64), z.string().max(512)).optional()
   })
-  .strict();
+  .passthrough();
 
 export type ResponsesRequest = z.infer<typeof responsesRequestSchema>;

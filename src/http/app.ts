@@ -159,6 +159,7 @@ export function buildApp(deps: AppDeps) {
         deps.config.ACCESS_TEAM_DOMAIN && deps.config.ACCESS_AUD
           ? new AccessVerifier(deps.config.ACCESS_TEAM_DOMAIN, deps.config.ACCESS_AUD)
           : null,
+      upstream: deps.upstream,
       logger: deps.logger
     });
     const sweep = setInterval(() => {

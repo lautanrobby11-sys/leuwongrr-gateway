@@ -38,6 +38,17 @@ never the usage that actually happened.
    rejected rather than forwarded, so a caller cannot smuggle provider switches
    past the policy layer.
 
+   **Amended 2026-08-15.** Contracts are `passthrough()` at the top level
+   instead. The fields the policy layer reads (model, messages, stream, bounds)
+   are still validated tightly, but unrecognised top-level fields are forwarded
+   to OmniRoute rather than rejected. Strict schemas broke the promised OpenAI
+   compatibility for real clients: CLIs and IDEs send standard fields such as
+   `logprobs`, `reasoning_effort`, and `service_tier`, and every such request
+   failed with `400 Request body failed schema validation`. Provider routing
+   belongs to OmniRoute (ADR-001), so a forwarded field cannot bypass this
+   gateway's policy — model, scope, budget, and concurrency are still decided
+   here.
+
 ## Consequences
 
 - One place to audit for the safety properties, and one place to change them.

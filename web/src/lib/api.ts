@@ -186,9 +186,17 @@ export const api = {
     usage: () => get<{ days: Array<{ day: string; units: number }> }>('/console/api/member/usage'),
     plans: () => get<{ plans: Plan[] }>('/console/api/member/plans'),
     keys: () =>
-      get<{ keys: Array<{ id: string; name: string; scopes: string[]; createdAt: string; revokedAt: string | null }> }>(
-        '/console/api/member/keys'
-      ),
+      get<{
+        keys: Array<{
+          id: string;
+          name: string;
+          prefix: string;
+          last4: string;
+          scopes: string[];
+          createdAt: string;
+          revokedAt: string | null;
+        }>;
+      }>('/console/api/member/keys'),
     createKey: (name: string, scopes: string[]) =>
       post<{ key: string }>('/console/api/member/keys', { name, scopes }),
     revokeKey: (keyId: string) => post<{ revoked: boolean }>('/console/api/member/keys/revoke', { keyId }),
@@ -246,6 +254,8 @@ export const api = {
       request<{ deleted: boolean }>(`/console/api/admin/models/${encodeURIComponent(id)}`, {
         method: 'DELETE'
       }),
+    syncModels: () =>
+      post<{ synced: boolean; added: string[]; skipped: number }>('/console/api/admin/models/sync', {}),
     setModelPolicy: (tenantId: string, modelId: string, enabled: boolean) =>
       post<{ updated: boolean }>('/console/api/admin/models/policy', { tenantId, modelId, enabled }),
     modelGroups: () =>

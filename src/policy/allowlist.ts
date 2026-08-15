@@ -62,7 +62,7 @@ export const PUBLIC_ALLOWLIST: readonly AllowedRoute[] = Object.freeze([
   },
   {
     method: 'POST',
-    pattern: /^\/console\/api\/admin\/(plans|models(\/policy)?|model-groups(\/[a-z0-9-]{2,64}\/models)?|accounts\/limits|accounts\/credit|accounts\/status|exchange-rate)$/,
+    pattern: /^\/console\/api\/admin\/(plans|models(\/policy|\/sync)?|model-groups(\/[a-z0-9-]{2,64}\/models)?|accounts\/limits|accounts\/credit|accounts\/status|exchange-rate)$/,
     id: 'console.admin'
   },
   {
@@ -141,6 +141,7 @@ export const DOCUMENTED_OPERATIONS: readonly DocumentedOperation[] = Object.free
   { method: 'POST', path: '/console/api/admin/exchange-rate', sample: '/console/api/admin/exchange-rate', id: 'console.admin' },
   { method: 'POST', path: '/console/api/admin/plans', sample: '/console/api/admin/plans', id: 'console.admin' },
   { method: 'POST', path: '/console/api/admin/models', sample: '/console/api/admin/models', id: 'console.admin' },
+  { method: 'POST', path: '/console/api/admin/models/sync', sample: '/console/api/admin/models/sync', id: 'console.admin' },
   { method: 'POST', path: '/console/api/admin/models/policy', sample: '/console/api/admin/models/policy', id: 'console.admin' },
   { method: 'PUT', path: '/console/api/admin/models/{id}', sample: '/console/api/admin/models/lwrr-text', id: 'console.admin' },
   { method: 'DELETE', path: '/console/api/admin/models/{id}', sample: '/console/api/admin/models/lwrr-text', id: 'console.admin' },

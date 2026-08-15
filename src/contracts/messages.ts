@@ -7,7 +7,12 @@ const anthropicMessageSchema = z.object({
 
 const systemSchema = z.union([z.string().max(100000), z.array(z.unknown()).max(32)]);
 
-/** Bounded Anthropic Messages contract. `max_tokens` is required upstream. */
+/**
+ * Bounded Anthropic Messages contract. `max_tokens` is required upstream.
+ * Known fields are validated tightly; anything else passes through so real
+ * Anthropic/OpenAI-compatible clients keep working (see chat.ts for the
+ * rationale). Provider routing stays with OmniRoute.
+ */
 export const messagesRequestSchema = z
   .object({
     model: z.string().min(1).max(128),
@@ -23,7 +28,7 @@ export const messagesRequestSchema = z
     tool_choice: z.unknown().optional(),
     metadata: z.object({ user_id: z.string().max(256).optional() }).strict().optional()
   })
-  .strict();
+  .passthrough();
 
 export type MessagesRequest = z.infer<typeof messagesRequestSchema>;
 
@@ -36,6 +41,6 @@ export const countTokensRequestSchema = z
     tools: z.array(z.unknown()).max(32).optional(),
     tool_choice: z.unknown().optional()
   })
-  .strict();
+  .passthrough();
 
 export type CountTokensRequest = z.infer<typeof countTokensRequestSchema>;

@@ -100,10 +100,13 @@ function Composer({
   );
 }
 
-function Chat() {
+export function Chat() {
   const toast = useToast();
   const { key, save } = useApiKey();
-  const [model, setModel] = useState(() => localStorage.getItem(MODEL_STORAGE) ?? 'lwrr-text');
+  const [model, setModel] = useState(() => localStorage.getItem(MODEL_STORAGE) ?? '');
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsError, setModelsError] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [busy, setBusy] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(!key);
@@ -115,9 +118,57 @@ function Chat() {
     bottom.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages]);
 
+  // The model picker is populated from the gateway itself: GET /v1/models with
+  // the bearer key returns only the models the owner has made available to that
+  // tenant (plan/subscription group + per-tenant model_policies), so the
+  // dropdown can never offer a model the key cannot actually use.
+  useEffect(() => {
+    let cancelled = false;
+    if (!key) {
+      setAvailableModels([]);
+      setModelsError(null);
+      setModelsLoading(false);
+      return;
+    }
+    setModelsLoading(true);
+    setModelsError(null);
+    fetch('/v1/models', { headers: { authorization: `Bearer ${key}` } })
+      .then(async (response) => {
+        const payload = (await response.json().catch(() => null)) as
+          | { data?: Array<{ id: string }>; error?: { message?: string } }
+          | null;
+        if (cancelled) return;
+        if (!response.ok) {
+          throw new Error(payload?.error?.message ?? `Models unavailable (${response.status})`);
+        }
+        const ids = (payload?.data ?? []).map((entry) => entry.id);
+        setAvailableModels(ids);
+        // Keep the stored model when it is still allowed; otherwise fall back
+        // to the first allowed model instead of sending a stale id.
+        setModel((current) => (ids.includes(current) ? current : (ids[0] ?? '')));
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        setAvailableModels([]);
+        setModel('');
+        setModelsError((error as Error).message);
+      })
+      .finally(() => {
+        if (!cancelled) setModelsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [key]);
+
   async function send(text: string) {
     if (!key) {
       setSettingsOpen(true);
+      return;
+    }
+    if (!model) {
+      setSettingsOpen(true);
+      toast('Pick a model for this key first', 'bad');
       return;
     }
     const history: Message[] = [...messages, { role: 'user', content: text }];
@@ -264,12 +315,39 @@ function Chat() {
               placeholder="lwrr_live_…"
             />
           </Field>
-          <Field label="Model">
-            <input
+          <Field
+            label="Model"
+            hint={
+              !key
+                ? 'Save an API key to load the models it can use.'
+                : modelsLoading
+                  ? 'Loading models…'
+                  : modelsError
+                    ? modelsError
+                    : availableModels.length === 0
+                      ? 'This key has no models available. Check the admin dashboard.'
+                      : `${availableModels.length} model${availableModels.length === 1 ? '' : 's'} available for this key.`
+            }
+          >
+            <select
               className={inputClass}
               value={model}
-              onChange={(event) => setModel(event.target.value)}
-            />
+              disabled={!key || modelsLoading || availableModels.length === 0}
+              onChange={(event) => {
+                setModel(event.target.value);
+                localStorage.setItem(MODEL_STORAGE, event.target.value);
+              }}
+            >
+              {availableModels.length === 0 ? (
+                <option value="">No models available</option>
+              ) : (
+                availableModels.map((id) => (
+                  <option key={id} value={id}>
+                    {id}
+                  </option>
+                ))
+              )}
+            </select>
           </Field>
           <div className="flex justify-end gap-2">
             <Button variant="ghost" onClick={() => setSettingsOpen(false)}>
@@ -279,7 +357,6 @@ function Chat() {
               icon="check"
               onClick={() => {
                 save(draftKey.trim());
-                localStorage.setItem(MODEL_STORAGE, model);
                 setSettingsOpen(false);
                 toast('Connection saved');
               }}
@@ -293,10 +370,16 @@ function Chat() {
   );
 }
 
-createRoot(document.getElementById('root') as HTMLElement).render(
-  <StrictMode>
-    <ToastHost>
-      <Chat />
-    </ToastHost>
-  </StrictMode>
-);
+// Guard the mount so importing this module has no side effect off the page:
+// the DOM behavioural tests import `Chat` directly and there is no #root then,
+// while chat.html always provides one in the browser.
+const rootElement = document.getElementById('root');
+if (rootElement) {
+  createRoot(rootElement).render(
+    <StrictMode>
+      <ToastHost>
+        <Chat />
+      </ToastHost>
+    </StrictMode>
+  );
+}

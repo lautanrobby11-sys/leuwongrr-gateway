@@ -26,6 +26,7 @@ import { assertResolvedPublicEgress } from '../policy/egress.js';
 import { createSmtpTransport, sendOtpMail } from '../otp-smtp.js';
 import { ModelCatalog, ModelError, modelInputSchema, modelUpdateSchema } from '../models/catalog.js';
 import { ModelGroupCatalog, ModelGroupError, modelGroupInputSchema } from '../models/groups.js';
+import type { OmniRouteClient } from '../upstream.js';
 import type { Scope } from '../auth/api-keys.js';
 
 export interface ConsoleDeps {
@@ -35,6 +36,8 @@ export interface ConsoleDeps {
   billing: BillingService;
   payments: CryptomusClient;
   access: AccessVerifier | null;
+  /** Optional: model sync pulls the OmniRoute catalog over the loopback client. */
+  upstream?: OmniRouteClient;
   logger: Logger;
 }
 
@@ -812,6 +815,77 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
         return written;
       })();
       return reply.send({ model });
+    } catch (error) {
+      return handle(error, reply, req.id);
+    }
+  });
+
+  /**
+   * One-way, admin-triggered import from the OmniRoute catalog over the
+   * loopback client. The gateway never reads OmniRoute files or its database;
+   * it asks the same `/v1/models` surface an OpenAI client would. Imported
+   * models land **disabled** so an admin has to switch them on explicitly —
+   * a sync can never silently widen a tenant's entitlement.
+   */
+  app.post('/console/api/admin/models/sync', async (req, reply) => {
+    try {
+      const admin = await requireAdmin(req);
+      if (!deps.upstream) {
+        return fail(reply, 503, 'sync_unavailable', 'Upstream client is not configured', req.id);
+      }
+      const response = await deps.upstream.request('/v1/models', { method: 'GET' });
+      const body = (await response.json().catch(() => null)) as
+        | { data?: Array<{ id?: unknown }> }
+        | null;
+      if (!response.ok || !body || !Array.isArray(body.data)) {
+        return fail(reply, 502, 'sync_upstream_error', 'OmniRoute model list could not be read', req.id);
+      }
+
+      const known = new Set(models.list().map((model) => model.id));
+      const added: string[] = [];
+      const skipped: string[] = [];
+      for (const entry of body.data) {
+        const rawId = typeof entry?.id === 'string' ? entry.id : '';
+        const slug = rawId
+          .toLowerCase()
+          .replace(/[^a-z0-9-]+/g, '-')
+          .replace(/^-+|-+$/g, '')
+          .slice(0, 64);
+        if (!slug || slug.length < 2) {
+          skipped.push(rawId || '?');
+          continue;
+        }
+        if (known.has(slug)) {
+          skipped.push(slug);
+          continue;
+        }
+        try {
+          const written = models.create({
+            id: slug,
+            name: rawId.slice(0, 64) || slug,
+            provider: 'other',
+            inputPriceCents: 0,
+            outputPriceCents: 0,
+            cacheReadPriceCents: 0,
+            multimodalSupport: false,
+            upstreamModel: rawId.slice(0, 128) || 'auto',
+            enabled: false,
+            groupId: 'legacy-default'
+          });
+          known.add(written.id);
+          added.push(written.id);
+        } catch {
+          skipped.push(slug);
+        }
+      }
+      db.audit({
+        tenantId: admin.tenantId,
+        actorType: 'admin',
+        event: 'console.model.synced',
+        traceId: req.id,
+        metadata: { added: added.length, skipped: skipped.length }
+      });
+      return reply.send({ synced: true, added, skipped: skipped.length });
     } catch (error) {
       return handle(error, reply, req.id);
     }

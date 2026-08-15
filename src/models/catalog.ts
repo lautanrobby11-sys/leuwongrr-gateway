@@ -141,7 +141,7 @@ export class ModelCatalog {
           0,
           0,
           0,
-          input.enabled === false ? 0 : 1,
+          input.enabled === true ? 1 : 0,
           input.inputPriceCents,
           input.outputPriceCents,
           input.cacheReadPriceCents,

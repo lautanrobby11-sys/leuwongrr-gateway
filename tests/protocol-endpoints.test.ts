@@ -120,15 +120,19 @@ describe('protocol surfaces', () => {
     expect(active.upstreamCalls()).toBe(0);
   });
 
-  it('rejects unknown request fields before upstream cost', async () => {
-    const active = start({ id: 'unused' });
+  it('forwards unknown request fields to the upstream instead of rejecting them', async () => {
+    const active = start({ id: 'resp_mock', usage: { total_tokens: 25 } });
     const response = await active.app.inject({
       method: 'POST',
       url: '/v1/responses',
       headers: { authorization: `Bearer ${protocolToken(active)}` },
-      payload: { model: 'lwrr-text', input: 'hello', smuggled: true }
+      payload: { model: 'lwrr-text', input: 'hello', reasoning: { effort: 'high' }, store: true }
     });
-    expect(response.statusCode).toBe(400);
-    expect(active.upstreamCalls()).toBe(0);
+    // Standard OpenAI clients send fields the gateway does not interpret
+    // (logprobs, reasoning, store, ...). Those must reach OmniRoute, not be
+    // rejected by a strict schema (ADR-008 amendment).
+    expect(response.statusCode).toBe(200);
+    expect(active.upstreamCalls()).toBe(1);
+    expect(settledUnits(active)).toBe(25);
   });
 });

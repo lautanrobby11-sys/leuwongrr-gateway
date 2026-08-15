@@ -9,8 +9,13 @@ const messageSchema = z.object({
 });
 
 /**
- * Bounded OpenAI chat contract. Unknown top-level fields are rejected so a
- * caller cannot smuggle provider-specific switches past our policy layer.
+ * Bounded OpenAI chat contract. The fields the policy layer reads are validated
+ * tightly; anything else passes through so standard OpenAI clients (CLIs, IDEs,
+ * SDKs) keep working. A strict top-level schema rejected common fields such as
+ * `logprobs`, `reasoning_effort`, and `service_tier`, which broke the promised
+ * OpenAI compatibility for every real client. Provider routing stays with
+ * OmniRoute (ADR-001), so a passthrough field cannot bypass this gateway's
+ * policy: model, scope, budget, and concurrency are all decided here.
  */
 export const chatRequestSchema = z
   .object({
@@ -33,6 +38,6 @@ export const chatRequestSchema = z
     tool_choice: z.unknown().optional(),
     parallel_tool_calls: z.boolean().optional()
   })
-  .strict();
+  .passthrough();
 
 export type ChatRequest = z.infer<typeof chatRequestSchema>;

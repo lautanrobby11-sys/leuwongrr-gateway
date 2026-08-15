@@ -62,3 +62,58 @@ describe('multimode payment grants', () => {
     expect(() => billing.settlePaymentSnapshot(account.id, paymentId, { method: 'invalid' as never, balanceCents: 1000 })).toThrowError('payment_method_invalid');
   });
 });
+
+/**
+ * Release 2 custom token packs: a top-up snapshot carrying `durationHours`
+ * settles into a duration subscription (its own shelf life) instead of the
+ * permanent wallet, repeated purchases stack alongside existing packs, and a
+ * malformed duration or a missing plan is rejected.
+ */
+describe('duration pack settlement', () => {
+  it('settles a pack with a shelf life into a duration subscription', () => {
+    const { db, billing, account } = setup();
+    const paymentId = randomUUID();
+    db.prepare("INSERT INTO payments (id, account_id, order_id, purpose, amount_cents, status, entitlement_snapshot_json, balance_cents, token_amount, created_at) VALUES (?, ?, ?, 'topup', 210, 'paid', '{}', 0, 0, datetime('now'))").run(paymentId, account.id, paymentId);
+
+    const result = billing.settlePaymentSnapshot(account.id, paymentId, {
+      method: 'token_pack',
+      planId: 'pack',
+      tokens: 1_000_000,
+      balanceCents: 0,
+      amountCents: 210,
+      durationHours: 24
+    });
+    expect(result.tokensGranted).toBe(1_000_000);
+    expect(result.centsGranted).toBe(0);
+    expect(result.subscription?.durationHours).toBe(24);
+    expect(result.subscription?.includedTokens).toBe(1_000_000);
+    // The allowance lives in the subscription row, not the permanent wallet.
+    expect((db.prepare('SELECT COALESCE(SUM(balance_tokens), 0) AS n FROM wallets WHERE account_id = ?').get(account.id) as { n: number }).n).toBe(0);
+    expect((db.prepare("SELECT tokens FROM ledger_entries WHERE account_id = ? AND source = 'subscription' AND reference = ?").get(account.id, result.subscription!.id) as { tokens: number }).tokens).toBe(1_000_000);
+  });
+
+  it('stacks repeated packs so each keeps its own countdown', () => {
+    const { db, billing, account } = setup();
+    const ids = [randomUUID(), randomUUID(), randomUUID()];
+    for (const id of ids) {
+      db.prepare("INSERT INTO payments (id, account_id, order_id, purpose, amount_cents, status, entitlement_snapshot_json, balance_cents, token_amount, created_at) VALUES (?, ?, ?, 'topup', 210, 'paid', '{}', 0, 0, datetime('now'))").run(id, account.id, id);
+      billing.settlePaymentSnapshot(account.id, id, { method: 'token_pack', planId: 'pack', tokens: 1_000_000, balanceCents: 0, amountCents: 210, durationHours: 24 });
+    }
+    const packs = db.prepare("SELECT id FROM subscriptions WHERE account_id = ? AND status = 'active' AND method = 'token_pack'").all(account.id);
+    expect(packs).toHaveLength(3);
+  });
+
+  it('rejects a duration pack without a plan', () => {
+    const { billing, account, paymentId } = createPayment();
+    expect(() =>
+      billing.settlePaymentSnapshot(account.id, paymentId, { method: 'token_pack', tokens: 1_000_000, balanceCents: 0, amountCents: 210, durationHours: 24 })
+    ).toThrowError('payment_plan_missing');
+  });
+
+  it('rejects an out-of-range shelf life', () => {
+    const { billing, account, paymentId } = createPayment();
+    expect(() =>
+      billing.settlePaymentSnapshot(account.id, paymentId, { method: 'token_pack', planId: 'pack', tokens: 1_000_000, balanceCents: 0, amountCents: 210, durationHours: 0 })
+    ).toThrowError('payment_amount_invalid');
+  });
+});

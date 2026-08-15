@@ -15,12 +15,14 @@ describe('member plan catalog', () => {
 
     const plans = new BillingService(db.db).listMemberPlans();
     expect(plans[0]).toMatchObject({ id: 'value-plan', modelGroupId: 'value' });
+    // 1.25x applied to 101/201/51: 126.25/251.25/63.75, each rounded up to the
+    // nearest 0.0001 cent (whole results have no fraction to round).
     expect(plans[0].eligibleModels[0]).toMatchObject({
       id: 'value-text',
       inputPriceCents: 101,
-      effectiveInputPriceCents: 127,
-      effectiveOutputPriceCents: 252,
-      effectiveCacheReadPriceCents: 64
+      effectiveInputPriceCents: 126.25,
+      effectiveOutputPriceCents: 251.25,
+      effectiveCacheReadPriceCents: 63.75
     });
     expect(plans[0].eligibleModels[0]).not.toHaveProperty('upstreamModel');
   });

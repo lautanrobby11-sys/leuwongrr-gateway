@@ -79,6 +79,18 @@ function nonNegativeInteger(value: string | undefined, name: string): number {
   return parsed;
 }
 
+/**
+ * Per-million prices are legitimately fractional upstream ($0.002/1M), so the
+ * price flags accept any finite non-negative value; the shared plan schema
+ * applies the upper bound. Limit flags deliberately stay integer-only through
+ * nonNegativeInteger — enforcement state cannot carry decimals.
+ */
+function nonNegativePrice(value: string | undefined, name: string): number {
+  const parsed = Number(requireOption(value, name));
+  if (!Number.isFinite(parsed) || parsed < 0) fail(`--${name} must be a non-negative number`);
+  return parsed;
+}
+
 function parseModelList(raw: string): string[] {
   const requested = raw
     .split(',')
@@ -248,9 +260,9 @@ try {
       const candidate = planInputSchema.safeParse({
         id: requireOption(values.plan, 'plan'),
         name: requireOption(values.name, 'name'),
-        monthlyPriceCents: nonNegativeInteger(values['price-cents'], 'price-cents'),
+        monthlyPriceCents: nonNegativePrice(values['price-cents'], 'price-cents'),
         includedTokens: nonNegativeInteger(values['included-tokens'], 'included-tokens'),
-        overageCentsPerMillion: nonNegativeInteger(values['overage-cents'], 'overage-cents'),
+        overageCentsPerMillion: nonNegativePrice(values['overage-cents'], 'overage-cents'),
         maxConcurrent: positiveInteger(values['max-concurrent'], 'max-concurrent'),
         rateLimitRpm: positiveInteger(values.rpm, 'rpm'),
         dailyBudgetUnits: nonNegativeInteger(values['daily-units'], 'daily-units'),

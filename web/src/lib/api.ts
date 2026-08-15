@@ -11,7 +11,16 @@ export interface Plan {
   active: boolean;
   /** The model group the plan entitles. Read/written with the row. */
   modelGroupId?: string | null;
+  /** Release 2 purchase fields; the backend supplies defaults when absent. */
+  priceCents?: number;
+  durationHours?: number | null;
+  timerBasis?: 'from_payment' | 'from_first_use';
+  resetsAllowed?: number;
+  method?: PlanMethod;
+  tierLabel?: string;
 }
+
+export type PlanMethod = 'rolling_time' | 'token_pack' | 'monetary_pack' | 'payg';
 
 export interface Subscription {
   id: string;
@@ -22,6 +31,23 @@ export interface Subscription {
   includedTokens: number;
   usedTokens: number;
   autoRenew: boolean;
+}
+
+/** One live subscription as listed by the member subscriptions endpoint. */
+export interface SubscriptionInfo {
+  id: string;
+  planId: string;
+  planName: string;
+  tierLabel: string;
+  status: string;
+  method: string | null;
+  includedTokens: number;
+  usedTokens: number;
+  durationHours: number | null;
+  timerBasis: string | null;
+  activatedAt: string | null;
+  expiresAt: string | null;
+  resetsRemaining: number;
 }
 
 export interface BillingSummary {
@@ -210,6 +236,19 @@ export const api = {
       post<{ payment_url: string; tokens: number }>('/console/api/member/topup', {
         planId,
         amountCents
+      }),
+    /** Custom token pack: any whole-million quantity with a chosen shelf life. */
+    customTopup: (planId: string, tokenQuantity: number, durationHours: number) =>
+      post<{ payment_url: string; tokens: number; order_id: string }>(
+        '/console/api/member/custom-topup',
+        { planId, tokenQuantity, durationHours }
+      ),
+    /** Every live subscription, including stacked token packs. */
+    subscriptions: () =>
+      get<{ subscriptions: SubscriptionInfo[] }>('/console/api/member/subscriptions'),
+    resetSubscription: (subscriptionId: string) =>
+      post<{ subscription: Subscription }>('/console/api/member/subscription/reset', {
+        subscriptionId
       })
   },
 
@@ -254,8 +293,8 @@ export const api = {
       request<{ deleted: boolean }>(`/console/api/admin/models/${encodeURIComponent(id)}`, {
         method: 'DELETE'
       }),
-    syncModels: () =>
-      post<{ synced: boolean; added: string[]; skipped: number }>('/console/api/admin/models/sync', {}),
+    syncModels: (options: { reset?: boolean } = {}) =>
+      post<{ synced: boolean; added: string[]; skipped: number; removed: string[]; keptProtected: string[]; reset: boolean }>('/console/api/admin/models/sync', options),
     setModelPolicy: (tenantId: string, modelId: string, enabled: boolean) =>
       post<{ updated: boolean }>('/console/api/admin/models/policy', { tenantId, modelId, enabled }),
     modelGroups: () =>

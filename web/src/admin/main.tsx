@@ -17,6 +17,7 @@ import {
   Cell,
   Field,
   Modal,
+  PriceInput,
   Shell,
   Spinner,
   Stat,
@@ -99,13 +100,23 @@ function PlanEditor({
         />
       </Field>
       <Field label="Monthly price (cents)">
-        <input {...numeric('monthlyPriceCents')} />
+        <PriceInput
+          label="Monthly price (cents)"
+          value={plan.monthlyPriceCents}
+          onChange={(value) => onChange({ ...plan, monthlyPriceCents: value })}
+          placeholder="0.002"
+        />
       </Field>
       <Field label="Included tokens">
         <input {...numeric('includedTokens')} />
       </Field>
       <Field label="Pay as you go (cents per million)" hint="Also sets the top-up exchange rate">
-        <input {...numeric('overageCentsPerMillion')} />
+        <PriceInput
+          label="Pay as you go (cents per million)"
+          value={plan.overageCentsPerMillion}
+          onChange={(value) => onChange({ ...plan, overageCentsPerMillion: value })}
+          placeholder="0.002"
+        />
       </Field>
       <Field label="Daily budget units">
         <input {...numeric('dailyBudgetUnits')} />
@@ -132,6 +143,90 @@ function PlanEditor({
                 {group.name}
               </option>
             ))}
+          </select>
+        </Field>
+      </div>
+      <div className="space-y-3 rounded-lg border border-border/70 p-3 sm:col-span-2">
+        <p className="text-xs font-medium text-muted">
+          Subscription side — pick how time and tokens are sold to a member
+        </p>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Plan method" hint="Rolling time sells a window; token packs sell an allowance">
+            <select
+              className={inputClass}
+              value={plan.method ?? 'token_pack'}
+              onChange={(event) => onChange({ ...plan, method: event.target.value as Plan['method'] })}
+            >
+              <option value="rolling_time">rolling_time — time window</option>
+              <option value="token_pack">token_pack — token allowance</option>
+              <option value="monetary_pack">monetary_pack — cents credit</option>
+              <option value="payg">payg — metered</option>
+            </select>
+          </Field>
+          <Field label="Tier label" hint="Shown in the member console, e.g. 'Starter'">
+            <input
+              className={inputClass}
+              value={plan.tierLabel ?? ''}
+              onChange={(event) => onChange({ ...plan, tierLabel: event.target.value })}
+              placeholder="Starter"
+            />
+          </Field>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-3">
+          <Field label="Purchase price (cents)" hint="Charged per purchase when the plan has a duration; 0 subscribes instantly">
+            <PriceInput
+              label="Purchase price in cents"
+              value={plan.priceCents ?? 0}
+              onChange={(value) => onChange({ ...plan, priceCents: value })}
+              placeholder="0"
+            />
+          </Field>
+          <Field label="Duration (hours)" hint="Rolling window or pack shelf life; blank sells indefinitely">
+            <input
+              className={inputClass}
+              type="number"
+              min={1}
+              max={8760}
+              value={plan.durationHours ?? ''}
+              onChange={(event) =>
+                onChange({
+                  ...plan,
+                  durationHours: event.target.value === '' ? null : Number(event.target.value)
+                })
+              }
+            />
+            <div className="mt-1.5 flex gap-1.5">
+              {[24, 168, 720].map((hours) => (
+                <button
+                  key={hours}
+                  type="button"
+                  className="rounded-md border border-border px-2 py-0.5 text-xs text-muted transition-colors hover:text-ink"
+                  onClick={() => onChange({ ...plan, durationHours: hours })}
+                >
+                  {hours === 24 ? '24h' : hours === 168 ? '7d' : '30d'}
+                </button>
+              ))}
+            </div>
+          </Field>
+          <Field label="Timer resets allowed" hint="How often a member may restart the window">
+            <input
+              className={inputClass}
+              type="number"
+              min={0}
+              max={52}
+              value={plan.resetsAllowed ?? 0}
+              onChange={(event) => onChange({ ...plan, resetsAllowed: Number(event.target.value) })}
+            />
+          </Field>
+        </div>
+        <Field label="Timer basis" hint="When the window's countdown starts">
+          <select
+            className={inputClass}
+            value={plan.timerBasis ?? 'from_payment'}
+            onChange={(event) => onChange({ ...plan, timerBasis: event.target.value as Plan['timerBasis'] })}
+          >
+            <option value="from_payment">from payment</option>
+            <option value="from_first_use">from first use</option>
           </select>
         </Field>
       </div>
@@ -162,6 +257,42 @@ const BLANK_PLAN: Plan = {
   active: true
 };
 
+/**
+ * While a decimal is being typed, a price field briefly holds NaN, so Save must
+ * stay disabled: submitting in that state would ship a non-number the route
+ * answers with a 400, and the button would read as usable while the payload is
+ * not. The predecimal form only ever needed the id/name check because the
+ * number inputs could not go fractional.
+ */
+function planSaveDisabled(plan: Plan): boolean {
+  const values = [
+    plan.monthlyPriceCents,
+    plan.includedTokens,
+    plan.overageCentsPerMillion,
+    plan.maxConcurrent,
+    plan.rateLimitRpm,
+    plan.dailyBudgetUnits,
+    plan.priceCents ?? 0,
+    plan.resetsAllowed ?? 0
+  ];
+  return (
+    plan.id.trim().length === 0 ||
+    plan.name.trim().length === 0 ||
+    values.some((value) => !Number.isFinite(value)) ||
+    (plan.durationHours !== null && plan.durationHours !== undefined && !Number.isFinite(plan.durationHours))
+  );
+}
+
+function modelSaveDisabled(model: ModelInput): boolean {
+  return (
+    model.id.trim().length === 0 ||
+    model.name.trim().length === 0 ||
+    [model.inputPriceCents, model.outputPriceCents, model.cacheReadPriceCents].some(
+      (value) => !Number.isFinite(value)
+    )
+  );
+}
+
 const BLANK_MODEL: ModelInput = {
   id: '',
   name: '',
@@ -188,14 +319,9 @@ function ModelEditor({
   onChange: (model: ModelInput) => void;
   isEdit: boolean;
 }) {
-  const numeric = (key: keyof ModelInput) => ({
-    className: inputClass,
-    type: 'number',
-    min: 0,
-    value: String(model[key] as number),
-    onChange: (event: React.ChangeEvent<HTMLInputElement>) =>
-      onChange({ ...model, [key]: Number(event.target.value) })
-  });
+  // Price fields render through PriceInput so fractional rates stay typeable;
+  // a plain numeric() binding snapped `0.` to `0` and made sub-cent prices
+  // impossible to enter.
 
   return (
     <div className="grid gap-4 sm:grid-cols-2">
@@ -254,14 +380,29 @@ function ModelEditor({
           ))}
         </select>
       </Field>
-      <Field label="Input (₵ / 1M)">
-        <input {...numeric('inputPriceCents')} />
+      <Field label="Input (₵ / 1M)" hint="Decimals allowed — vendors quote sub-cent rates">
+        <PriceInput
+          label="Input price per million tokens"
+          value={model.inputPriceCents}
+          onChange={(value) => onChange({ ...model, inputPriceCents: value })}
+          placeholder="0.002"
+        />
       </Field>
-      <Field label="Output (₵ / 1M)">
-        <input {...numeric('outputPriceCents')} />
+      <Field label="Output (₵ / 1M)" hint="Decimals allowed — vendors quote sub-cent rates">
+        <PriceInput
+          label="Output price per million tokens"
+          value={model.outputPriceCents}
+          onChange={(value) => onChange({ ...model, outputPriceCents: value })}
+          placeholder="0.002"
+        />
       </Field>
-      <Field label="Cache read (₵ / 1M)">
-        <input {...numeric('cacheReadPriceCents')} />
+      <Field label="Cache read (₵ / 1M)" hint="Decimals allowed — vendors quote sub-cent rates">
+        <PriceInput
+          label="Cache read price per million tokens"
+          value={model.cacheReadPriceCents}
+          onChange={(value) => onChange({ ...model, cacheReadPriceCents: value })}
+          placeholder="0.002"
+        />
       </Field>
       <Field label="Multimodal">
         <select
@@ -327,6 +468,10 @@ export function Admin() {
   const [removingModel, setRemovingModel] = useState<string | null>(null);
   const [modelFilter, setModelFilter] = useState('');
   const [syncingModels, setSyncingModels] = useState(false);
+  // Reset mode: also removes catalog models OmniRoute no longer lists, so the
+  // catalog stays in step with upstream across repeated syncs. Protected by a
+  // toggle because the extra removals are irreversible from the console alone.
+  const [syncReset, setSyncReset] = useState(false);
   const [creditFor, setCreditFor] = useState<AdminAccount | null>(null);
   const [creditTokens, setCreditTokens] = useState(100_000);
   const [creditReason, setCreditReason] = useState('goodwill');
@@ -425,16 +570,25 @@ export function Admin() {
     }
   }
 
-  async function syncModels() {
+  async function syncModels(reset: boolean) {
     setSyncingModels(true);
     try {
-      const result = await api.admin.syncModels();
+      const result = await api.admin.syncModels({ reset });
       const added = result.added.length;
-      toast(
-        added > 0
-          ? `${added} model${added === 1 ? '' : 's'} synced from OmniRoute`
-          : 'No new models from OmniRoute'
-      );
+      const removed = result.removed.length;
+      if (reset) {
+        toast(
+          removed > 0 || added > 0
+            ? `Synced: ${added} added, ${removed} removed from OmniRoute`
+            : 'Catalog already matches OmniRoute'
+        );
+      } else {
+        toast(
+          added > 0
+            ? `${added} model${added === 1 ? '' : 's'} synced from OmniRoute`
+            : 'No new models from OmniRoute'
+        );
+      }
       await load();
     } catch (error) {
       toast(error instanceof ApiError ? error.message : 'Could not sync models from OmniRoute', 'bad');
@@ -582,18 +736,29 @@ export function Admin() {
                 title="Model catalog"
                 subtitle="Registered in the gateway and served through OmniRoute"
                 action={
-                  <div className="flex items-center gap-2">
-                    <Button
-                      variant="outline"
-                      busy={syncingModels}
-                      disabled={syncingModels}
-                      onClick={() => void syncModels()}
-                    >
-                      Sync from OmniRoute
-                    </Button>
-                    <Button icon="plus" onClick={() => openModelEditor()}>
-                      Add model
-                    </Button>
+                  <div className="flex flex-col items-end gap-1.5">
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        busy={syncingModels}
+                        disabled={syncingModels}
+                        onClick={() => void syncModels(syncReset)}
+                      >
+                        {syncReset ? 'Sync & reset catalog' : 'Sync from OmniRoute'}
+                      </Button>
+                      <Button icon="plus" onClick={() => openModelEditor()}>
+                        Add model
+                      </Button>
+                    </div>
+                    <label className="flex items-center gap-2 text-xs text-muted" title="Also removes models OmniRoute no longer lists. Models an active plan still uses are kept.">
+                      <input
+                        type="checkbox"
+                        className="accent-brand"
+                        checked={syncReset}
+                        onChange={(event) => setSyncReset(event.target.checked)}
+                      />
+                      Reconcile with upstream (remove stale models)
+                    </label>
                   </div>
                 }
               >
@@ -805,7 +970,7 @@ export function Admin() {
                   className="w-full"
                   icon="check"
                   busy={busy}
-                  disabled={editing.id.trim().length === 0 || editing.name.trim().length === 0}
+                  disabled={planSaveDisabled(editing)}
                   onClick={() => void savePlan()}
                 >
                   Save plan
@@ -831,7 +996,7 @@ export function Admin() {
                   className="w-full"
                   icon="check"
                   busy={busy}
-                  disabled={modelEditor.id.trim().length === 0 || modelEditor.name.trim().length === 0}
+                  disabled={modelSaveDisabled(modelEditor)}
                   onClick={() => void saveModel()}
                 >
                   Save model

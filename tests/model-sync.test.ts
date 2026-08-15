@@ -175,4 +175,98 @@ describe('admin model sync from OmniRoute', () => {
     });
     expect(response.statusCode).toBe(401);
   });
+
+  /**
+   * Reset mode reconciles the catalog with upstream: a model whose id no
+   * longer appears in OmniRoute is removed. Without the toggle, a sync stays
+   * additive and old models survive, because the extra removals are
+   * irreversible from the console.
+   */
+  it('keeps stale models when syncing without reset', async () => {
+    const active = start({ object: 'list', data: [{ id: 'lwrr-text', object: 'model' }] });
+    // A model that has drifted out of the upstream catalog.
+    active.db.db
+      .prepare(
+        "INSERT INTO models (id, public_id, display_name, provider, multimodal, input_price_per_m, output_price_per_m, cache_read_price_per_m, cache_write_price_per_m, enabled, input_price_cents, output_price_cents, cache_read_price_cents, upstream_model, group_id, created_at, updated_at) VALUES ('stale-id', 'stale-model', 'Stale Model', 'other', 0, 0, 0, 0, 0, 0, 0, 0, 0, 'stale', 'legacy-default', datetime('now'), datetime('now'))"
+      )
+      .run();
+    const response = await active.app.inject({
+      method: 'POST',
+      url: '/console/api/admin/models/sync',
+      headers,
+      payload: {}
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as { added: string[]; removed: string[]; reset: boolean };
+    expect(body.removed).toEqual([]);
+    expect(body.added).toEqual([]);
+    const listed = await active.app.inject({ method: 'GET', url: '/console/api/admin/models', headers });
+    expect((listed.json() as { catalog: Array<{ id: string }> }).catalog.map((model) => model.id)).toEqual(
+      expect.arrayContaining(['stale-model'])
+    );
+  });
+
+  it('removes stale models and reports them on reset', async () => {
+    const active = start({ object: 'list', data: [{ id: 'lwrr-text', object: 'model' }] });
+    active.db.db
+      .prepare(
+        "INSERT INTO models (id, public_id, display_name, provider, multimodal, input_price_per_m, output_price_per_m, cache_read_price_per_m, cache_write_price_per_m, enabled, input_price_cents, output_price_cents, cache_read_price_cents, upstream_model, group_id, created_at, updated_at) VALUES ('stale-id', 'stale-model', 'Stale Model', 'other', 0, 0, 0, 0, 0, 0, 0, 0, 0, 'stale', 'legacy-default', datetime('now'), datetime('now'))"
+      )
+      .run();
+    const response = await active.app.inject({
+      method: 'POST',
+      url: '/console/api/admin/models/sync',
+      headers,
+      payload: { reset: true }
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as { added: string[]; removed: string[]; keptProtected: string[]; reset: boolean };
+    expect(body.removed).toEqual(['stale-model']);
+    expect(body.keptProtected).toEqual([]);
+    expect(body.reset).toBe(true);
+    const listed = await active.app.inject({ method: 'GET', url: '/console/api/admin/models', headers });
+    expect((listed.json() as { catalog: Array<{ id: string }> }).catalog.map((model) => model.id)).toEqual(['lwrr-text']);
+  });
+
+  it('protects a model an active plan still entitles during reset', async () => {
+    const active = start({ object: 'list', data: [{ id: 'lwrr-text', object: 'model' }] });
+    active.db.db
+      .prepare(
+        "INSERT INTO models (id, public_id, display_name, provider, multimodal, input_price_per_m, output_price_per_m, cache_read_price_per_m, cache_write_price_per_m, enabled, input_price_cents, output_price_cents, cache_read_price_cents, upstream_model, group_id, created_at, updated_at) VALUES ('protected-id', 'protected-model', 'Protected Model', 'other', 0, 0, 0, 0, 0, 1, 0, 0, 0, 'protected', 'legacy-default', datetime('now'), datetime('now'))"
+      )
+      .run();
+    // An active plan still references the drifting model, so the entitlement
+    // must win against the reconciliation.
+    active.db.db
+      .prepare(
+        `INSERT INTO plans (id, name, monthly_price_cents, included_tokens, overage_cents_per_million, max_concurrent, rate_limit_rpm, daily_budget_units, models_json, active, updated_at)
+         VALUES ('plan-a', 'Plan A', 100, 1000, 1, 1, 1, 1, ?, 1, datetime('now'))`
+      )
+      .run(JSON.stringify(['protected-model']));
+    const response = await active.app.inject({
+      method: 'POST',
+      url: '/console/api/admin/models/sync',
+      headers,
+      payload: { reset: true }
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as { added: string[]; removed: string[]; keptProtected: string[] };
+    expect(body.removed).toEqual([]);
+    expect(body.keptProtected).toEqual(['protected-model']);
+    const listed = await active.app.inject({ method: 'GET', url: '/console/api/admin/models', headers });
+    expect((listed.json() as { catalog: Array<{ id: string }> }).catalog.map((model) => model.id)).toEqual(
+      expect.arrayContaining(['protected-model', 'lwrr-text'])
+    );
+  });
+
+  it('rejects a sync payload with unknown fields', async () => {
+    const active = start({ object: 'list', data: [] });
+    const response = await active.app.inject({
+      method: 'POST',
+      url: '/console/api/admin/models/sync',
+      headers,
+      payload: { reset: 'yes' }
+    });
+    expect(response.statusCode).toBe(400);
+  });
 });

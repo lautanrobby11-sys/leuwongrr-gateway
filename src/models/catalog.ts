@@ -13,18 +13,20 @@ export const MODEL_PROVIDERS = ['openai', 'anthropic', 'google', 'meta', 'other'
 
 /**
  * One definition of what a model entry may contain, shared by the admin console
- * route and (in the future) the operator CLI. Numeric bounds are plan-shaped:
- * prices are cents per million tokens, never negative, and small enough that a
- * typo cannot produce an absurd invoice.
+ * route and (in the future) the operator CLI. Prices are cents per million
+ * tokens and are allowed to carry decimals: upstream vendors quote rates like
+ * $0.0025/1M tokens, and the schema used to reject anything under a whole cent.
+ * The INTEGER-affinity column stores a fractional value accurately when it fits
+ * in a REAL, so the bound stays a magnitude check rather than `.int()`.
  */
 export const modelInputSchema = z
   .object({
     id: z.string().regex(/^[a-z0-9-]{2,64}$/),
     name: z.string().min(1).max(64),
     provider: z.enum(MODEL_PROVIDERS),
-    inputPriceCents: z.number().finite().int().min(0).max(1_000_000),
-    outputPriceCents: z.number().finite().int().min(0).max(1_000_000),
-    cacheReadPriceCents: z.number().finite().int().min(0).max(1_000_000),
+    inputPriceCents: z.number().finite().min(0).max(1_000_000),
+    outputPriceCents: z.number().finite().min(0).max(1_000_000),
+    cacheReadPriceCents: z.number().finite().min(0).max(1_000_000),
     multimodalSupport: z.boolean(),
     // Vendor paths like fireworks' account-qualified route can exceed 64
     // characters; a 64-cap rejected those models whenever the console saved

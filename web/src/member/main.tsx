@@ -6,7 +6,8 @@ import {
   ApiError,
   type BillingSummary,
   type LedgerEntry,
-  type Plan
+  type Plan,
+  type SubscriptionInfo
 } from '../lib/api';
 import { Icon, type IconName } from '../components/icons';
 import {
@@ -30,6 +31,51 @@ import {
 } from '../components/ui';
 import { dateTime, daysUntil, money, shortDate, tokens } from '../lib/format';
 import '../styles.css';
+
+/**
+ * Parses a token-quantity input that the operator types digit by digit. It
+ * accepts partial states like "12." so a controlled numeric field never loses
+ * what was just typed. Returns NaN for anything the engine cannot spend, which
+ * keeps the purchase button disabled instead of silently buying zero.
+ */
+function parseTokenInput(raw: string): number {
+  const trimmed = raw.trim();
+  if (trimmed === '' || trimmed === '0.') return Number.NaN;
+  return Number(trimmed);
+}
+
+/**
+ * Mirrors the server's pricing preview: the plan's pay-as-you-go rate plus a
+ * 5% convenience markup, rounded up to whole cents. The actual charge is
+ * computed on the server; this only drives the on-screen estimate.
+ */
+function customTokenPriceCents(overageCentsPerMillion: number, tokensQuantity: number): number {
+  if (!Number.isFinite(overageCentsPerMillion) || overageCentsPerMillion <= 0) return Number.NaN;
+  if (!Number.isSafeInteger(tokensQuantity) || tokensQuantity <= 0) return Number.NaN;
+  return Math.ceil((tokensQuantity / 1_000_000) * overageCentsPerMillion * 1.05);
+}
+
+/** Human label for a pack shelf life. */
+function hoursLabel(hours: number): string {
+  if (hours === 24) return '1 day';
+  if (hours % 24 === 0) {
+    const days = hours / 24;
+    if (days === 7) return '1 week';
+    if (days === 30) return '1 month';
+    return `${days} days`;
+  }
+  return `${hours} hours`;
+}
+
+/** The shelf lives sold alongside custom token quantities. */
+export const PACK_DURATIONS: readonly { hours: number; label: string }[] = [
+  { hours: 24, label: 'Daily · 24 h' },
+  { hours: 24 * 7, label: 'Weekly · 7 days' },
+  { hours: 24 * 30, label: 'Monthly · 30 days' }
+];
+
+/** Minimum custom token purchase, one whole million. */
+const MIN_CUSTOM_TOKENS = 1_000_000;
 
 const NAV: NavItem[] = [
   { id: 'overview', label: 'Overview', icon: 'dashboard' },
@@ -94,14 +140,34 @@ function Member() {
   const [keyName, setKeyName] = useState('');
   const [keyScopes, setKeyScopes] = useState<string[]>(['models:read', 'chat:write']);
   const [issuedKey, setIssuedKey] = useState<string | null>(null);
-  const [topupAmount, setTopupAmount] = useState(10);
   const [busy, setBusy] = useState(false);
+  // Release 2 custom token builder state: the operator picks a quantity (whole
+  // millions, minimum one) and a shelf life (daily / weekly / monthly).
+  const [packQuantity, setPackQuantity] = useState('1');
+  const [packDuration, setPackDuration] = useState<number>(24);
+  const [packPlanId, setPackPlanId] = useState<string | null>(null);
+  // Every live subscription, including stacked token packs; the summary only
+  // carries the newest one.
+  const [subscriptions, setSubscriptions] = useState<SubscriptionInfo[]>([]);
+  const [resettingId, setResettingId] = useState<string | null>(null);
+
+  async function loadSubscriptions() {
+    try {
+      const list = await api.member.subscriptions();
+      setSubscriptions(list.subscriptions);
+    } catch {
+      // The overview already surfaces the newest subscription; a list failure
+      // merely hides the stacked-pack detail.
+      setSubscriptions([]);
+    }
+  }
 
   async function load() {
     setLoading(true);
     try {
       const [overview, usage, planList, keyList, paymentList] = await Promise.all([api.member.overview(), api.member.usage(), api.member.plans(), api.member.keys(), api.member.payments()]);
       setBilling(overview.billing); setLedger(overview.ledger); setAccount(overview.account); setDays(usage.days); setPlans(planList.plans); setKeys(keyList.keys); setPayments(paymentList.payments);
+      await loadSubscriptions();
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) { window.location.href = '/login'; return; }
       toast(error instanceof ApiError ? error.message : 'Could not load your account', 'bad');
@@ -124,13 +190,55 @@ function Member() {
     finally { setBusy(false); }
   }
 
-  async function topup(plan: Plan) {
+  /** Buy a custom token pack: quantity + shelf life, price = PAYG rate + 5%. */
+  async function buyPack(plan: Plan) {
+    const quantity = parseTokenInput(packQuantity);
+    if (!Number.isFinite(quantity) || quantity < MIN_CUSTOM_TOKENS) return;
     setBusy(true);
-    try { const result = await api.member.topup(plan.id, Math.round(topupAmount * 100)); window.location.href = result.payment_url; }
-    catch (error) { toast(error instanceof ApiError ? error.message : 'Could not open the invoice', 'bad'); setBusy(false); }
+    try {
+      const result = await api.member.customTopup(plan.id, quantity, packDuration);
+      window.location.href = result.payment_url;
+    } catch (error) {
+      toast(error instanceof ApiError ? error.message : 'Could not open the invoice', 'bad');
+      setBusy(false);
+    }
+  }
+
+  /** Resets a running subscription timer, consuming one of its allowances. */
+  async function resetTimer(subscriptionId: string) {
+    setResettingId(subscriptionId);
+    try {
+      await api.member.resetSubscription(subscriptionId);
+      toast('Timer reset');
+      await load();
+    } catch (error) {
+      toast(error instanceof ApiError ? error.message : 'Could not reset the timer', 'bad');
+    } finally {
+      setResettingId(null);
+    }
   }
 
   const paygPlan = plans.find((plan) => plan.overageCentsPerMillion > 0) ?? plans[0] ?? null;
+  // Plans are shown in two groups: rolling-time subscriptions (no token
+  // allowance, billed for a window) and token packs (an allowance to spend).
+  const rollingPlans = plans.filter((plan) => (plan.method ?? 'token_pack') === 'rolling_time');
+  const packPlans = plans.filter((plan) => (plan.method ?? 'token_pack') !== 'rolling_time');
+
+  // The plan the pack builder prices against: honour an explicit selection,
+  // otherwise fall back to the one with a usable PAYG rate.
+  const builderPlan =
+    packPlans.find((plan) => plan.id === packPlanId) ?? paygPlan;
+  const packQuantityNum = parseTokenInput(packQuantity);
+  const packPrice = builderPlan
+    ? customTokenPriceCents(builderPlan.overageCentsPerMillion, packQuantityNum)
+    : Number.NaN;
+  const packValid =
+    !!builderPlan &&
+    Number.isInteger(packQuantityNum) &&
+    packQuantityNum >= MIN_CUSTOM_TOKENS &&
+    packQuantityNum <= 1_000_000_000 &&
+    Number.isFinite(packPrice) &&
+    packPrice > 0;
   return (
     <Shell title="LeuwongRR" subtitle={account?.email} items={NAV} active={tab} onSelect={setTab} onSignOut={() => void api.logout().then(() => (window.location.href = '/login'))}>
       {loading || !billing ? <Spinner label="Loading your account" /> : <>
@@ -141,8 +249,64 @@ function Member() {
           <Card title="Recent ledger" subtitle="Every grant, purchase, and debit"><Table headers={['When', 'Type', 'Source', 'Tokens', 'Balance']} empty={ledger.length === 0}>{ledger.map((entry) => <tr key={entry.id}><Cell className="whitespace-nowrap text-muted">{dateTime(entry.createdAt)}</Cell><Cell><Badge tone={entry.tokens >= 0 ? 'good' : 'neutral'}>{entry.kind}</Badge></Cell><Cell className="text-muted">{entry.source}</Cell><Cell className={cx('tabular-nums font-medium', entry.tokens >= 0 ? 'text-good' : 'text-ink')}>{entry.tokens >= 0 ? '+' : ''}{tokens(entry.tokens)}</Cell><Cell className="tabular-nums text-muted">{tokens(entry.balanceAfter)}</Cell></tr>)}</Table></Card>
         </div>}
         {tab === 'usage' && <div className="space-y-4"><Card title="Daily usage" subtitle="Settled units, last 30 days"><UsageChart days={days} /></Card><Card title="Payments" subtitle="Invoices raised through Cryptomus"><Table headers={['Order', 'Purpose', 'Tokens', 'Amount', 'Status', 'Created']} empty={payments.length === 0}>{payments.map((payment) => <tr key={String(payment.order_id)}><Cell className="font-mono text-xs text-muted">{String(payment.order_id).slice(0, 18)}</Cell><Cell>{String(payment.purpose)}</Cell><Cell className="tabular-nums">{tokens(Number(payment.tokens ?? 0))}</Cell><Cell className="tabular-nums">{money(Number(payment.amount_cents ?? 0))}</Cell><Cell><Badge tone={String(payment.status).startsWith('paid') ? 'good' : String(payment.status) === 'cancel' ? 'bad' : 'warn'}>{String(payment.status)}</Badge></Cell><Cell className="whitespace-nowrap text-muted">{dateTime(String(payment.created_at))}</Cell></tr>)}</Table></Card></div>}
-        {tab === 'plans' && <div className="space-y-4"><div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{plans.map((plan) => { const current = billing.subscription?.planId === plan.id; return <Card key={plan.id} title={plan.name} subtitle={`${tokens(plan.includedTokens)} tokens each month`} action={current ? <Badge tone="brand">Current</Badge> : null}><p className="text-2xl font-semibold tabular-nums">{money(plan.monthlyPriceCents)}<span className="text-sm font-normal text-muted">/mo</span></p><ul className="mt-3 space-y-1.5 text-xs text-muted"><li>{money(plan.overageCentsPerMillion)} per million extra tokens</li><li>{plan.rateLimitRpm} requests per minute</li><li>{plan.maxConcurrent} concurrent requests</li><li>{plan.models.length} models included</li></ul><Button className="mt-4 w-full" variant={current ? 'outline' : 'primary'} icon="card" busy={busy} disabled={current} onClick={() => void subscribe(plan)}>{current ? 'Active' : plan.monthlyPriceCents === 0 ? 'Activate' : 'Subscribe'}</Button></Card>; })}</div>
-          {paygPlan && <Card title="Pay as you go" subtitle="Buy tokens outright. They never expire and are spent after your plan allowance."><div className="flex flex-wrap items-end gap-3"><Field label="Amount (USD)"><input className={`${inputClass} w-32`} type="number" min={1} max={10000} value={topupAmount} onChange={(event) => setTopupAmount(Number(event.target.value))} /></Field><p className="pb-2 text-sm text-muted">≈ <span className="font-medium text-ink tabular-nums">{tokens(Math.floor((topupAmount * 100 / Math.max(1, paygPlan.overageCentsPerMillion)) * 1_000_000))}</span> tokens</p><Button icon="wallet" busy={busy} onClick={() => void topup(paygPlan)}>Pay with crypto</Button></div></Card>}
+        {tab === 'plans' && <div className="space-y-4">
+          <Card title="Your subscriptions" subtitle="Rolling time passes and every live token pack, each with its own countdown">
+            <Table headers={['Plan', 'Kind', 'Allowance', 'Used', 'Expires', 'Resets', '']} empty={subscriptions.length === 0}>
+              {subscriptions.map((sub) => {
+                const method = sub.method ?? 'token_pack';
+                const kind = method === 'rolling_time' ? 'Rolling time' : method === 'monetary_pack' ? 'Pack' : 'Token pack';
+                const label = sub.expiresAt ? (Number.isInteger(sub.durationHours) && sub.durationHours !== null && sub.durationHours <= 72 ? hoursLabel(sub.durationHours ?? 0) : shortDate(sub.expiresAt)) : (sub.timerBasis === 'from_first_use' && !sub.activatedAt ? 'Starts on first use' : '—');
+                return <tr key={sub.id}>
+                  <Cell><span className="font-medium">{sub.planName}</span>{sub.tierLabel ? <span className="ml-1.5 text-xs text-muted">{sub.tierLabel}</span> : null}</Cell>
+                  <Cell><Badge tone={method === 'rolling_time' ? 'brand' : 'good'}>{kind}</Badge></Cell>
+                  <Cell className="tabular-nums">{tokens(sub.includedTokens)}</Cell>
+                  <Cell className="tabular-nums">{tokens(sub.usedTokens)}</Cell>
+                  <Cell className="text-muted">{label}</Cell>
+                  <Cell className="tabular-nums">{sub.resetsRemaining}</Cell>
+                  <Cell className="text-right">{sub.resetsRemaining > 0 && <Button variant="outline" busy={resettingId === sub.id} disabled={resettingId !== null} onClick={() => void resetTimer(sub.id)}>Reset timer</Button>}</Cell>
+                </tr>;
+              })}
+            </Table>
+          </Card>
+          <div className="grid gap-4 xl:grid-cols-2">
+            <div>
+              <h2 className="mb-2 text-sm font-semibold">Rolling time plans</h2>
+              <div className="grid gap-3">{rollingPlans.map((plan) => { const current = billing.subscription?.planId === plan.id; const price = plan.priceCents ?? plan.monthlyPriceCents; return <Card key={plan.id} title={plan.name} subtitle={plan.durationHours ? `Rolling window · ${hoursLabel(plan.durationHours)}` : 'Rolling window'} action={current ? <Badge tone="brand">Current</Badge> : null}><p className="text-2xl font-semibold tabular-nums">{money(price)}</p><ul className="mt-3 space-y-1.5 text-xs text-muted"><li>{plan.rateLimitRpm} requests per minute</li><li>{plan.maxConcurrent} concurrent requests</li><li>{plan.models.length} models included</li><li>{plan.resetsAllowed ?? 0} timer resets included</li></ul><Button className="mt-4 w-full" variant={current ? 'outline' : 'primary'} icon="card" busy={busy} disabled={current} onClick={() => void subscribe(plan)}>{current ? 'Active' : price === 0 ? 'Activate' : 'Subscribe'}</Button></Card>; })}
+              {rollingPlans.length === 0 && <EmptyState message="No rolling time plans are offered right now." icon="card" />}
+              </div>
+            </div>
+            <div>
+              <h2 className="mb-2 text-sm font-semibold">Token packs</h2>
+              <div className="grid gap-3">{packPlans.map((plan) => { const current = billing.subscription?.planId === plan.id; const price = plan.priceCents ?? plan.monthlyPriceCents; const sub = subscriptions.find((row) => row.planId === plan.id); return <Card key={plan.id} title={plan.name} subtitle={plan.durationHours ? `${tokens(plan.includedTokens)} tokens · ${hoursLabel(plan.durationHours)} shelf life` : `${tokens(plan.includedTokens)} tokens`} action={sub ? <Badge tone="brand">Owned</Badge> : current ? <Badge tone="brand">Current</Badge> : null}><p className="text-2xl font-semibold tabular-nums">{money(price)}</p><ul className="mt-3 space-y-1.5 text-xs text-muted"><li>{money(plan.overageCentsPerMillion)} per million extra tokens</li><li>{plan.rateLimitRpm} requests per minute</li><li>{plan.maxConcurrent} concurrent requests</li><li>{plan.models.length} models included</li><li>Packs accumulate — each keeps its own countdown</li></ul><Button className="mt-4 w-full" variant={current ? 'outline' : 'primary'} icon="card" busy={busy} disabled={current} onClick={() => void subscribe(plan)}>{current ? 'Active' : price === 0 ? 'Top up' : 'Buy tokens'}</Button></Card>; })}
+              {packPlans.length === 0 && <EmptyState message="No token packs are offered right now." icon="card" />}
+              </div>
+            </div>
+          </div>
+          {builderPlan && <Card title="Custom token pack" subtitle="Buy any quantity at the plan's token rate plus 5%. Packs stack and each expires on its own clock.">
+            <div className="grid gap-4 md:grid-cols-[1fr_auto_auto_auto]">
+              <div className="min-w-0 md:col-span-2">
+                <Field label="Plan rate" hint="+5% convenience fee applies to every pack">
+                  <select className={inputClass} value={builderPlan.id} onChange={(event) => setPackPlanId(event.target.value)}>
+                    {packPlans.filter((plan) => plan.overageCentsPerMillion > 0).map((plan) => <option key={plan.id} value={plan.id}>{plan.name} · {money(plan.overageCentsPerMillion)}/M tokens</option>)}
+                  </select>
+                </Field>
+                <Field label="Token quantity" hint="Whole millions only, minimum 1,000,000" className="mt-3">
+                  <input className={`${inputClass} tabular-nums`} type="text" inputMode="numeric" placeholder="1000000" value={packQuantity} onChange={(event) => setPackQuantity(event.target.value.replace(/[^0-9.]/g, ''))} />
+                </Field>
+              </div>
+              <Field label="Shelf life" className="min-w-40">
+                <select className={inputClass} value={String(packDuration)} onChange={(event) => setPackDuration(Number(event.target.value))}>
+                  {PACK_DURATIONS.map((option) => <option key={option.hours} value={String(option.hours)}>{option.label}</option>)}
+                </select>
+              </Field>
+              <div className="flex flex-col items-stretch justify-end gap-1.5">
+                <p className="text-xs text-muted">Total</p>
+                <p className="text-xl font-semibold tabular-nums">{Number.isFinite(packPrice) ? money(Math.ceil(packPrice)) : '—'}</p>
+                <Button icon="wallet" busy={busy} disabled={!packValid} onClick={() => void buyPack(builderPlan)}>Pay {Number.isFinite(packPrice) ? money(Math.ceil(packPrice)) : ''}</Button>
+              </div>
+            </div>
+            <p className="mt-3 text-xs text-muted">Tokens are spent before the wallet, oldest-expiry first. A 1M minimum keeps custom pricing honest; every pack gets its own countdown from the moment it settles.</p>
+          </Card>}
         </div>}
         {tab === 'keys' && <Card title="API keys" subtitle="Use these with the OpenAI or Anthropic SDKs" action={<Button icon="plus" onClick={() => setKeyModal(true)}>New key</Button>}><Table headers={['Name', 'Key', 'Scopes', 'Created', 'Status', '']} empty={keys.length === 0}>{keys.map((key) => <tr key={key.id}><Cell className="font-medium">{key.name}</Cell><Cell className="font-mono text-xs text-muted"><div className="flex items-center gap-1.5">{revealedKeyId === key.id ? <span className="text-ink">{key.prefix}{'…'}{key.last4}</span> : <span>{key.prefix}{'••••'}{key.last4}</span>}<button type="button" className="cursor-pointer rounded-md p-0.5 text-muted transition-colors hover:text-ink" aria-label={revealedKeyId === key.id ? 'Hide key' : 'Reveal key'} onClick={() => setRevealedKeyId((current) => (current === key.id ? null : key.id))}><Icon name={revealedKeyId === key.id ? 'eyeOff' : 'eye'} size={15} /></button></div></Cell><Cell className="text-xs text-muted">{key.scopes.join(', ')}</Cell><Cell className="whitespace-nowrap text-muted">{shortDate(key.createdAt)}</Cell><Cell><Badge tone={key.revokedAt ? 'bad' : 'good'}>{key.revokedAt ? 'Revoked' : 'Active'}</Badge></Cell><Cell className="text-right">{!key.revokedAt && <Button variant="danger" onClick={() => void api.member.revokeKey(key.id).then(load).then(() => toast('Key revoked'))}>Revoke</Button>}</Cell></tr>)}</Table></Card>}
         <Modal open={keyModal} title={issuedKey ? 'Copy your key' : 'Create an API key'} onClose={() => { setKeyModal(false); setIssuedKey(null); }}>{issuedKey ? <div className="space-y-3"><p className="text-sm text-muted">This is the only time the key is shown. The gateway stores a hash, so it cannot be recovered later.</p><code className="block break-all rounded-lg border border-border bg-raised p-3 font-mono text-xs">{issuedKey}</code><Button icon="check" className="w-full" onClick={() => { void navigator.clipboard.writeText(issuedKey); toast('Key copied'); }}>Copy to clipboard</Button></div> : <div className="space-y-4"><Field label="Name" hint="Something you will recognise later, like 'codex-laptop'"><input className={inputClass} value={keyName} onChange={(event) => setKeyName(event.target.value)} /></Field><Field label="Scopes"><div className="grid gap-2 sm:grid-cols-2">{['models:read', 'chat:write', 'responses:write', 'messages:write'].map((scope) => <label key={scope} className="flex cursor-pointer items-center gap-2 rounded-lg border border-border bg-raised px-3 py-2 text-sm"><input type="checkbox" className="accent-brand" checked={keyScopes.includes(scope)} onChange={(event) => setKeyScopes((current) => event.target.checked ? [...current, scope] : current.filter((item) => item !== scope))} /><span className="font-mono text-xs">{scope}</span></label>)}</div></Field><Button className="w-full" icon="key" busy={busy} disabled={keyName.trim().length === 0 || keyScopes.length === 0} onClick={() => void createKey()}>Create key</Button></div>}</Modal>

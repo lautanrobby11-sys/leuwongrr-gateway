@@ -47,12 +47,14 @@ export const PUBLIC_ALLOWLIST: readonly AllowedRoute[] = Object.freeze([
   { method: 'POST', pattern: /^\/callbacks\/telegram$/, id: 'console.callback' },
   {
     method: 'GET',
-    pattern: /^\/console\/api\/member\/(overview|usage|keys|payments|plans)$/,
+    pattern: /^\/console\/api\/member\/(overview|usage|keys|payments|plans|subscriptions)$/,
     id: 'console.member'
   },
+  // Release 2 custom token packs and subscription timer resets: member-scoped
+  // POST routes with no tenant-id path segment, so they ride the same guard.
   {
     method: 'POST',
-    pattern: /^\/console\/api\/member\/(keys|keys\/revoke|topup|subscribe|subscription\/reset)$/,
+    pattern: /^\/console\/api\/member\/(keys|keys\/revoke|topup|custom-topup|subscribe|subscription\/reset)$/,
     id: 'console.member'
   },
   {
@@ -127,9 +129,11 @@ export const DOCUMENTED_OPERATIONS: readonly DocumentedOperation[] = Object.free
   { method: 'GET', path: '/console/api/member/keys', sample: '/console/api/member/keys', id: 'console.member' },
   { method: 'GET', path: '/console/api/member/payments', sample: '/console/api/member/payments', id: 'console.member' },
   { method: 'GET', path: '/console/api/member/plans', sample: '/console/api/member/plans', id: 'console.member' },
+  { method: 'GET', path: '/console/api/member/subscriptions', sample: '/console/api/member/subscriptions', id: 'console.member' },
   { method: 'POST', path: '/console/api/member/keys', sample: '/console/api/member/keys', id: 'console.member' },
   { method: 'POST', path: '/console/api/member/keys/revoke', sample: '/console/api/member/keys/revoke', id: 'console.member' },
   { method: 'POST', path: '/console/api/member/topup', sample: '/console/api/member/topup', id: 'console.member' },
+  { method: 'POST', path: '/console/api/member/custom-topup', sample: '/console/api/member/custom-topup', id: 'console.member' },
   { method: 'POST', path: '/console/api/member/subscribe', sample: '/console/api/member/subscribe', id: 'console.member' },
   { method: 'POST', path: '/console/api/member/subscription/reset', sample: '/console/api/member/subscription/reset', id: 'console.member' },
   { method: 'GET', path: '/console/api/admin/overview', sample: '/console/api/admin/overview', id: 'console.admin' },

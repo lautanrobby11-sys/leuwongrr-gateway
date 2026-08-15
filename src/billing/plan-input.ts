@@ -11,10 +11,11 @@ import { DAILY_BUDGET_UNITS, MAX_CONCURRENT, RATE_LIMIT_RPM } from './limit-boun
  * enforces. When only the console validated, `plan:upsert --max-concurrent 5000`
  * was accepted and became real enforcement state.
  *
- * Every numeric field is `finite()` before it is `int()`. `z.number()` already
- * rejects NaN and `int()` already rejects ±Infinity, so the clause changes no
- * accepted input; it states the invariant the SQLite columns depend on where a
- * reader looks for it, instead of leaving it a side effect of two other rules.
+ * Every numeric field is `finite()` before any range clause. `z.number()` already
+ * rejects NaN; token counts and budgets are additionally `int()` because the
+ * request path reads them as whole units, while the two per-million prices keep
+ * fractional values because upstream vendors quote them that way ($0.002/1M is a
+ * real rate and the INTEGER-affinity column stores it exactly as REAL).
  *
  * The three bounds that `tenant_limits` enforces come from `limit-bounds.ts`
  * rather than being written out here, because the admin limits route and the
@@ -25,9 +26,17 @@ export const planInputSchema = z
   .object({
     id: z.string().regex(/^[a-z0-9-]{2,32}$/),
     name: z.string().min(1).max(64),
-    monthlyPriceCents: z.number().finite().int().min(0).max(10_000_00),
+    /**
+     * Prices per million tokens are legitimately fractional upstream (for
+     * example $0.002 per 1M input tokens), so the schema accepts any finite
+     * non-negative value instead of whole cents only. The column is INTEGER
+     * affinity in SQLite, which stores a fractional value exactly when it can
+     * be represented without loss, so the bound here is a magnitude check,
+     * not an integer check.
+     */
+    monthlyPriceCents: z.number().finite().min(0).max(10_000_00),
     includedTokens: z.number().finite().int().min(0).max(1_000_000_000_000),
-    overageCentsPerMillion: z.number().finite().int().min(0).max(1_000_00),
+    overageCentsPerMillion: z.number().finite().min(0).max(1_000_00),
     maxConcurrent: z.number().finite().int().min(MAX_CONCURRENT.min).max(MAX_CONCURRENT.max),
     rateLimitRpm: z.number().finite().int().min(RATE_LIMIT_RPM.min).max(RATE_LIMIT_RPM.max),
     dailyBudgetUnits: z

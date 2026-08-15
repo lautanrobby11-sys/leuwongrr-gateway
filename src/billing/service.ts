@@ -444,6 +444,53 @@ export class BillingService {
   }
 
   /**
+   * Release 2 (spec 11C): both plan sides can be live for one account at the
+   * same time — a Rolling Time pass plus stacked Token Packs — so the member
+   * console lists every live subscription instead of only the newest one.
+   */
+  accountSubscriptions(accountId: string): Subscription[] {
+    return this.activeSubscriptions(accountId);
+  }
+
+  /**
+   * Release 2 custom token pack: a member buys a fixed quantity of tokens with
+   * an explicit shelf life. The allowance is granted as a subscription row so
+   * the earliest-expiry queue in applyUsage stacks it with other packs, each
+   * with its own countdown, regardless of which plan the quantity was bought
+   * under.
+   */
+  startDurationPack(accountId: string, planId: string, tokens: number, durationHours: number): Subscription {
+    const plan = this.getPlan(planId);
+    if (!plan) throw new BillingError('plan_not_found', 404);
+    if (!Number.isSafeInteger(tokens) || tokens <= 0) throw new BillingError('pack_tokens_invalid', 400);
+    if (!Number.isSafeInteger(durationHours) || durationHours < 1 || durationHours > 8_760) {
+      throw new BillingError('pack_duration_invalid', 400);
+    }
+    const id = randomUUID();
+    const start = this.iso();
+    const end = this.iso(durationHours * 3_600_000);
+    const apply = this.db.transaction(() => {
+      this.db
+        .prepare(
+          `INSERT INTO subscriptions (id, account_id, plan_id, status, period_start, period_end, included_tokens, used_tokens, auto_renew, method, duration_hours, timer_basis, activated_at, expires_at, resets_remaining, created_at, updated_at)
+           VALUES (?, ?, ?, 'active', ?, ?, ?, 0, 1, 'token_pack', ?, 'from_payment', ?, ?, 0, ?, ?)`
+        )
+        .run(id, accountId, planId, start, end, tokens, durationHours, start, end, start, start);
+      this.recordLedger(accountId, {
+        kind: 'grant',
+        source: 'subscription',
+        tokens,
+        reference: id,
+        balanceAfter: this.walletBalance(accountId)
+      });
+    });
+    apply();
+    const created = this.getSubscription(id);
+    if (!created) throw new BillingError('subscription_write_failed', 500);
+    return created;
+  }
+
+  /**
    * Release 2 (spec 20.3/20.4): reset restarts the timer from NOW and restores
    * the token allowance; the remaining reset budget is decremented once.
    * A reset with no budget left (or one racing another reset) is a 409.
@@ -767,6 +814,7 @@ export class BillingService {
       tokens?: number;
       balanceCents?: number;
       amountCents?: number;
+      durationHours?: number | null;
     }
   ): { tokensGranted: number; centsGranted: number; subscription: Subscription | null } {
     const method = snapshot.method;
@@ -792,9 +840,25 @@ export class BillingService {
       if (!Number.isInteger(tokens) || !Number.isInteger(cents) || tokens < 0 || cents < 0) throw new BillingError('payment_amount_invalid', 409);
       if (method === 'token_pack') {
         if (tokens <= 0) throw new BillingError('payment_tokens_missing', 409);
-        this.credit(accountId, tokens, 'payment', reference, 'purchase');
         const equivalentCents = snapshot.amountCents ?? cents;
         if (!Number.isInteger(equivalentCents) || equivalentCents < 0) throw new BillingError('payment_amount_invalid', 409);
+        // A pack with an explicit shelf life is granted as a subscription row so
+        // it spends in earliest-expiry order alongside other packs; a plain pack
+        // keeps the permanent wallet credit. An explicitly present but invalid
+        // duration (0, negative, or fractional) means a corrupted snapshot, not
+        // "no duration": silently demoting it to a permanent credit would grant
+        // more than the member paid for.
+        const durationHours = snapshot.durationHours;
+        if (durationHours !== null && durationHours !== undefined) {
+          if (!Number.isSafeInteger(durationHours) || (durationHours as number) <= 0) {
+            throw new BillingError('payment_amount_invalid', 409);
+          }
+          if (!snapshot.planId) throw new BillingError('payment_plan_missing', 409);
+          const subscription = this.startDurationPack(accountId, snapshot.planId, tokens, durationHours as number);
+          this.db.prepare("UPDATE ledger_entries SET cents = ?, currency = 'tokens' WHERE account_id = ? AND source = 'subscription' AND reference = ?").run(equivalentCents, accountId, subscription.id);
+          return { tokensGranted: tokens, centsGranted: 0, subscription };
+        }
+        this.credit(accountId, tokens, 'payment', reference, 'purchase');
         this.db.prepare("UPDATE ledger_entries SET cents = ?, currency = 'tokens' WHERE account_id = ? AND source = 'payment' AND reference = ?").run(equivalentCents, accountId, reference);
         return { tokensGranted: tokens, centsGranted: 0, subscription: null };
       }

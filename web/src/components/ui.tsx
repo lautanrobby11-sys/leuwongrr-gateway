@@ -187,14 +187,16 @@ export function Meter({ used, total, label }: { used: number; total: number; lab
 export function Field({
   label,
   hint,
-  children
+  children,
+  className
 }: {
   label: string;
   hint?: string;
   children: ReactNode;
+  className?: string;
 }) {
   return (
-    <label className="block">
+    <label className={cx('block', className)}>
       <span className="mb-1.5 block text-xs font-medium text-muted">{label}</span>
       {children}
       {hint && <span className="mt-1 block text-xs text-muted">{hint}</span>}
@@ -204,6 +206,82 @@ export function Field({
 
 export const inputClass =
   'focus-ring w-full rounded-lg border border-border bg-raised px-3 py-2 text-sm text-ink placeholder:text-muted/70';
+
+/**
+ * Renders a stored price into the text box. NaN renders as an empty string:
+ * binding a controlled input to `String(NaN)` would otherwise show the literal
+ * word "NaN" and force the operator to delete it before typing anything.
+ */
+export function formatPrice(value: number): string {
+  return Number.isFinite(value) ? String(value) : '';
+}
+
+/**
+ * Reads what the operator typed and keeps it as a display string the input can
+ * render verbatim. Blank input maps to NaN so the save guard can tell "empty"
+ * apart from a real zero, and a lone decimal point is preserved so typing
+ * `0.` does not collapse back to `0`.
+ */
+export function parsePriceText(raw: string): number {
+  const trimmed = raw.trim();
+  if (trimmed === '' || trimmed === '.') return Number.NaN;
+  const parsed = Number(trimmed);
+  return parsed;
+}
+
+/**
+ * A free-text numeric field that survives partial decimal states.
+ *
+ * Prices per million tokens are legitimately fractional upstream ($0.002/1M),
+ * but `<input type="number">` bound to `Number(state)` re-renders `0.` as
+ * `0` and `0.0` as `0`, so operators could never type a value under a whole
+ * cent, and extra zeros drifted (typing `0.02` landed as `2`). This keeps the
+ * typed text as the source of truth and hands the parent a number only for
+ * validation and submission.
+ */
+export function PriceInput({
+  value,
+  onChange,
+  placeholder = '0.002',
+  label
+}: {
+  value: number;
+  onChange: (value: number) => void;
+  placeholder?: string;
+  label: string;
+}) {
+  // Local draft state lets partial values like "0." survive a re-render; the
+  // parent never sees them. NaN means "empty", not zero.
+  const [draft, setDraft] = useState<string | null>(null);
+  const text = draft ?? formatPrice(value);
+
+  function handleChange(raw: string) {
+    setDraft(raw);
+    const parsed = parsePriceText(raw);
+    onChange(Number.isFinite(parsed) ? parsed : Number.NaN);
+  }
+
+  // When the parent replaces `value` (e.g. the row reloads), drop the draft so
+  // the fresh number is what renders.
+  useEffect(() => {
+    if (draft !== null && Number(draft) !== value) {
+      setDraft(null);
+    }
+  }, [value, draft]);
+
+  return (
+    <input
+      className={inputClass}
+      type="text"
+      inputMode="decimal"
+      aria-label={label}
+      value={text}
+      placeholder={placeholder}
+      onChange={(event) => handleChange(event.target.value)}
+      onBlur={() => setDraft(null)}
+    />
+  );
+}
 
 // ---- Data display ----
 

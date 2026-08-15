@@ -305,6 +305,43 @@ paths:
           description: Invoice created.
         '403':
           description: Origin is not allowed.
+  /console/api/member/custom-topup:
+    post:
+      summary: Open a custom token pack invoice
+      description: >-
+        Requires an allowed Origin. Buys any whole-million token quantity
+        (minimum 1,000,000) of a plan's pay-as-you-go rate plus 5%, with a
+        shelf life chosen from the durations the operator sells (24 h / 7 d /
+        30 d / …). Settlement grants the pack as a duration subscription that
+        stacks with other packs and expires on its own clock.
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Invoice created; tokens settle into a duration pack on payment.
+        '400':
+          description: Quantity invalid (minimum 1,000,000, whole millions only, duration out of range).
+        '403':
+          description: Origin is not allowed.
+        '404':
+          description: Plan not found.
+        '409':
+          description: Plan has no pay-as-you-go rate to price the pack against.
+  /console/api/member/subscriptions:
+    get:
+      summary: List the member's live subscriptions
+      description: >-
+        Every active or past-due subscription (Rolling Time passes plus stacked
+        Token Packs) with its allowance, used tokens, duration, timer basis,
+        and remaining resets, so the member console can show every pack's
+        expiry countdown from one authoritative source.
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Live subscriptions, oldest first.
+        '403':
+          description: Origin is not allowed.
   /console/api/member/subscribe:
     post:
       summary: Subscribe to a plan
@@ -400,7 +437,11 @@ paths:
         (`GET /v1/models`). New models land **disabled** so an admin must
         switch them on explicitly. Ids are lower-cased and slugified; a 2-64
         character lower-case id is required. 503 when the upstream client is
-        not configured; 502 when OmniRoute cannot be read.
+        not configured; 502 when OmniRoute cannot be read. Body field
+        `reset: true` additionally removes catalog models whose id no longer
+        exists upstream, unless an active plan still entitles them; those are
+        returned in `keptProtected`. The response's `removed` and
+        `keptProtected` arrays list what a reset reconciled.
       security:
         - accessAssertion: []
       responses:

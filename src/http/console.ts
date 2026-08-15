@@ -18,6 +18,7 @@ import {
 } from '../accounts/oauth.js';
 import { BillingError, type BillingService } from '../billing/service.js';
 import { planInputSchema } from '../billing/plan-input.js';
+import { customTokenCents } from '../billing/pricing.js';
 import { DAILY_BUDGET_UNITS, MAX_CONCURRENT, RATE_LIMIT_RPM } from '../billing/limit-bounds.js';
 import { PaymentError, PAID_STATUSES, type CryptomusClient } from '../payments/cryptomus.js';
 import { isPaidStatus as isLeuwongrrPaid, verifyHmacSignature } from '../payments/leuwongrr.js';
@@ -157,6 +158,20 @@ const topupSchema = z
   .object({
     planId: z.string().min(1).max(32),
     amountCents: z.number().int().min(100).max(1_000_000),
+    provider: z.enum(['cryptomus', 'leuwongrr']).default('cryptomus')
+  })
+  .strict();
+/**
+ * Custom token pack purchase: any quantity of tokens (1M minimum, one whole
+ * million at a time) with a shelf life chosen from the durations the operator
+ * sells. The price is the plan's pay-as-you-go rate plus 5%, computed here and
+ * echoed into the snapshot so the settlement can never invent its own rate.
+ */
+const customTopupSchema = z
+  .object({
+    planId: z.string().min(1).max(32),
+    tokenQuantity: z.number().int().min(1_000_000).max(1_000_000_000_000),
+    durationHours: z.number().int().min(1).max(8_760),
     provider: z.enum(['cryptomus', 'leuwongrr']).default('cryptomus')
   })
   .strict();
@@ -665,6 +680,11 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
       // purchase price on the cents axis; every other method keeps it at zero
       // and the request path spends it through the active PAYG rate.
       const balanceCents = plan.method === 'monetary_pack' ? priceCents : 0;
+      // Release 2: a token pack with a shelf life settles into a duration
+      // subscription, not the permanent wallet, so it stacks with other packs
+      // and expires on its own clock even when purchased from the plan card.
+      const durationHours =
+        (plan.method ?? 'token_pack') === 'token_pack' ? plan.durationHours ?? null : null;
       return reply.send(
         await openInvoice({
           account,
@@ -674,7 +694,7 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
           tokens: plan.includedTokens,
           traceId: req.id,
           provider: parsed.data.provider,
-          snapshot: { method: plan.method ?? 'token_pack', modelGroupId: plan.modelGroupId ?? null, planId: plan.id, amountCents: priceCents, tokens: plan.includedTokens, balanceCents }
+          snapshot: { method: plan.method ?? 'token_pack', modelGroupId: plan.modelGroupId ?? null, planId: plan.id, amountCents: priceCents, tokens: plan.includedTokens, balanceCents, durationHours }
         })
       );
     } catch (error) {
@@ -702,6 +722,95 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
           snapshot: { method: 'token_pack', modelGroupId: plan.modelGroupId ?? null, planId: plan.id, amountCents: parsed.data.amountCents, tokens, balanceCents: 0 }
         })
       );
+    } catch (error) {
+      return handle(error, reply, req.id);
+    }
+  });
+
+  /**
+   * Release 2 custom token pack: the member chooses any quantity (1M minimum,
+   * whole millions) and a shelf life (24h / 7d / 30d / …); the rate is the
+   * plan's pay-as-you-go rate plus 5%. Settlement grants the pack as a
+   * duration subscription so it stacks with other packs and expires on its own
+   * clock.
+   */
+  app.post('/console/api/member/custom-topup', async (req, reply) => {
+    try {
+      const account = requireMember(await currentAccount(req));
+      const parsed = customTopupSchema.safeParse(req.body);
+      if (!parsed.success) return fail(reply, 400, 'invalid_request', 'Quantity invalid: minimum 1,000,000 tokens, whole millions only', req.id);
+      if (parsed.data.tokenQuantity % 1_000_000 !== 0) {
+        return fail(reply, 400, 'invalid_request', 'Quantity must be whole millions', req.id);
+      }
+      const plan = billing.getPlan(parsed.data.planId);
+      if (!plan) return fail(reply, 404, 'plan_not_found', 'Plan unavailable', req.id);
+      if (plan.overageCentsPerMillion <= 0) {
+        return fail(reply, 409, 'plan_has_no_payg_rate', 'Plan has no pay-as-you-go rate', req.id);
+      }
+      const amountCents = customTokenCents(plan.overageCentsPerMillion, parsed.data.tokenQuantity);
+      return reply.send(
+        await openInvoice({
+          account,
+          purpose: 'topup',
+          planId: plan.id,
+          amountCents,
+          tokens: parsed.data.tokenQuantity,
+          traceId: req.id,
+          provider: parsed.data.provider,
+          snapshot: { method: 'token_pack', modelGroupId: plan.modelGroupId ?? null, planId: plan.id, amountCents, tokens: parsed.data.tokenQuantity, balanceCents: 0, durationHours: parsed.data.durationHours }
+        })
+      );
+    } catch (error) {
+      return handle(error, reply, req.id);
+    }
+  });
+
+  // A member can hold a Rolling Time pass and several stacked Token Packs at
+  // once; the console lists every live subscription so the reset toggle and the
+  // expiry countdowns have one authoritative source instead of guessing from
+  // the single-newest summary row.
+  app.get('/console/api/member/subscriptions', async (req, reply) => {
+    try {
+      const account = requireMember(await currentAccount(req));
+      const rows = db.db
+        .prepare(
+          "SELECT s.id, s.plan_id, s.status, s.period_start, s.period_end, s.included_tokens, s.used_tokens, s.auto_renew, s.method, s.duration_hours, s.timer_basis, s.activated_at, s.expires_at, s.resets_remaining, p.name AS plan_name, p.tier_label FROM subscriptions s LEFT JOIN plans p ON p.id = s.plan_id WHERE s.account_id = ? AND s.status IN ('active','past_due') ORDER BY s.created_at"
+        )
+        .all(account.id) as Array<{
+        id: string;
+        plan_id: string;
+        status: string;
+        period_start: string;
+        period_end: string;
+        included_tokens: number;
+        used_tokens: number;
+        auto_renew: number;
+        method: string | null;
+        duration_hours: number | null;
+        timer_basis: string | null;
+        activated_at: string | null;
+        expires_at: string | null;
+        resets_remaining: number;
+        plan_name: string | null;
+        tier_label: string | null;
+      }>;
+      return reply.send({
+        subscriptions: rows.map((row) => ({
+          id: row.id,
+          planId: row.plan_id,
+          planName: row.plan_name ?? row.plan_id,
+          tierLabel: row.tier_label ?? '',
+          status: row.status,
+          method: row.method,
+          includedTokens: row.included_tokens,
+          usedTokens: row.used_tokens,
+          durationHours: row.duration_hours,
+          timerBasis: row.timer_basis,
+          activatedAt: row.activated_at,
+          expiresAt: row.expires_at,
+          resetsRemaining: row.resets_remaining
+        }))
+      });
     } catch (error) {
       return handle(error, reply, req.id);
     }
@@ -826,10 +935,21 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
    * it asks the same `/v1/models` surface an OpenAI client would. Imported
    * models land **disabled** so an admin has to switch them on explicitly —
    * a sync can never silently widen a tenant's entitlement.
+   *
+   * `reset: true` additionally reconciles the catalog with OmniRoute: a model
+   * whose id no longer appears upstream is removed, unless an active plan
+   * still entitles it (the delete guard). This stops the catalog drifting from
+   * upstream across repeated syncs without ever breaking a live entitlement.
    */
   app.post('/console/api/admin/models/sync', async (req, reply) => {
     try {
       const admin = await requireAdmin(req);
+      const parsed = z
+        .object({ reset: z.boolean().optional() })
+        .strict()
+        .safeParse(req.body ?? {});
+      if (!parsed.success) return fail(reply, 400, 'invalid_request', 'Sync payload invalid', req.id);
+      const reset = parsed.data.reset === true;
       if (!deps.upstream) {
         return fail(reply, 503, 'sync_unavailable', 'Upstream client is not configured', req.id);
       }
@@ -844,6 +964,7 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
       const known = new Set(models.list().map((model) => model.id));
       const added: string[] = [];
       const skipped: string[] = [];
+      const upstreamSlugs = new Set<string>();
       for (const entry of body.data) {
         const rawId = typeof entry?.id === 'string' ? entry.id : '';
         const slug = rawId
@@ -855,6 +976,7 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
           skipped.push(rawId || '?');
           continue;
         }
+        upstreamSlugs.add(slug);
         if (known.has(slug)) {
           skipped.push(slug);
           continue;
@@ -878,14 +1000,33 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
           skipped.push(slug);
         }
       }
+
+      const removed: string[] = [];
+      const keptProtected: string[] = [];
+      if (reset) {
+        // Reconcile inside the same transaction: every removal and its audit
+        // trace share one write, so a failed reset cannot leave the catalog
+        // half-reconciled with no explanation.
+        for (const model of models.list()) {
+          if (upstreamSlugs.has(model.id)) continue;
+          try {
+            models.remove(model.id);
+            removed.push(model.id);
+          } catch {
+            // Referenced by an active plan: the entitlement wins, so the model
+            // outlives its upstream entry until the plan releases it.
+            keptProtected.push(model.id);
+          }
+        }
+      }
       db.audit({
         tenantId: admin.tenantId,
         actorType: 'admin',
         event: 'console.model.synced',
         traceId: req.id,
-        metadata: { added: added.length, skipped: skipped.length }
+        metadata: { added: added.length, skipped: skipped.length, removed: removed.length, keptProtected: keptProtected.length, reset }
       });
-      return reply.send({ synced: true, added, skipped: skipped.length });
+      return reply.send({ synced: true, added, skipped: skipped.length, removed, keptProtected, reset });
     } catch (error) {
       return handle(error, reply, req.id);
     }

@@ -229,7 +229,7 @@ describe('model catalogue admin CRUD (Release 2a)', () => {
       modelPayload({ id: 'UPPER' }), // id must be lower-case
       modelPayload({ provider: 'vendor-x' }), // provider must be in the enum
       modelPayload({ inputPriceCents: -5 }), // price must not be negative
-      modelPayload({ inputPriceCents: 12.5 }), // price must be integral
+      modelPayload({ inputPriceCents: 2_500_000 }), // price must stay inside the magnitude bound
       { id: 'lwrr-vision' } // missing required fields
     ]) {
       const response = await active.app.inject({
@@ -243,6 +243,28 @@ describe('model catalogue admin CRUD (Release 2a)', () => {
         status: 400
       });
     }
+  });
+
+  // Vendors quote sub-cent rates ($0.002/1M), so a fractional price must now
+  // round-trip through the create route instead of being rejected by the old
+  // `.int()` clause.
+  it('accepts fractional per-million prices', async () => {
+    const active = start();
+    const created = await active.app.inject({
+      method: 'POST',
+      url: '/console/api/admin/models',
+      headers,
+      payload: modelPayload({
+        inputPriceCents: 0.002,
+        outputPriceCents: 12.5,
+        cacheReadPriceCents: 0.05
+      })
+    });
+    expect(created.statusCode).toBe(200);
+    const body = created.json() as { model: ModelRecord };
+    expect(body.model.inputPriceCents).toBeCloseTo(0.002, 10);
+    expect(body.model.outputPriceCents).toBeCloseTo(12.5, 10);
+    expect(body.model.cacheReadPriceCents).toBeCloseTo(0.05, 10);
   });
 
   it('requires a valid admin assertion', async () => {

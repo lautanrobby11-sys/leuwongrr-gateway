@@ -211,6 +211,95 @@ paths:
           description: Session cookie cleared.
         '403':
           description: Origin is not allowed.
+  /console/api/auth/register:
+    post:
+      summary: Begin account registration
+      description: >-
+        Validates name, email, password, and confirmation, creates a pending
+        account, and dispatches a verification code. Requires an allowed Origin.
+        Returns a generic success shape whether or not the email is new.
+      responses:
+        '200':
+          description: Verification code dispatched.
+        '400':
+          description: Payload invalid.
+        '403':
+          description: Origin is not allowed.
+  /console/api/auth/register/verify:
+    post:
+      summary: Complete registration with the emailed code
+      description: Requires an allowed Origin. Issues the session cookie on success.
+      responses:
+        '200':
+          description: Account verified and session cookie issued.
+        '401':
+          description: Code invalid or expired.
+        '403':
+          description: Origin is not allowed.
+  /console/api/auth/login/password:
+    post:
+      summary: Begin password sign-in
+      description: >-
+        Verifies the password and, on success, dispatches a second-factor code.
+        Requires an allowed Origin. Uses a generic failure for unknown email,
+        wrong password, and passwordless accounts.
+      responses:
+        '200':
+          description: Second-factor code dispatched.
+        '401':
+          description: Generic credential failure.
+        '403':
+          description: Origin is not allowed.
+  /console/api/auth/login/verify:
+    post:
+      summary: Complete password sign-in with the emailed code
+      description: Requires an allowed Origin. Issues the session cookie on success.
+      responses:
+        '200':
+          description: Session cookie issued.
+        '401':
+          description: Code invalid or expired.
+        '403':
+          description: Origin is not allowed.
+  /console/api/auth/password/request-reset:
+    post:
+      summary: Request a password reset code
+      description: >-
+        Always answers with the same generic success shape so an email's
+        existence is never revealed. Requires an allowed Origin.
+      responses:
+        '200':
+          description: Generic success.
+        '403':
+          description: Origin is not allowed.
+  /console/api/auth/password/reset:
+    post:
+      summary: Replace a password using a reset code
+      description: Requires an allowed Origin.
+      responses:
+        '200':
+          description: Password replaced.
+        '400':
+          description: Payload invalid.
+        '401':
+          description: Code invalid or expired.
+        '403':
+          description: Origin is not allowed.
+  /console/api/auth/password/set:
+    post:
+      summary: Set a password for a signed-in legacy account
+      security:
+        - sessionCookie: []
+      description: Requires a session and an allowed Origin.
+      responses:
+        '200':
+          description: Password stored.
+        '400':
+          description: Payload invalid.
+        '401':
+          description: Session required.
+        '403':
+          description: Origin is not allowed.
   /console/api/auth/start/{provider}:
     get:
       summary: Begin an OAuth sign-in

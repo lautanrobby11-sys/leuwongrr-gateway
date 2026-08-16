@@ -7,6 +7,7 @@ import type { Logger } from 'pino';
 import type { Config } from '../config.js';
 import type { GatewayDatabase } from '../persistence/database.js';
 import { AccountError, AccountStore, normaliseEmail, type AccountRecord } from '../accounts/store.js';
+import { hashPassword, validatePasswordStrength, verifyPassword } from '../accounts/passwords.js';
 import { AccessError, type AccessVerifier } from '../accounts/access.js';
 import {
   OauthError,
@@ -240,6 +241,29 @@ const emailSchema = z.object({ email: z.string().email().max(254) }).strict();
 const verifySchema = z
   .object({ email: z.string().email().max(254), code: z.string().regex(/^[0-9]{6}$/) })
   .strict();
+const registerSchema = z
+  .object({
+    name: z.string().min(1).max(120),
+    email: z.string().email().max(254),
+    password: z.string().min(1).max(256),
+    confirmPassword: z.string().min(1).max(256)
+  })
+  .strict();
+const passwordLoginSchema = z
+  .object({ email: z.string().email().max(254), password: z.string().min(1).max(256) })
+  .strict();
+const resetRequestSchema = z.object({ email: z.string().email().max(254) }).strict();
+const resetSchema = z
+  .object({
+    email: z.string().email().max(254),
+    code: z.string().regex(/^[0-9]{6}$/),
+    password: z.string().min(1).max(256),
+    confirmPassword: z.string().min(1).max(256)
+  })
+  .strict();
+const setPasswordSchema = z
+  .object({ password: z.string().min(1).max(256), confirmPassword: z.string().min(1).max(256) })
+  .strict();
 const keySchema = z
   .object({
     name: z.string().min(1).max(64),
@@ -433,67 +457,76 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
     });
   });
 
+  /**
+   * Issues a purpose-bound one-time code and delivers it through the configured
+   * channel. Shared by the legacy request-code flow and the register/login/reset
+   * flows so delivery behaviour (webhook, SMTP, development) stays in one place.
+   */
+  async function issueAndDeliver(
+    email: string,
+    purpose: 'login' | 'register' | 'reset',
+    reply: FastifyReply
+  ) {
+    const code = accounts.issueCode(email, purpose, config.OTP_TTL_MINUTES, config.OTP_RESEND_SECONDS);
+    if (config.OTP_DELIVERY === 'webhook' && config.OTP_WEBHOOK_URL) {
+      // Resolved rather than literal inspection: the relay is operator
+      // supplied, and a public name that answers with a private address is
+      // exactly how a one-time code gets posted to something internal.
+      const target = await assertResolvedPublicEgress(config.OTP_WEBHOOK_URL);
+      const delivery = await fetch(target, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          ...(config.OTP_WEBHOOK_TOKEN
+            ? { authorization: `Bearer ${config.OTP_WEBHOOK_TOKEN}` }
+            : {})
+        },
+        body: JSON.stringify({
+          email: normaliseEmail(email),
+          code,
+          ttl_minutes: config.OTP_TTL_MINUTES
+        }),
+        signal: AbortSignal.timeout(8000)
+      });
+      // A relay that answered 4xx or 5xx has delivered nothing. Reporting
+      // success would leave the member waiting for a code that is never
+      // going to arrive, with no signal to the operator that it failed.
+      if (!delivery.ok) throw new AccountError('otp_delivery_failed', 502);
+      return reply.send({ delivered: true, ttl_minutes: config.OTP_TTL_MINUTES });
+    }
+    if (config.OTP_DELIVERY === 'smtp') {
+      // ADR-014: the transport is created per request and closed after the
+      // send; nodemailer only dials on sendMail, so nothing is held open
+      // between requests. Any failure — auth, TLS, timeout, provider
+      // refusal — becomes a fixed 502 like the webhook relay, and the
+      // provider error is never carried here, so it cannot echo credentials.
+      let transport: ReturnType<typeof createSmtpTransport> | undefined;
+      try {
+        transport = createSmtpTransport(config);
+        await sendOtpMail(transport, {
+          from: config.SMTP_FROM as string, // loadConfig forces all-or-nothing
+          to: normaliseEmail(email),
+          code,
+          ttlMinutes: config.OTP_TTL_MINUTES
+        });
+      } catch {
+        // Any SMTP failure reduces to the same fixed 502: delivered nothing.
+        throw new AccountError('otp_delivery_failed', 502);
+      } finally {
+        transport?.close?.();
+      }
+      return reply.send({ delivered: true, ttl_minutes: config.OTP_TTL_MINUTES });
+    }
+    // Development delivery returns the code in the response instead of the
+    // log, so a secret never lands in a file an operator might ship.
+    return reply.send({ delivered: false, ttl_minutes: config.OTP_TTL_MINUTES, dev_code: code });
+  }
+
   app.post('/console/api/auth/request-code', async (req, reply) => {
     const parsed = emailSchema.safeParse(req.body);
     if (!parsed.success) return fail(reply, 400, 'invalid_request', 'Email is required', req.id);
     try {
-      const code = accounts.issueLoginCode(
-        parsed.data.email,
-        config.OTP_TTL_MINUTES,
-        config.OTP_RESEND_SECONDS
-      );
-      if (config.OTP_DELIVERY === 'webhook' && config.OTP_WEBHOOK_URL) {
-        // Resolved rather than literal inspection: the relay is operator
-        // supplied, and a public name that answers with a private address is
-        // exactly how a one-time code gets posted to something internal.
-        const target = await assertResolvedPublicEgress(config.OTP_WEBHOOK_URL);
-        const delivery = await fetch(target, {
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            ...(config.OTP_WEBHOOK_TOKEN
-              ? { authorization: `Bearer ${config.OTP_WEBHOOK_TOKEN}` }
-              : {})
-          },
-          body: JSON.stringify({
-            email: normaliseEmail(parsed.data.email),
-            code,
-            ttl_minutes: config.OTP_TTL_MINUTES
-          }),
-          signal: AbortSignal.timeout(8000)
-        });
-        // A relay that answered 4xx or 5xx has delivered nothing. Reporting
-        // success would leave the member waiting for a code that is never
-        // going to arrive, with no signal to the operator that it failed.
-        if (!delivery.ok) throw new AccountError('otp_delivery_failed', 502);
-        return reply.send({ delivered: true, ttl_minutes: config.OTP_TTL_MINUTES });
-      }
-      if (config.OTP_DELIVERY === 'smtp') {
-        // ADR-014: the transport is created per request and closed after the
-        // send; nodemailer only dials on sendMail, so nothing is held open
-        // between requests. Any failure — auth, TLS, timeout, provider
-        // refusal — becomes a fixed 502 like the webhook relay, and the
-        // provider error is never carried here, so it cannot echo credentials.
-        let transport: ReturnType<typeof createSmtpTransport> | undefined;
-        try {
-          transport = createSmtpTransport(config);
-          await sendOtpMail(transport, {
-            from: config.SMTP_FROM as string, // loadConfig forces all-or-nothing
-            to: normaliseEmail(parsed.data.email),
-            code,
-            ttlMinutes: config.OTP_TTL_MINUTES
-          });
-        } catch {
-          // Any SMTP failure reduces to the same fixed 502: delivered nothing.
-          throw new AccountError('otp_delivery_failed', 502);
-        } finally {
-          transport?.close?.();
-        }
-        return reply.send({ delivered: true, ttl_minutes: config.OTP_TTL_MINUTES });
-      }
-      // Development delivery returns the code in the response instead of the
-      // log, so a secret never lands in a file an operator might ship.
-      return reply.send({ delivered: false, ttl_minutes: config.OTP_TTL_MINUTES, dev_code: code });
+      return await issueAndDeliver(parsed.data.email, 'login', reply);
     } catch (error) {
       return handle(error, reply, req.id);
     }
@@ -520,6 +553,68 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
         event: 'console.login',
         traceId: req.id,
         metadata: { method: 'email' }
+      });
+      return reply.send({ authenticated: true, role: account.role });
+    } catch (error) {
+      return handle(error, reply, req.id);
+    }
+  });
+
+  app.post('/console/api/auth/register', async (req, reply) => {
+    const parsed = registerSchema.safeParse(req.body);
+    if (!parsed.success) return fail(reply, 400, 'invalid_request', 'All fields are required', req.id);
+    const { name, email, password, confirmPassword } = parsed.data;
+    if (password !== confirmPassword) {
+      return fail(reply, 400, 'invalid_request', 'Passwords do not match', req.id);
+    }
+    const weakness = validatePasswordStrength(password);
+    if (weakness) return fail(reply, 400, 'invalid_request', weakness, req.id);
+    try {
+      const existing = accounts.findByEmail(email);
+      if (existing) {
+        if (existing.emailVerifiedAt !== null) {
+          // Already active: answer the same success shape without sending a
+          // code, so the response never reveals that the email is registered.
+          return reply.send({ delivered: true, ttl_minutes: config.OTP_TTL_MINUTES });
+        }
+        // Pending registration: refresh the credential and re-issue the code.
+        accounts.setPassword(existing.id, hashPassword(password));
+        db.db
+          .prepare('UPDATE accounts SET display_name = ? WHERE id = ?')
+          .run(name.slice(0, 120), existing.id);
+        return await issueAndDeliver(email, 'register', reply);
+      }
+      const account = accounts.create({ email, displayName: name });
+      accounts.setPassword(account.id, hashPassword(password));
+      return await issueAndDeliver(email, 'register', reply);
+    } catch (error) {
+      return handle(error, reply, req.id);
+    }
+  });
+
+  app.post('/console/api/auth/register/verify', async (req, reply) => {
+    const parsed = verifySchema.safeParse(req.body);
+    if (!parsed.success) return fail(reply, 400, 'invalid_request', 'Code is invalid', req.id);
+    try {
+      const ok = accounts.consumeCode(parsed.data.email, parsed.data.code, 'register', config.OTP_MAX_ATTEMPTS);
+      if (!ok) return fail(reply, 401, 'code_invalid', 'Code is invalid or expired', req.id);
+      const account = accounts.findByEmail(parsed.data.email);
+      if (!account || !accounts.hasPassword(account.id)) {
+        return fail(reply, 401, 'code_invalid', 'Code is invalid or expired', req.id);
+      }
+      if (account.status !== 'active') {
+        return fail(reply, 403, 'account_suspended', 'Account is suspended', req.id);
+      }
+      accounts.markEmailVerified(account.id);
+      accounts.linkIdentity(account.id, 'email', normaliseEmail(parsed.data.email));
+      const token = accounts.createSession(account.id, config.SESSION_TTL_HOURS);
+      setSessionCookie(reply, config, token);
+      db.audit({
+        tenantId: account.tenantId,
+        actorType: 'account',
+        event: 'console.register',
+        traceId: req.id,
+        metadata: { method: 'password' }
       });
       return reply.send({ authenticated: true, role: account.role });
     } catch (error) {

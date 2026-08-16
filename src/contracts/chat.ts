@@ -1,10 +1,13 @@
 import { z } from 'zod';
 
+// Agentic clients (coding CLIs, IDE agents) send large toolsets and long
+// histories on every request; these bounds sit well above real payloads while
+// Fastify's 1MB bodyLimit remains the actual size guard.
 const messageSchema = z.object({
   role: z.enum(['system', 'developer', 'user', 'assistant', 'tool']),
-  content: z.union([z.string().max(100000), z.array(z.unknown()).max(32), z.null()]),
+  content: z.union([z.string().max(1000000), z.array(z.unknown()).max(256), z.null()]),
   name: z.string().max(128).optional(),
-  tool_calls: z.array(z.unknown()).max(32).optional(),
+  tool_calls: z.array(z.unknown()).max(256).optional(),
   tool_call_id: z.string().max(256).optional()
 });
 
@@ -20,11 +23,11 @@ const messageSchema = z.object({
 export const chatRequestSchema = z
   .object({
     model: z.string().min(1).max(128),
-    messages: z.array(messageSchema).min(1).max(128),
+    messages: z.array(messageSchema).min(1).max(1024),
     stream: z.boolean().default(false),
     stream_options: z.object({ include_usage: z.boolean().optional() }).strict().optional(),
-    max_tokens: z.number().int().positive().max(4096).optional(),
-    max_completion_tokens: z.number().int().positive().max(4096).optional(),
+    max_tokens: z.number().int().positive().max(1048576).optional(),
+    max_completion_tokens: z.number().int().positive().max(1048576).optional(),
     temperature: z.number().min(0).max(2).optional(),
     top_p: z.number().min(0).max(1).optional(),
     n: z.literal(1).optional(),
@@ -34,7 +37,7 @@ export const chatRequestSchema = z
     seed: z.number().int().optional(),
     user: z.string().max(256).optional(),
     response_format: z.unknown().optional(),
-    tools: z.array(z.unknown()).max(32).optional(),
+    tools: z.array(z.unknown()).max(512).optional(),
     tool_choice: z.unknown().optional(),
     parallel_tool_calls: z.boolean().optional()
   })

@@ -65,3 +65,59 @@ describe('streamed usage accounting', () => {
     expect(meter.units()).toBeNull();
   });
 });
+
+/**
+ * The per-request detail feeds the member ledger, not billing, but it is parsed
+ * from the same untrusted stream, so it must degrade to null rather than guess.
+ */
+describe('usage detail extraction', () => {
+  it('splits OpenAI prompt and completion tokens with cache and reasoning detail', () => {
+    const meter = createUsageMeter('openai');
+    meter.observe({
+      usage: {
+        prompt_tokens: 120,
+        completion_tokens: 80,
+        total_tokens: 200,
+        prompt_tokens_details: { cached_tokens: 40 },
+        completion_tokens_details: { reasoning_tokens: 25 }
+      },
+      choices: [{ finish_reason: 'stop' }]
+    });
+    expect(meter.detail()).toEqual({
+      inputTokens: 120,
+      outputTokens: 80,
+      cachedTokens: 40,
+      thinkingTokens: 25,
+      finishReason: 'stop'
+    });
+  });
+
+  it('reads Anthropic input, output, cache reads, and the stop reason across events', () => {
+    const meter = createUsageMeter('anthropic');
+    meter.observeSseChunk(
+      'data: {"type":"message_start","message":{"usage":{"input_tokens":30,"cache_read_input_tokens":12}}}\n'
+    );
+    meter.observeSseChunk('data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":9}}\n');
+    expect(meter.detail()).toEqual({
+      inputTokens: 30,
+      outputTokens: 9,
+      cachedTokens: 12,
+      thinkingTokens: null,
+      finishReason: 'end_turn'
+    });
+  });
+
+  it('caps the finish reason and reports nulls when upstream is silent', () => {
+    const meter = createUsageMeter('openai');
+    expect(meter.detail()).toEqual({
+      inputTokens: null,
+      outputTokens: null,
+      cachedTokens: null,
+      thinkingTokens: null,
+      finishReason: null
+    });
+    meter.observe({ choices: [{ finish_reason: 'x'.repeat(80) }] });
+    expect(meter.detail().finishReason).toHaveLength(32);
+  });
+});
+

@@ -294,6 +294,26 @@ paths:
           description: Key revoked.
         '403':
           description: Origin is not allowed, or the key belongs to another account.
+  /console/api/member/keys/rotate:
+    post:
+      summary: Rotate an API key
+      description: >-
+        Requires an allowed Origin. Issues a replacement carrying the same
+        name, scopes, and mode; the previous key keeps authenticating for the
+        grace window (default 30 minutes) and then retires. Both issuing and
+        rotating count against a per-account daily limit so keys cannot be
+        spammed.
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Replacement key issued; plaintext returned exactly once.
+        '403':
+          description: Origin is not allowed, or the key belongs to another account.
+        '404':
+          description: Key not found or already revoked.
+        '429':
+          description: Daily key issue/rotate limit reached.
   /console/api/member/topup:
     post:
       summary: Open a credit top-up invoice

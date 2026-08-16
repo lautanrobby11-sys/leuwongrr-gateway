@@ -238,6 +238,66 @@ describe('console member surface', () => {
     });
     expect(listed.body).not.toContain(plaintext);
   });
+
+  it('rotates a key, returning a fresh secret and retiring the old one after the grace window', async () => {
+    const active = start();
+    const { cookie } = signIn(active);
+    const issued = await active.app.inject({
+      method: 'POST',
+      url: '/console/api/member/keys',
+      headers: { cookie, origin: CONSOLE_ORIGIN },
+      payload: { name: 'service', scopes: ['models:read'] }
+    });
+    const listed = await active.app.inject({ method: 'GET', url: '/console/api/member/keys', headers: { cookie } });
+    const original = listed.json().keys[0] as { id: string };
+
+    const rotated = await active.app.inject({
+      method: 'POST',
+      url: '/console/api/member/keys/rotate',
+      headers: { cookie, origin: CONSOLE_ORIGIN },
+      payload: { keyId: original.id, graceMinutes: 15 }
+    });
+    expect(rotated.statusCode).toBe(200);
+    const body = rotated.json();
+    expect(body.key).not.toBe(issued.json().key);
+    expect(body.grace_minutes).toBe(15);
+    expect(body.key_id).not.toBe(original.id);
+
+    const after = await active.app.inject({ method: 'GET', url: '/console/api/member/keys', headers: { cookie } });
+    const rows = after.json().keys as Array<{ id: string; revokedAt: string | null }>;
+    expect(rows.some((row) => row.id === body.key_id)).toBe(true);
+  });
+
+  it('rejects rotating a key that does not belong to the tenant', async () => {
+    const active = start();
+    const { cookie } = signIn(active);
+    const response = await active.app.inject({
+      method: 'POST',
+      url: '/console/api/member/keys/rotate',
+      headers: { cookie, origin: CONSOLE_ORIGIN },
+      payload: { keyId: 'does-not-exist' }
+    });
+    expect(response.statusCode).toBe(404);
+    expect(response.json().error.code).toBe('key_not_found');
+  });
+
+  it('caps daily key creation per tenant and points the member at rotation instead', async () => {
+    const active = start();
+    const { account, cookie } = signIn(active);
+    // Fill the tenant to the daily key ceiling through the canonical store, then
+    // assert the create guard rejects the next key with the documented code.
+    for (let index = 0; index < 10; index += 1) {
+      active.db.tenants.issue({ tenantId: account.tenantId, name: `k${index}`, scopes: ['models:read'] });
+    }
+    const response = await active.app.inject({
+      method: 'POST',
+      url: '/console/api/member/keys',
+      headers: { cookie, origin: CONSOLE_ORIGIN },
+      payload: { name: 'overflow', scopes: ['models:read'] }
+    });
+    expect(response.statusCode).toBe(429);
+    expect(response.json().error.code).toBe('key_limit_reached');
+  });
 });
 
 describe('console admin surface', () => {

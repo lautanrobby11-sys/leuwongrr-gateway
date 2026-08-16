@@ -7,7 +7,8 @@ import {
   type BillingSummary,
   type LedgerEntry,
   type Plan,
-  type SubscriptionInfo
+  type SubscriptionInfo,
+  type UsageRecent
 } from '../lib/api';
 import { Icon, type IconName } from '../components/icons';
 import {
@@ -23,13 +24,24 @@ import {
   Spinner,
   Stat,
   Table,
+  Tabs,
   ToastHost,
   cx,
   inputClass,
   useToast,
   type NavItem
 } from '../components/ui';
-import { dateTime, daysUntil, money, shortDate, tokens } from '../lib/format';
+import {
+  cachePercent,
+  dateTime,
+  daysUntil,
+  duration,
+  money,
+  moneyPrecise,
+  shortDate,
+  tokens,
+  tokensPerSecond
+} from '../lib/format';
 import '../styles.css';
 
 /**
@@ -124,6 +136,132 @@ function UsageChart({ days }: { days: Array<{ day: string; units: number }> }) {
   return <div className="flex h-40 items-end gap-1 overflow-x-auto" role="img" aria-label="Daily token usage">{days.map((entry) => <div key={entry.day} className="group flex min-w-[10px] flex-1 flex-col items-center gap-1"><motion.div className="w-full rounded-t bg-brand/70 group-hover:bg-brand" initial={{ height: 0 }} animate={{ height: `${Math.max(2, (entry.units / peak) * 100)}%` }} transition={{ duration: 0.4 }} title={`${entry.day}: ${tokens(entry.units)} units`} /><span className="hidden text-[10px] text-muted sm:block">{entry.day.slice(8)}</span></div>)}</div>;
 }
 
+/**
+ * App labels are derived server-side from the user agent (see app-label.ts). The
+ * portal only maps the known set to an icon and a friendly name; an unrecognised
+ * label still renders its raw text so a new client is visible before the map
+ * catches up.
+ */
+const APP_META: Record<string, { label: string; icon: IconName }> = {
+  zcode: { label: 'ZCode', icon: 'terminal' },
+  'claude-code': { label: 'Claude Code', icon: 'terminal' },
+  'claude-cli': { label: 'Claude CLI', icon: 'terminal' },
+  codex: { label: 'Codex', icon: 'terminal' },
+  cursor: { label: 'Cursor', icon: 'zap' },
+  'openai-python': { label: 'OpenAI SDK', icon: 'bot' },
+  'openai-node': { label: 'OpenAI SDK', icon: 'bot' },
+  anthropic: { label: 'Anthropic SDK', icon: 'bot' },
+  browser: { label: 'Browser', icon: 'message' },
+  curl: { label: 'curl', icon: 'terminal' },
+  other: { label: 'API', icon: 'send' }
+};
+
+function AppLabel({ value }: { value: string | null }) {
+  if (!value) return <span className="text-muted">—</span>;
+  const meta = APP_META[value];
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <Icon name={meta?.icon ?? 'send'} size={13} className="text-muted" />
+      <span>{meta?.label ?? value}</span>
+    </span>
+  );
+}
+
+/**
+ * The per-request token breakdown, kept in one cell so the wide table stays
+ * legible: input with its cached share, then output with its thinking share.
+ * A missing split renders a dash rather than a zero it cannot vouch for.
+ */
+function TokenBreakdown({ row }: { row: UsageRecent }) {
+  const cache = cachePercent(row.cachedTokens, row.inputTokens);
+  return (
+    <div className="flex flex-col gap-0.5 text-xs tabular-nums leading-tight">
+      <span className="flex items-center gap-1">
+        <Icon name="arrowUp" size={11} className="rotate-180 text-muted" />
+        {row.inputTokens === null ? '—' : tokens(row.inputTokens)}
+        {row.cachedTokens !== null && row.cachedTokens > 0 && (
+          <span className="text-muted">({tokens(row.cachedTokens)} cached{cache !== '—' ? ` · ${cache}` : ''})</span>
+        )}
+      </span>
+      <span className="flex items-center gap-1">
+        <Icon name="arrowUp" size={11} className="text-muted" />
+        {row.outputTokens === null ? '—' : tokens(row.outputTokens)}
+        {row.thinkingTokens !== null && row.thinkingTokens > 0 && (
+          <span className="text-muted">({tokens(row.thinkingTokens)} thinking)</span>
+        )}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * The rich recent-request ledger the member spec asks for: when, model, the
+ * token split with cache/thinking detail, throughput, estimated cost, the
+ * detected client app, and the finish reason. It shares the sortable Table
+ * primitive; sorting stays here so the component owns its own row order.
+ */
+export function RecentRequests({ rows }: { rows: UsageRecent[] }) {
+  const [sort, setSort] = useState<{ index: number; dir: 'asc' | 'desc' }>({ index: 0, dir: 'desc' });
+  const headers = ['When', 'Model', 'Tokens', 'Speed', 'Cost est.', 'App', 'Finish'];
+  const sorted = useMemo(() => {
+    const key = (row: UsageRecent): number | string => {
+      switch (sort.index) {
+        case 0: return row.at;
+        case 1: return row.model ?? '';
+        case 2: return row.units;
+        case 3: return (row.outputTokens ?? 0) / Math.max(1, row.durationMs ?? 1);
+        case 4: return row.costCentsEst ?? -1;
+        default: return row.at;
+      }
+    };
+    return [...rows].sort((a, b) => {
+      const ka = key(a);
+      const kb = key(b);
+      const cmp = typeof ka === 'number' && typeof kb === 'number' ? ka - kb : String(ka).localeCompare(String(kb));
+      return sort.dir === 'asc' ? cmp : -cmp;
+    });
+  }, [rows, sort]);
+  const onSort = (index: number) =>
+    setSort((current) => (current.index === index ? { index, dir: current.dir === 'asc' ? 'desc' : 'asc' } : { index, dir: 'desc' }));
+  return (
+    <Table headers={headers} empty={rows.length === 0} sort={sort} onSort={onSort} sticky>
+      {sorted.map((row) => (
+        <tr key={row.requestId}>
+          <Cell className="whitespace-nowrap text-muted">{dateTime(row.at)}</Cell>
+          <Cell className="font-mono text-xs">{row.model ?? <span className="text-muted">unknown</span>}</Cell>
+          <Cell><TokenBreakdown row={row} /></Cell>
+          <Cell className="whitespace-nowrap text-xs tabular-nums text-muted">{tokensPerSecond(row.outputTokens, row.durationMs)}<br />{duration(row.durationMs)}</Cell>
+          <Cell className="tabular-nums">{row.costCentsEst === null ? <span className="text-muted">—</span> : moneyPrecise(row.costCentsEst)}</Cell>
+          <Cell className="text-xs"><AppLabel value={row.appLabel} /></Cell>
+          <Cell className="text-xs text-muted">{row.finishReason ?? '—'}</Cell>
+        </tr>
+      ))}
+    </Table>
+  );
+}
+
+/**
+ * The Overview ledger: fewer columns than the Usage tab, tuned to answer "where
+ * did my balance go" at a glance. Grants and purchases read green, debits keep
+ * the ink colour, and the source column names the model or plan when the server
+ * supplies it.
+ */
+function LedgerTable({ entries }: { entries: LedgerEntry[] }) {
+  return (
+    <Table headers={['When', 'Type', 'Source', 'Tokens', 'Balance']} empty={entries.length === 0}>
+      {entries.map((entry) => (
+        <tr key={entry.id}>
+          <Cell className="whitespace-nowrap text-muted">{dateTime(entry.createdAt)}</Cell>
+          <Cell><Badge tone={entry.tokens >= 0 ? 'good' : 'neutral'}>{entry.kind}</Badge></Cell>
+          <Cell className="text-muted">{entry.source}</Cell>
+          <Cell className={cx('tabular-nums font-medium', entry.tokens >= 0 ? 'text-good' : 'text-ink')}>{entry.tokens >= 0 ? '+' : ''}{tokens(entry.tokens)}</Cell>
+          <Cell className="tabular-nums text-muted">{tokens(entry.balanceAfter)}</Cell>
+        </tr>
+      ))}
+    </Table>
+  );
+}
+
 function Member() {
   const toast = useToast();
   const [tab, setTab] = useState('overview');
@@ -132,6 +270,8 @@ function Member() {
   const [ledger, setLedger] = useState<LedgerEntry[]>([]);
   const [account, setAccount] = useState<{ email: string; display_name: string } | null>(null);
   const [days, setDays] = useState<Array<{ day: string; units: number }>>([]);
+  const [recent, setRecent] = useState<UsageRecent[]>([]);
+  const [usageTab, setUsageTab] = useState('requests');
   const [plans, setPlans] = useState<Plan[]>([]);
   const [keys, setKeys] = useState<Array<{ id: string; name: string; prefix: string; last4: string; scopes: string[]; createdAt: string; revokedAt: string | null }>>([]);
   const [revealedKeyId, setRevealedKeyId] = useState<string | null>(null);
@@ -141,6 +281,10 @@ function Member() {
   const [keyScopes, setKeyScopes] = useState<string[]>(['models:read', 'chat:write']);
   const [issuedKey, setIssuedKey] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Rotation reuses the "copy your key" modal: the plaintext replacement is
+  // shown once, exactly like a freshly issued key. `rotateTarget` holds the key
+  // awaiting confirmation so the grace window is explicit before it is retired.
+  const [rotateTarget, setRotateTarget] = useState<{ id: string; name: string } | null>(null);
   // Release 2 custom token builder state: the operator picks a quantity (whole
   // millions, minimum one) and a shelf life (daily / weekly / monthly).
   const [packQuantity, setPackQuantity] = useState('1');
@@ -166,7 +310,7 @@ function Member() {
     setLoading(true);
     try {
       const [overview, usage, planList, keyList, paymentList] = await Promise.all([api.member.overview(), api.member.usage(), api.member.plans(), api.member.keys(), api.member.payments()]);
-      setBilling(overview.billing); setLedger(overview.ledger); setAccount(overview.account); setDays(usage.days); setPlans(planList.plans); setKeys(keyList.keys); setPayments(paymentList.payments);
+      setBilling(overview.billing); setLedger(overview.ledger); setAccount(overview.account); setDays(usage.days); setRecent(usage.recent); setPlans(planList.plans); setKeys(keyList.keys); setPayments(paymentList.payments);
       await loadSubscriptions();
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) { window.location.href = '/login'; return; }
@@ -181,6 +325,29 @@ function Member() {
     try { const result = await api.member.createKey(keyName, keyScopes); setIssuedKey(result.key); setKeyName(''); await load(); }
     catch (error) { toast(error instanceof ApiError ? error.message : 'Could not create the key', 'bad'); }
     finally { setBusy(false); }
+  }
+
+  /**
+   * Rotates a key in place: the server mints a replacement with the same name
+   * and scopes and retires the old one after a 30-minute grace window. The
+   * plaintext is surfaced in the same once-only modal as a new key, then the
+   * list reloads so the retiring key shows its pending revocation.
+   */
+  async function rotateKey() {
+    if (!rotateTarget) return;
+    setBusy(true);
+    try {
+      const result = await api.member.rotateKey(rotateTarget.id);
+      setKeyModal(true);
+      setIssuedKey(result.key);
+      setRotateTarget(null);
+      toast(`Key rotated · old key retires in ${result.grace_minutes} min`);
+      await load();
+    } catch (error) {
+      toast(error instanceof ApiError ? error.message : 'Could not rotate the key', 'bad');
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function subscribe(plan: Plan) {
@@ -246,9 +413,18 @@ function Member() {
           {!billing.funded && <div className="animate-rise flex flex-wrap items-center justify-between gap-3 rounded-card border border-bad/40 bg-bad/5 px-4 py-3"><p className="flex items-center gap-2 text-sm"><Icon name="alert" size={16} className="text-bad" />Your balance is empty. API requests are being refused.</p><Button icon="wallet" onClick={() => setTab('plans')}>Add tokens</Button></div>}
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"><Stat label="Available" value={tokens(billing.totalAvailable)} hint="Plan allowance plus wallet" icon="wallet" tone={billing.funded ? 'good' : 'bad'} /><Stat label="Used today" value={tokens(billing.usageToday)} icon="activity" /><Stat label="This period" value={tokens(billing.usageThisPeriod)} icon="trend" /><Stat label="Runway" value={billing.projectedDaysLeft === null ? '—' : `${billing.projectedDaysLeft}d`} hint="At today's burn rate" icon="gauge" tone={billing.projectedDaysLeft !== null && billing.projectedDaysLeft <= 3 ? 'warn' : 'default'} /></div>
           <TokenFlow billing={billing} />
-          <Card title="Recent ledger" subtitle="Every grant, purchase, and debit"><Table headers={['When', 'Type', 'Source', 'Tokens', 'Balance']} empty={ledger.length === 0}>{ledger.map((entry) => <tr key={entry.id}><Cell className="whitespace-nowrap text-muted">{dateTime(entry.createdAt)}</Cell><Cell><Badge tone={entry.tokens >= 0 ? 'good' : 'neutral'}>{entry.kind}</Badge></Cell><Cell className="text-muted">{entry.source}</Cell><Cell className={cx('tabular-nums font-medium', entry.tokens >= 0 ? 'text-good' : 'text-ink')}>{entry.tokens >= 0 ? '+' : ''}{tokens(entry.tokens)}</Cell><Cell className="tabular-nums text-muted">{tokens(entry.balanceAfter)}</Cell></tr>)}</Table></Card>
+          <Card title="Recent ledger" subtitle="Every grant, purchase, and debit"><LedgerTable entries={ledger} /></Card>
         </div>}
-        {tab === 'usage' && <div className="space-y-4"><Card title="Daily usage" subtitle="Settled units, last 30 days"><UsageChart days={days} /></Card><Card title="Payments" subtitle="Invoices raised through Cryptomus"><Table headers={['Order', 'Purpose', 'Tokens', 'Amount', 'Status', 'Created']} empty={payments.length === 0}>{payments.map((payment) => <tr key={String(payment.order_id)}><Cell className="font-mono text-xs text-muted">{String(payment.order_id).slice(0, 18)}</Cell><Cell>{String(payment.purpose)}</Cell><Cell className="tabular-nums">{tokens(Number(payment.tokens ?? 0))}</Cell><Cell className="tabular-nums">{money(Number(payment.amount_cents ?? 0))}</Cell><Cell><Badge tone={String(payment.status).startsWith('paid') ? 'good' : String(payment.status) === 'cancel' ? 'bad' : 'warn'}>{String(payment.status)}</Badge></Cell><Cell className="whitespace-nowrap text-muted">{dateTime(String(payment.created_at))}</Cell></tr>)}</Table></Card></div>}
+        {tab === 'usage' && <div className="space-y-4">
+          <Tabs
+            tabs={[{ id: 'requests', label: 'Requests', icon: 'activity' }, { id: 'daily', label: 'Daily', icon: 'trend' }, { id: 'payments', label: 'Payments', icon: 'wallet' }]}
+            active={usageTab}
+            onChange={setUsageTab}
+          />
+          {usageTab === 'requests' && <Card title="Recent requests" subtitle="Last 50 settled requests · cost is an estimate against list price, the ledger rules the real balance"><RecentRequests rows={recent} /></Card>}
+          {usageTab === 'daily' && <Card title="Daily usage" subtitle="Settled units, last 30 days"><UsageChart days={days} /></Card>}
+          {usageTab === 'payments' && <Card title="Payments" subtitle="Invoices raised through Cryptomus"><Table headers={['Order', 'Purpose', 'Tokens', 'Amount', 'Status', 'Created']} empty={payments.length === 0}>{payments.map((payment) => <tr key={String(payment.order_id)}><Cell className="font-mono text-xs text-muted">{String(payment.order_id).slice(0, 18)}</Cell><Cell>{String(payment.purpose)}</Cell><Cell className="tabular-nums">{tokens(Number(payment.tokens ?? 0))}</Cell><Cell className="tabular-nums">{money(Number(payment.amount_cents ?? 0))}</Cell><Cell><Badge tone={String(payment.status).startsWith('paid') ? 'good' : String(payment.status) === 'cancel' ? 'bad' : 'warn'}>{String(payment.status)}</Badge></Cell><Cell className="whitespace-nowrap text-muted">{dateTime(String(payment.created_at))}</Cell></tr>)}</Table></Card>}
+        </div>}
         {tab === 'plans' && <div className="space-y-4">
           <Card title="Your subscriptions" subtitle="Rolling time passes and every live token pack, each with its own countdown">
             <Table headers={['Plan', 'Kind', 'Allowance', 'Used', 'Expires', 'Resets', '']} empty={subscriptions.length === 0}>
@@ -308,11 +484,24 @@ function Member() {
             <p className="mt-3 text-xs text-muted">Tokens are spent before the wallet, oldest-expiry first. A 1M minimum keeps custom pricing honest; every pack gets its own countdown from the moment it settles.</p>
           </Card>}
         </div>}
-        {tab === 'keys' && <Card title="API keys" subtitle="Use these with the OpenAI or Anthropic SDKs" action={<Button icon="plus" onClick={() => setKeyModal(true)}>New key</Button>}><Table headers={['Name', 'Key', 'Scopes', 'Created', 'Status', '']} empty={keys.length === 0}>{keys.map((key) => <tr key={key.id}><Cell className="font-medium">{key.name}</Cell><Cell className="font-mono text-xs text-muted"><div className="flex items-center gap-1.5">{revealedKeyId === key.id ? <span className="text-ink">{key.prefix}{'…'}{key.last4}</span> : <span>{key.prefix}{'••••'}{key.last4}</span>}<button type="button" className="cursor-pointer rounded-md p-0.5 text-muted transition-colors hover:text-ink" aria-label={revealedKeyId === key.id ? 'Hide key' : 'Reveal key'} onClick={() => setRevealedKeyId((current) => (current === key.id ? null : key.id))}><Icon name={revealedKeyId === key.id ? 'eyeOff' : 'eye'} size={15} /></button></div></Cell><Cell className="text-xs text-muted">{key.scopes.join(', ')}</Cell><Cell className="whitespace-nowrap text-muted">{shortDate(key.createdAt)}</Cell><Cell><Badge tone={key.revokedAt ? 'bad' : 'good'}>{key.revokedAt ? 'Revoked' : 'Active'}</Badge></Cell><Cell className="text-right">{!key.revokedAt && <Button variant="danger" onClick={() => void api.member.revokeKey(key.id).then(load).then(() => toast('Key revoked'))}>Revoke</Button>}</Cell></tr>)}</Table></Card>}
+        {tab === 'keys' && <Card title="API keys" subtitle="Use these with the OpenAI or Anthropic SDKs" action={<Button icon="plus" onClick={() => setKeyModal(true)}>New key</Button>}><Table headers={['Name', 'Key', 'Scopes', 'Created', 'Status', '']} empty={keys.length === 0}>{keys.map((key) => <tr key={key.id}><Cell className="font-medium">{key.name}</Cell><Cell className="font-mono text-xs text-muted"><div className="flex items-center gap-1.5">{revealedKeyId === key.id ? <span className="text-ink">{key.prefix}{'…'}{key.last4}</span> : <span>{key.prefix}{'••••'}{key.last4}</span>}<button type="button" className="cursor-pointer rounded-md p-0.5 text-muted transition-colors hover:text-ink" aria-label={revealedKeyId === key.id ? 'Hide key' : 'Reveal key'} onClick={() => setRevealedKeyId((current) => (current === key.id ? null : key.id))}><Icon name={revealedKeyId === key.id ? 'eyeOff' : 'eye'} size={15} /></button></div></Cell><Cell className="text-xs text-muted">{key.scopes.join(', ')}</Cell><Cell className="whitespace-nowrap text-muted">{shortDate(key.createdAt)}</Cell><Cell><Badge tone={key.revokedAt ? 'bad' : 'good'}>{key.revokedAt ? 'Revoked' : 'Active'}</Badge></Cell><Cell className="text-right">{!key.revokedAt && <div className="flex justify-end gap-1.5"><Button variant="outline" icon="key" onClick={() => setRotateTarget({ id: key.id, name: key.name })}>Rotate</Button><Button variant="danger" onClick={() => void api.member.revokeKey(key.id).then(load).then(() => toast('Key revoked'))}>Revoke</Button></div>}</Cell></tr>)}</Table></Card>}
         <Modal open={keyModal} title={issuedKey ? 'Copy your key' : 'Create an API key'} onClose={() => { setKeyModal(false); setIssuedKey(null); }}>{issuedKey ? <div className="space-y-3"><p className="text-sm text-muted">This is the only time the key is shown. The gateway stores a hash, so it cannot be recovered later.</p><code className="block break-all rounded-lg border border-border bg-raised p-3 font-mono text-xs">{issuedKey}</code><Button icon="check" className="w-full" onClick={() => { void navigator.clipboard.writeText(issuedKey); toast('Key copied'); }}>Copy to clipboard</Button></div> : <div className="space-y-4"><Field label="Name" hint="Something you will recognise later, like 'codex-laptop'"><input className={inputClass} value={keyName} onChange={(event) => setKeyName(event.target.value)} /></Field><Field label="Scopes"><div className="grid gap-2 sm:grid-cols-2">{['models:read', 'chat:write', 'responses:write', 'messages:write'].map((scope) => <label key={scope} className="flex cursor-pointer items-center gap-2 rounded-lg border border-border bg-raised px-3 py-2 text-sm"><input type="checkbox" className="accent-brand" checked={keyScopes.includes(scope)} onChange={(event) => setKeyScopes((current) => event.target.checked ? [...current, scope] : current.filter((item) => item !== scope))} /><span className="font-mono text-xs">{scope}</span></label>)}</div></Field><Button className="w-full" icon="key" busy={busy} disabled={keyName.trim().length === 0 || keyScopes.length === 0} onClick={() => void createKey()}>Create key</Button></div>}</Modal>
+        <Modal open={rotateTarget !== null} title="Rotate API key" onClose={() => setRotateTarget(null)}>
+          <div className="space-y-4">
+            <p className="text-sm text-muted">Rotating <span className="font-medium text-ink">{rotateTarget?.name}</span> mints a fresh key with the same scopes and shows it once. The current key keeps working for a 30-minute grace window so live callers can switch over without an outage, then it is revoked automatically.</p>
+            <div className="flex items-start gap-2 rounded-lg border border-brand/30 bg-brand-soft px-3 py-2.5 text-xs text-muted"><Icon name="shield" size={15} className="mt-0.5 shrink-0 text-brand" />Rotate instead of creating new keys — it keeps the key count flat and avoids hitting the daily key limit.</div>
+            <div className="flex justify-end gap-2"><Button variant="outline" onClick={() => setRotateTarget(null)}>Cancel</Button><Button icon="key" busy={busy} onClick={() => void rotateKey()}>Rotate key</Button></div>
+          </div>
+        </Modal>
       </>}
     </Shell>
   );
 }
 
-createRoot(document.getElementById('root') as HTMLElement).render(<StrictMode><ToastHost><Member /></ToastHost></StrictMode>);
+// Guard the mount so importing this module has no side effect off the page:
+// the DOM behavioural tests import components directly and there is no #root
+// then, while member.html always provides one in the browser.
+const rootElement = document.getElementById('root');
+if (rootElement) {
+  createRoot(rootElement).render(<StrictMode><ToastHost><Member /></ToastHost></StrictMode>);
+}

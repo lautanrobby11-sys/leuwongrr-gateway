@@ -29,6 +29,7 @@ import { ModelCatalog, ModelError, modelInputSchema, modelUpdateSchema } from '.
 import { ModelGroupCatalog, ModelGroupError, modelGroupInputSchema } from '../models/groups.js';
 import type { OmniRouteClient } from '../upstream.js';
 import type { Scope } from '../auth/api-keys.js';
+import { TenantStoreError } from '../persistence/tenant-store.js';
 
 export interface ConsoleDeps {
   config: Config;
@@ -70,6 +71,13 @@ const ISSUABLE_SCOPES: readonly Scope[] = [
   'responses:write',
   'messages:write'
 ];
+/**
+ * Keys issued and rotated per account per day. A member who needs more than
+ * this has a process problem, not a key problem; the limit stops an automated
+ * or compromised session from minting an unbounded key farm. Revocation stays
+ * unlimited because removing access must never be rate limited.
+ */
+const MEMBER_KEY_DAILY_LIMIT = 10;
 
 /**
  * Cryptomus reports money as a decimal string in the invoice currency. A value
@@ -85,6 +93,105 @@ function reportedCents(value: unknown): number | null {
 
 function fail(reply: FastifyReply, status: number, code: string, message: string, traceId: string) {
   return reply.code(status).send({ error: { code, message, trace_id: traceId } });
+}
+
+/** Keys this tenant created in the last 24h, rotated replacements included. */
+function keysIssuedToday(db: GatewayDatabase, tenantId: string): number {
+  const since = new Date(Date.now() - 86_400_000).toISOString();
+  const row = db.db
+    .prepare('SELECT COUNT(*) AS count FROM api_keys WHERE tenant_id=? AND created_at >= ?')
+    .get(tenantId, since) as { count: number };
+  return row.count;
+}
+
+interface UsageRecentRow {
+  requestId: string;
+  at: string;
+  model: string | null;
+  units: number;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cachedTokens: number | null;
+  thinkingTokens: number | null;
+  durationMs: number | null;
+  finishReason: string | null;
+  appLabel: string | null;
+  costCentsEst: number | null;
+}
+
+interface UsageEventDetailRow {
+  request_id: string;
+  created_at: string;
+  model_id: string | null;
+  units: number;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cached_tokens: number | null;
+  thinking_tokens: number | null;
+  duration_ms: number | null;
+  finish_reason: string | null;
+  app_label: string | null;
+}
+
+interface ModelPriceRow {
+  public_id: string;
+  input_price_cents: number;
+  output_price_cents: number;
+  cache_read_price_cents: number;
+}
+
+/**
+ * Recent settled requests with the phase-B detail columns. Cost is an estimate
+ * against the model's list price in cents per million tokens — plan multipliers
+ * and wallet debits still rule the real ledger, so the UI labels it "est." and
+ * rows without token splits (or an unknown model) show no cost rather than a
+ * fabricated one.
+ */
+function recentUsage(db: GatewayDatabase, tenantId: string, limit: number): UsageRecentRow[] {
+  const rows = db.db
+    .prepare(
+      `SELECT request_id, created_at, model_id, units, input_tokens, output_tokens, cached_tokens,
+              thinking_tokens, duration_ms, finish_reason, app_label
+       FROM usage_events WHERE tenant_id=? AND state='settled'
+       ORDER BY created_at DESC LIMIT ?`
+    )
+    .all(tenantId, limit) as UsageEventDetailRow[];
+  if (rows.length === 0) return [];
+  const prices = new Map(
+    (db.db
+      .prepare('SELECT public_id, input_price_cents, output_price_cents, cache_read_price_cents FROM models')
+      .all() as ModelPriceRow[]).map((price) => [price.public_id, price])
+  );
+  return rows.map((row) => {
+    const price = row.model_id !== null ? prices.get(row.model_id) : undefined;
+    let costCentsEst: number | null = null;
+    if (price && (row.input_tokens !== null || row.output_tokens !== null)) {
+      const input = row.input_tokens ?? 0;
+      const output = row.output_tokens ?? 0;
+      const cached = row.cached_tokens ?? 0;
+      costCentsEst = Number(
+        (
+          (input / 1_000_000) * price.input_price_cents +
+          (output / 1_000_000) * price.output_price_cents +
+          (cached / 1_000_000) * price.cache_read_price_cents
+        ).toFixed(4)
+      );
+    }
+    return {
+      requestId: row.request_id,
+      at: row.created_at,
+      model: row.model_id,
+      units: row.units,
+      inputTokens: row.input_tokens,
+      outputTokens: row.output_tokens,
+      cachedTokens: row.cached_tokens,
+      thinkingTokens: row.thinking_tokens,
+      durationMs: row.duration_ms,
+      finishReason: row.finish_reason,
+      appLabel: row.app_label,
+      costCentsEst
+    };
+  });
 }
 
 function readCookie(req: FastifyRequest, name: string): string | null {
@@ -513,7 +620,7 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
           "SELECT day, COALESCE(SUM(units), 0) AS units FROM usage_events WHERE tenant_id = ? AND state = 'settled' GROUP BY day ORDER BY day DESC LIMIT 30"
         )
         .all(account.tenantId) as Array<{ day: string; units: number }>;
-      return reply.send({ days: rows.reverse() });
+      return reply.send({ days: rows.reverse(), recent: recentUsage(db, account.tenantId, 50) });
     } catch (error) {
       return handle(error, reply, req.id);
     }
@@ -542,6 +649,15 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
       const account = requireMember(await currentAccount(req));
       const parsed = keySchema.safeParse(req.body);
       if (!parsed.success) return fail(reply, 400, 'invalid_request', 'Key request invalid', req.id);
+      if (keysIssuedToday(db, account.tenantId) >= MEMBER_KEY_DAILY_LIMIT) {
+        return fail(
+          reply,
+          429,
+          'key_limit_reached',
+          `Daily key limit reached (${MEMBER_KEY_DAILY_LIMIT}). Revoke unused keys or rotate an existing one instead.`,
+          req.id
+        );
+      }
       const scopes = parsed.data.scopes.filter((scope): scope is Scope =>
         ISSUABLE_SCOPES.includes(scope as Scope)
       );
@@ -571,6 +687,56 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
       if (!parsed.success) return fail(reply, 400, 'invalid_request', 'Key id required', req.id);
       db.tenants.revoke(account.tenantId, parsed.data.keyId);
       return reply.send({ revoked: true });
+    } catch (error) {
+      return handle(error, reply, req.id);
+    }
+  });
+
+  app.post('/console/api/member/keys/rotate', async (req, reply) => {
+    try {
+      const account = requireMember(await currentAccount(req));
+      const parsed = z
+        .object({
+          keyId: z.string().min(1).max(64),
+          graceMinutes: z.number().int().min(0).max(1440).optional()
+        })
+        .strict()
+        .safeParse(req.body);
+      if (!parsed.success) return fail(reply, 400, 'invalid_request', 'Rotate request invalid', req.id);
+      if (keysIssuedToday(db, account.tenantId) >= MEMBER_KEY_DAILY_LIMIT) {
+        return fail(
+          reply,
+          429,
+          'key_limit_reached',
+          `Daily key limit reached (${MEMBER_KEY_DAILY_LIMIT}). Rotate replaces a key without growing the count tomorrow.`,
+          req.id
+        );
+      }
+      const graceMinutes = parsed.data.graceMinutes ?? 30;
+      let rotated;
+      try {
+        // Scoping by tenant inside the store is the actual authorisation: one
+        // account can never rotate a key that belongs to another tenant.
+        rotated = db.tenants.rotate(account.tenantId, parsed.data.keyId, { graceMinutes });
+      } catch (error) {
+        if (error instanceof TenantStoreError) {
+          return fail(reply, 404, 'key_not_found', 'Key not found or already revoked', req.id);
+        }
+        throw error;
+      }
+      db.audit({
+        tenantId: account.tenantId,
+        actorType: 'account',
+        event: 'console.key.rotated',
+        traceId: req.id,
+        metadata: { keyId: parsed.data.keyId, graceMinutes, replacedWith: rotated.key.id }
+      });
+      // Shown once, exactly like a freshly issued key.
+      return reply.send({
+        key: rotated.plaintext,
+        key_id: rotated.key.id,
+        grace_minutes: graceMinutes
+      });
     } catch (error) {
       return handle(error, reply, req.id);
     }

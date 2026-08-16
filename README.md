@@ -8,7 +8,7 @@ web console for administration, member self-service and chat.
 client  ->  router.leuwongrr.cloud  ->  api.leuwongrr.cloud  ->  /v1/*  ->  gateway (127.0.0.1:2080)  ->  OmniRoute (127.0.0.1:20128)
 ```
 
-## Canonical status — 14 August 2026
+## Canonical status — 16 August 2026
 
 This status separates repository state from independently verified production
 state. It is intentionally conservative: a newer repository commit is not
@@ -16,12 +16,12 @@ evidence that the VPS is running that commit.
 
 | Item | Verified state |
 | --- | --- |
-| Local/GitHub `main` | `d8f1b5935848816cf1457816a7a88411746867f5` |
-| Production active SHA (VPS#2) | `d8f1b5935848816cf1457816a7a88411746867f5` (verified via SSH 14 Aug 2026; previous `829b24f`) |
-| API | LIVE, verified 200 on loopback health/readiness |
-| Console | **ON for Gate 3 OTP/acceptance evidence**; `/admin*` remains protected by Cloudflare Access and final exposure approval is pending |
-| Gate 3 — OTP / Cloudflare Access / acceptance | **BLOCKED**; SMTP OTP, Access negative auth, backup/restore, rollback, and the current acceptance/soak evidence are recorded, but security rotation, Fase 11 review, remaining acceptance/soak duration, and final approval are still outstanding |
-| Final go-live | **NOT DECLARED** |
+| Production active SHA (VPS#2) | `3eb825b2a98bd21732e8be34bd147ad338cb4502` (deployed and SSH-verified 16 Aug 2026 01:57 UTC; rollback target `7dd1f50`) |
+| Local/GitHub `main` | `3eb825b2a98bd21732e8be34bd147ad338cb4502` plus post-release docs commits; docs-only commits do not change the deployed release |
+| API | LIVE — loopback live/ready 200, public `https://api.leuwongrr.cloud/health/live` 200, journal 0 errors post-deploy |
+| Console | LIVE; `/admin*` requires a Cloudflare Access JWT **and** an application role |
+| Gate 3 — OTP / Cloudflare Access / acceptance | RESOLVED (archived go-live notes 31 Jul–2 Aug 2026); acceptance, backup/restore, and rollback evidence recorded |
+| Final go-live | **DECLARED** (August 2026) and maintained through `3eb825b` |
 
 The canonical status record is the [Notion API status page](https://app.notion.com/p/7929024abd2483f8bfb181327c508e4d).
 Production activation requires the release-authority procedure in

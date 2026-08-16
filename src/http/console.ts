@@ -135,6 +135,7 @@ interface UsageEventDetailRow {
 
 interface ModelPriceRow {
   public_id: string;
+  provider: string;
   input_price_cents: number;
   output_price_cents: number;
   cache_read_price_cents: number;
@@ -146,6 +147,12 @@ interface ModelPriceRow {
  * and wallet debits still rule the real ledger, so the UI labels it "est." and
  * rows without token splits (or an unknown model) show no cost rather than a
  * fabricated one.
+ *
+ * The formula normalises the cached-token overlap per provider: OpenAI reports
+ * `prompt_tokens` inclusive of cached tokens, while Anthropic excludes cache
+ * reads from `input_tokens`. The cent-per-million price columns are per-model
+ * list prices; the actual billing also applies plan multipliers and wallet
+ * debits, so the estimate is directional, not authoritative.
  */
 function recentUsage(db: GatewayDatabase, tenantId: string, limit: number): UsageRecentRow[] {
   const rows = db.db
@@ -159,7 +166,7 @@ function recentUsage(db: GatewayDatabase, tenantId: string, limit: number): Usag
   if (rows.length === 0) return [];
   const prices = new Map(
     (db.db
-      .prepare('SELECT public_id, input_price_cents, output_price_cents, cache_read_price_cents FROM models')
+      .prepare('SELECT public_id, provider, input_price_cents, output_price_cents, cache_read_price_cents FROM models')
       .all() as ModelPriceRow[]).map((price) => [price.public_id, price])
   );
   return rows.map((row) => {
@@ -169,9 +176,15 @@ function recentUsage(db: GatewayDatabase, tenantId: string, limit: number): Usag
       const input = row.input_tokens ?? 0;
       const output = row.output_tokens ?? 0;
       const cached = row.cached_tokens ?? 0;
+      // OpenAI prompt_tokens are inclusive of cached_tokens; to avoid
+      // double-counting the cached portion at both input_price and
+      // cache_read_price, subtract cached from the input term. The schema
+      // stores the raw upstream value, so the subtraction is here in the
+      // estimate, not in the stored row.
+      const effectiveInput = price.provider === 'openai' ? Math.max(0, input - cached) : input;
       costCentsEst = Number(
         (
-          (input / 1_000_000) * price.input_price_cents +
+          (effectiveInput / 1_000_000) * price.input_price_cents +
           (output / 1_000_000) * price.output_price_cents +
           (cached / 1_000_000) * price.cache_read_price_cents
         ).toFixed(4)
@@ -654,7 +667,7 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
           reply,
           429,
           'key_limit_reached',
-          `Daily key limit reached (${MEMBER_KEY_DAILY_LIMIT}). Revoke unused keys or rotate an existing one instead.`,
+          `Daily key creation limit reached (${MEMBER_KEY_DAILY_LIMIT}). Revoke unused keys to free a slot.`,
           req.id
         );
       }
@@ -708,7 +721,7 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
           reply,
           429,
           'key_limit_reached',
-          `Daily key limit reached (${MEMBER_KEY_DAILY_LIMIT}). Rotate replaces a key without growing the count tomorrow.`,
+          `Daily key limit reached (${MEMBER_KEY_DAILY_LIMIT}). Revoke unused keys to free a slot.`,
           req.id
         );
       }

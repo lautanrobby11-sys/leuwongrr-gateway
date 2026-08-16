@@ -52,9 +52,11 @@ export const PUBLIC_ALLOWLIST: readonly AllowedRoute[] = Object.freeze([
   },
   // Release 2 custom token packs and subscription timer resets: member-scoped
   // POST routes with no tenant-id path segment, so they ride the same guard.
+  // keys/rotate (phase B) reuses the same shape: it can only touch the calling
+  // account's own tenant keys.
   {
     method: 'POST',
-    pattern: /^\/console\/api\/member\/(keys|keys\/revoke|topup|custom-topup|subscribe|subscription\/reset)$/,
+    pattern: /^\/console\/api\/member\/(keys|keys\/revoke|keys\/rotate|topup|custom-topup|subscribe|subscription\/reset)$/,
     id: 'console.member'
   },
   {
@@ -132,6 +134,7 @@ export const DOCUMENTED_OPERATIONS: readonly DocumentedOperation[] = Object.free
   { method: 'GET', path: '/console/api/member/subscriptions', sample: '/console/api/member/subscriptions', id: 'console.member' },
   { method: 'POST', path: '/console/api/member/keys', sample: '/console/api/member/keys', id: 'console.member' },
   { method: 'POST', path: '/console/api/member/keys/revoke', sample: '/console/api/member/keys/revoke', id: 'console.member' },
+  { method: 'POST', path: '/console/api/member/keys/rotate', sample: '/console/api/member/keys/rotate', id: 'console.member' },
   { method: 'POST', path: '/console/api/member/topup', sample: '/console/api/member/topup', id: 'console.member' },
   { method: 'POST', path: '/console/api/member/custom-topup', sample: '/console/api/member/custom-topup', id: 'console.member' },
   { method: 'POST', path: '/console/api/member/subscribe', sample: '/console/api/member/subscribe', id: 'console.member' },

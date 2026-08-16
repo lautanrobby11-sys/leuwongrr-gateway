@@ -12,8 +12,23 @@ import {
   safeHashEqual,
   type ApiKeyRecord
 } from '../auth/api-keys.js';
+import type { UsageDetail } from '../http/usage.js';
 
 export type { SqliteHandle } from './sqlite.js';
+
+/**
+ * Normalises one field of an optional {@link UsageDetail} into a value SQLite
+ * can bind: `undefined` (field absent) and `null` (upstream reported nothing)
+ * both collapse to `null`, so an omitted detail leaves every phase-B column
+ * null exactly like a historical row.
+ */
+function usageDetailValue(
+  detail: UsageDetail | undefined,
+  key: keyof UsageDetail
+): string | number | null {
+  const value = detail?.[key];
+  return value ?? null;
+}
 
 export interface DatabaseOptions {
   /** Page cache ceiling in KiB. Keeps SQLite predictable on a small VPS. */
@@ -154,12 +169,16 @@ export class GatewayDatabase {
    * record an explicit overshoot event when actual usage exceeds the remaining
    * budget - issue #47: previously the limit was only checked at reservation,
    * and the first request of a day could silently exceed a small limit.
+   *
+   * `detail` carries the phase-B per-request columns; omitting it leaves them
+   * null, which is exactly how historical rows read.
    */
   settleBudget(
     id: string,
     tenantId: string,
     actual: number,
-    dailyLimit = Number.MAX_SAFE_INTEGER
+    dailyLimit = Number.MAX_SAFE_INTEGER,
+    detail?: UsageDetail
   ): { limit: number; remaining: number; overshoot: number } {
     const day = new Date().toISOString().slice(0, 10);
     const tenantLimit = this.tenants.limits(tenantId)?.dailyBudgetUnits ?? dailyLimit;
@@ -173,9 +192,24 @@ export class GatewayDatabase {
     const remaining = Math.max(0, effectiveLimit - used.total);
     this.db
       .prepare(
-        "UPDATE usage_events SET units=?, state='settled' WHERE id=? AND tenant_id=? AND state='reserved'"
+        "UPDATE usage_events SET units=?, state='settled', model_id=?, input_tokens=?, output_tokens=?, " +
+          'cached_tokens=?, thinking_tokens=?, duration_ms=?, finish_reason=?, user_agent=?, app_label=? ' +
+          "WHERE id=? AND tenant_id=? AND state='reserved'"
       )
-      .run(actual, id, tenantId);
+      .run(
+        actual,
+        usageDetailValue(detail, 'modelId'),
+        usageDetailValue(detail, 'inputTokens'),
+        usageDetailValue(detail, 'outputTokens'),
+        usageDetailValue(detail, 'cachedTokens'),
+        usageDetailValue(detail, 'thinkingTokens'),
+        usageDetailValue(detail, 'durationMs'),
+        usageDetailValue(detail, 'finishReason'),
+        usageDetailValue(detail, 'userAgent'),
+        usageDetailValue(detail, 'appLabel'),
+        id,
+        tenantId
+      );
     return { limit: effectiveLimit, remaining, overshoot: Math.max(0, actual - remaining) };
   }
 

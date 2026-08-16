@@ -8,7 +8,8 @@ import type { OmniRouteClient } from '../upstream.js';
 import { claim, complete, abandon } from '../persistence/idempotency.js';
 import type { TenantConcurrencyRegistry } from '../policy/tenant-limits.js';
 import { sendProtocolError, type Dialect } from '../contracts/errors.js';
-import { createUsageMeter } from './usage.js';
+import { appLabelForUserAgent } from './app-label.js';
+import { createUsageMeter, type UsageDetail } from './usage.js';
 import { registerActiveStream } from './stream-lifecycle.js';
 
 const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{8,128}$/;
@@ -40,6 +41,15 @@ export function createUpstreamExecutor(deps: ExecutorDeps) {
     call: UpstreamCall
   ): Promise<unknown> {
     const dialect = call.dialect;
+    // Per-request detail (phase B): the wall time funds the tok/s column and
+    // the User-Agent funds the "which app" label. The agent is truncated as
+    // free text from the caller before it is stored.
+    const startedAt = Date.now();
+    const userAgentHeader = req.headers['user-agent'];
+    const userAgent =
+      typeof userAgentHeader === 'string' && userAgentHeader !== ''
+        ? userAgentHeader.slice(0, 256)
+        : null;
     const requestHash = createHash('sha256').update(JSON.stringify(call.body)).digest('hex');
     const idem = typeof req.headers['idempotency-key'] === 'string' ? req.headers['idempotency-key'] : null;
     if (idem && !IDEMPOTENCY_KEY_PATTERN.test(idem)) return sendProtocolError(reply, dialect, 400, 'invalid_idempotency_key', 'Invalid Idempotency-Key', req.id);
@@ -77,6 +87,20 @@ export function createUpstreamExecutor(deps: ExecutorDeps) {
     }
     let slotHandedToStream = false;
     const meter = createUsageMeter(dialect);
+    const usageDetail = (): UsageDetail => {
+      const snapshot = meter.detail();
+      return {
+        modelId: call.model,
+        inputTokens: snapshot.inputTokens,
+        outputTokens: snapshot.outputTokens,
+        cachedTokens: snapshot.cachedTokens,
+        thinkingTokens: snapshot.thinkingTokens,
+        durationMs: Date.now() - startedAt,
+        finishReason: snapshot.finishReason,
+        userAgent,
+        appLabel: appLabelForUserAgent(userAgent)
+      };
+    };
     const aborter = new AbortController();
     req.raw.once('aborted', () => aborter.abort());
     reply.raw.once('close', () => { if (!reply.raw.writableEnded) aborter.abort(); });
@@ -130,7 +154,7 @@ export function createUpstreamExecutor(deps: ExecutorDeps) {
           releaseTenantSlot();
           const reported = meter.units();
           const actual = reported ?? call.estimateUnits;
-          const settled = deps.db.settleBudget(reservation, key.tenantId, actual, deps.config.DAILY_BUDGET_UNITS);
+          const settled = deps.db.settleBudget(reservation, key.tenantId, actual, deps.config.DAILY_BUDGET_UNITS, usageDetail());
           deps.db.audit(key.tenantId, call.auditStreamEvent, req.id, {
             model: call.model, stream: true, estimate: call.estimateUnits, actual, reconciled: reported !== null
           });
@@ -197,7 +221,7 @@ export function createUpstreamExecutor(deps: ExecutorDeps) {
       meter.observe(body);
       const reported = meter.units();
       const actual = reported ?? call.estimateUnits;
-      const settled = deps.db.settleBudget(reservation, key.tenantId, actual, deps.config.DAILY_BUDGET_UNITS);
+      const settled = deps.db.settleBudget(reservation, key.tenantId, actual, deps.config.DAILY_BUDGET_UNITS, usageDetail());
       deps.db.audit(key.tenantId, call.auditEvent, req.id, {
         model: call.model,
         stream: false,

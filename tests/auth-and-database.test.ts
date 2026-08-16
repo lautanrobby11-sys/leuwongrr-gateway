@@ -63,4 +63,62 @@ describe('tenant budget isolation', () => {
       state: 'settled'
     });
   });
+
+  it('persists the phase-B per-request detail on settlement', () => {
+    const db = openDatabase();
+    seedTenant(db, 'tenant-a', ['chat:write']);
+    const reservation = db.reserveBudget('tenant-a', 'r1', 100, 10_000);
+    db.settleBudget(reservation, 'tenant-a', 88, 10_000, {
+      modelId: 'lwrr-text',
+      inputTokens: 60,
+      outputTokens: 28,
+      cachedTokens: 20,
+      thinkingTokens: 5,
+      durationMs: 1234,
+      finishReason: 'stop',
+      userAgent: 'ZCode/1.4',
+      appLabel: 'zcode'
+    });
+    expect(
+      db.db
+        .prepare(
+          'SELECT model_id, input_tokens, output_tokens, cached_tokens, thinking_tokens, duration_ms, finish_reason, user_agent, app_label FROM usage_events WHERE id=?'
+        )
+        .get(reservation)
+    ).toEqual({
+      model_id: 'lwrr-text',
+      input_tokens: 60,
+      output_tokens: 28,
+      cached_tokens: 20,
+      thinking_tokens: 5,
+      duration_ms: 1234,
+      finish_reason: 'stop',
+      user_agent: 'ZCode/1.4',
+      app_label: 'zcode'
+    });
+  });
+
+  it('leaves every detail column null when settled without detail', () => {
+    const db = openDatabase();
+    seedTenant(db, 'tenant-a', ['chat:write']);
+    const reservation = db.reserveBudget('tenant-a', 'r1', 10, 10_000);
+    db.settleBudget(reservation, 'tenant-a', 10);
+    expect(
+      db.db
+        .prepare(
+          'SELECT model_id, input_tokens, output_tokens, cached_tokens, thinking_tokens, duration_ms, finish_reason, user_agent, app_label FROM usage_events WHERE id=?'
+        )
+        .get(reservation)
+    ).toEqual({
+      model_id: null,
+      input_tokens: null,
+      output_tokens: null,
+      cached_tokens: null,
+      thinking_tokens: null,
+      duration_ms: null,
+      finish_reason: null,
+      user_agent: null,
+      app_label: null
+    });
+  });
 });

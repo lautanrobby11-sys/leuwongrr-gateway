@@ -366,6 +366,25 @@ CREATE INDEX plans_group_idx ON plans(model_group_id);
 CREATE INDEX subscriptions_account_idx ON subscriptions(account_id, status);
 CREATE INDEX subscriptions_group_idx ON subscriptions(model_group_id);
 `
+}, {
+  // Per-request usage detail for the member ledger (console overhaul phase B).
+  // All columns are nullable and historical rows are intentionally NOT
+  // backfilled: an old event simply renders with empty detail rather than a
+  // rewritten history. The index backs the "recent usage" query, which pages by
+  // created_at rather than by day.
+  id: '0015_usage_event_details',
+  sql: `
+ALTER TABLE usage_events ADD COLUMN model_id TEXT;
+ALTER TABLE usage_events ADD COLUMN input_tokens INTEGER;
+ALTER TABLE usage_events ADD COLUMN output_tokens INTEGER;
+ALTER TABLE usage_events ADD COLUMN cached_tokens INTEGER;
+ALTER TABLE usage_events ADD COLUMN thinking_tokens INTEGER;
+ALTER TABLE usage_events ADD COLUMN duration_ms INTEGER;
+ALTER TABLE usage_events ADD COLUMN finish_reason TEXT;
+ALTER TABLE usage_events ADD COLUMN user_agent TEXT;
+ALTER TABLE usage_events ADD COLUMN app_label TEXT;
+CREATE INDEX usage_events_tenant_created_idx ON usage_events(tenant_id, created_at);
+`
 }];
 
 export function runModelGroupBackfill(db: Database.Database): void {

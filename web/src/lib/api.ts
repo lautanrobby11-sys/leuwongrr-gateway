@@ -109,6 +109,27 @@ export interface LedgerEntry {
   createdAt: string;
 }
 
+/**
+ * One settled request as shown in the member usage ledger (console phase B).
+ * Token splits are null when upstream reported only totals, and `costCentsEst`
+ * is null when the model price is unknown — the UI must label it an estimate
+ * and never render a fabricated cost.
+ */
+export interface UsageRecent {
+  requestId: string;
+  at: string;
+  model: string | null;
+  units: number;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cachedTokens: number | null;
+  thinkingTokens: number | null;
+  durationMs: number | null;
+  finishReason: string | null;
+  appLabel: string | null;
+  costCentsEst: number | null;
+}
+
 export interface SessionState {
   authenticated: boolean;
   account: { email: string; display_name: string; role: string; tenant_id: string } | null;
@@ -209,7 +230,10 @@ export const api = {
         billing: BillingSummary;
         ledger: LedgerEntry[];
       }>('/console/api/member/overview'),
-    usage: () => get<{ days: Array<{ day: string; units: number }> }>('/console/api/member/usage'),
+    usage: () =>
+      get<{ days: Array<{ day: string; units: number }>; recent: UsageRecent[] }>(
+        '/console/api/member/usage'
+      ),
     plans: () => get<{ plans: Plan[] }>('/console/api/member/plans'),
     keys: () =>
       get<{
@@ -226,6 +250,16 @@ export const api = {
     createKey: (name: string, scopes: string[]) =>
       post<{ key: string }>('/console/api/member/keys', { name, scopes }),
     revokeKey: (keyId: string) => post<{ revoked: boolean }>('/console/api/member/keys/revoke', { keyId }),
+    /**
+     * Rotates a key: mints a replacement and retires the old one after a grace
+     * window (default 30 minutes) so a live caller can migrate without a gap.
+     * The plaintext is returned once, exactly like a freshly issued key.
+     */
+    rotateKey: (keyId: string, graceMinutes?: number) =>
+      post<{ key: string; key_id: string; grace_minutes: number }>(
+        '/console/api/member/keys/rotate',
+        graceMinutes === undefined ? { keyId } : { keyId, graceMinutes }
+      ),
     payments: () =>
       get<{ payments: Array<Record<string, string | number | null>> }>('/console/api/member/payments'),
     subscribe: (planId: string) =>

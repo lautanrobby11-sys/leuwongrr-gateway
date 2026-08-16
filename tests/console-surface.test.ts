@@ -30,6 +30,7 @@ function buildDist(withFiles = true): string {
   distRoot = root;
   if (withFiles) {
     mkdirSync(join(root, 'assets'), { recursive: true });
+    writeFileSync(join(root, 'index.html'), '<!doctype html><title>gateway</title>', 'utf8');
     writeFileSync(join(root, 'login.html'), '<!doctype html><title>portal</title>', 'utf8');
     writeFileSync(join(root, 'member.html'), '<!doctype html><title>member</title>', 'utf8');
     writeFileSync(join(root, 'assets', 'member.js'), 'export const ok = 1;\n', 'utf8');
@@ -55,11 +56,15 @@ function signIn(active: Harness, email = 'member@example.com') {
 }
 
 describe('console shell delivery', () => {
-  it('serves the portal at the apex and at /login', async () => {
+  it('serves the landing page at the apex and the sign-in portal at /login', async () => {
     const active = start();
-    for (const url of ['/', '/login']) {
-      const response = await active.app.inject({ method: 'GET', url });
-      expect({ url, status: response.statusCode }).toEqual({ url, status: 200 });
+    const apex = await active.app.inject({ method: 'GET', url: '/' });
+    expect(apex.statusCode).toBe(200);
+    expect(apex.body).toContain('<title>gateway</title>');
+    const login = await active.app.inject({ method: 'GET', url: '/login' });
+    expect(login.statusCode).toBe(200);
+    expect(login.body).toContain('<title>portal</title>');
+    for (const response of [apex, login]) {
       expect(response.headers['content-type']).toContain('text/html');
       expect(response.headers['x-frame-options']).toBe('DENY');
     }

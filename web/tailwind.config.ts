@@ -10,26 +10,30 @@ export default {
   theme: {
     extend: {
       colors: {
-        canvas: '#0b0d12',
-        surface: '#12151d',
-        raised: '#181c26',
-        border: '#242938',
-        muted: '#8b93a7',
-        ink: '#e7eaf3',
+        // GNOME "Adwait" dark palette: warm graphite surfaces and the desktop's
+        // accent blue (#3584e4) with its semantic green, yellow and red. Keys
+        // are stable API — screens reference names, so a theme refresh only
+        // ever touches values here.
+        canvas: '#1b1b21',
+        surface: '#24242b',
+        raised: '#2e2e37',
+        border: '#3d3d49',
+        muted: '#a8a8b6',
+        ink: '#f6f6f9',
         brand: {
-          DEFAULT: '#4f8cff',
-          soft: 'rgba(79, 140, 255, 0.12)'
+          DEFAULT: '#3584e4',
+          soft: 'rgba(53, 132, 228, 0.14)'
         },
-        good: '#3fb950',
-        warn: '#d29922',
-        bad: '#f85149'
+        good: '#33d17a',
+        warn: '#e5a50a',
+        bad: '#f66151'
       },
       fontFamily: {
-        sans: ['Inter', 'system-ui', '-apple-system', 'Segoe UI', 'sans-serif'],
+        sans: ['Cantarell', 'Inter', 'system-ui', '-apple-system', 'Segoe UI', 'sans-serif'],
         mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace']
       },
       borderRadius: {
-        card: '14px'
+        card: '12px'
       },
       boxShadow: {
         card: '0 1px 2px rgba(0,0,0,0.4), 0 8px 24px -16px rgba(0,0,0,0.8)'

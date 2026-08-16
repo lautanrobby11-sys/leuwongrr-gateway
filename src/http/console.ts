@@ -43,9 +43,10 @@ export interface ConsoleDeps {
 }
 
 const PAGES: Record<string, string> = {
-  // The apex is the sign-in portal. Without this entry the allowlist refuses `/`
-  // and a visitor who types the bare hostname gets a protocol 404.
-  '/': 'login.html',
+  // The apex is the public landing page; sign-in lives at /login. Without this
+  // entry the allowlist refuses `/` and a visitor who types the bare hostname
+  // gets a protocol 404.
+  '/': 'index.html',
   '/admin': 'admin.html',
   '/member': 'member.html',
   '/chat': 'chat.html',

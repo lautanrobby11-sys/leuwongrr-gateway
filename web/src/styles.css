@@ -43,4 +43,43 @@
   .focus-ring {
     @apply outline-none ring-offset-0 focus-visible:ring-2 focus-visible:ring-brand/70;
   }
+
+  /*
+   * Documentation-style table, borrowed from Python/OpenAI SDK docs: quiet
+   * rules, subtle zebra, right-aligned mono numerals. It scrolls rather than
+   * reflows so column relationships survive on phones.
+   */
+  .doc-table {
+    @apply w-full min-w-[480px] border-collapse text-sm;
+  }
+  .doc-table thead th {
+    @apply border-y border-border px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted;
+  }
+  .doc-table tbody td {
+    @apply border-b border-border/50 px-3 py-2 align-top;
+  }
+  .doc-table tbody tr:nth-child(even) {
+    @apply bg-raised/40;
+  }
+  .doc-table .num {
+    @apply text-right font-mono tabular-nums;
+  }
+
+  /* Terminal-flavoured fenced code: internal scroll, never a page-wide blowout. */
+  .codeblock {
+    @apply overflow-hidden rounded-lg border border-border bg-canvas;
+  }
+  .codeblock pre {
+    @apply overflow-x-auto p-3 font-mono text-xs leading-relaxed text-ink;
+    scrollbar-width: thin;
+  }
+  .codeblock .tok-k { @apply text-brand; }
+  .codeblock .tok-s { @apply text-good; }
+  .codeblock .tok-c { @apply text-muted italic; }
+  .codeblock .tok-n { @apply text-warn; }
+
+  .diff-add { @apply bg-good/10 text-good; }
+  .diff-del { @apply bg-bad/10 text-bad; }
+  .diff-meta { @apply text-muted; }
+  .term-prompt { @apply shrink-0 select-none text-brand; }
 }

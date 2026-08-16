@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en" class="bg-canvas">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta
+      name="description"
+      content="LeuwongRR Gateway is a private OpenAI- and Anthropic-compatible AI API for teams: one base URL, per-member API keys, token budgets, per-plan model access, and crypto top-ups."
+    />
+    <meta name="keywords" content="AI API gateway, OpenAI-compatible API, Anthropic-compatible API, token budget, API keys, LLM gateway, private AI endpoint" />
+    <meta name="theme-color" content="#1b1b21" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="LeuwongRR Gateway · Private AI API for Teams" />
+    <meta property="og:description" content="One base URL for OpenAI- and Anthropic-compatible models. Per-member keys, token budgets, plan-based model access, and crypto top-ups." />
+    <meta name="twitter:card" content="summary" />
+    <!--
+      The indexable front door, served at the apex only. The sign-in document
+      (login.html) stays at /login and the dashboards keep `noindex, nofollow`.
+
+      Deliberately static: no React, no Motion — the whole page is this
+      document, the shared stylesheet, and a fifteen-line copy-button script,
+      so a first visit on a slow phone stays tiny. Pricing numbers are
+      intentionally absent: the catalog lives in the database and there is no
+      public pricing endpoint yet (planned with the admin overhaul), and
+      fabricated prices on a marketing page would be worse than none.
+    -->
+    <meta name="robots" content="index, follow" />
+    <link rel="icon" type="image/svg+xml" href="/console/assets/favicon.svg" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <title>LeuwongRR Gateway · Private AI API for Teams</title>
+  </head>
+  <body class="min-h-full bg-canvas font-sans text-ink antialiased">
+    <header class="sticky top-0 z-10 border-b border-border bg-surface/90 backdrop-blur">
+      <div class="mx-auto flex max-w-5xl items-center justify-between gap-3 px-4 py-3">
+        <a href="/" class="flex items-center gap-2" aria-label="LeuwongRR Gateway home">
+          <svg width="24" height="24" viewBox="0 0 24 24" role="img" aria-hidden="true">
+            <rect width="24" height="24" rx="6" fill="#3584e4" />
+            <path d="M7 17v-6a5 5 0 0 1 10 0v6" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" />
+            <path d="M5 17h14" stroke="#ffffff" stroke-width="2" stroke-linecap="round" />
+            <circle cx="12" cy="11" r="1.4" fill="#ffffff" />
+          </svg>
+          <span class="text-sm font-semibold tracking-tight">LeuwongRR</span>
+        </a>
+        <nav class="flex items-center gap-1 text-sm">
+          <a class="rounded-md px-2.5 py-1.5 text-muted transition-colors hover:text-ink" href="#quickstart">Quickstart</a>
+          <a class="rounded-md px-2.5 py-1.5 text-muted transition-colors hover:text-ink" href="#plans">Plans</a>
+          <a class="rounded-lg bg-brand px-3 py-1.5 font-medium text-white transition-colors hover:bg-brand/90" href="/login">Sign in</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="mx-auto w-full max-w-5xl space-y-16 px-4 py-14 sm:py-20">
+      <section class="space-y-5 text-center">
+        <p class="mx-auto w-fit rounded-full border border-border bg-raised px-3 py-1 text-xs text-muted">
+          OpenAI · Anthropic · Responses compatible
+        </p>
+        <h1 class="mx-auto max-w-2xl text-balance text-3xl font-semibold tracking-tight sm:text-5xl">
+          One gateway for every model your team uses.
+        </h1>
+        <p class="mx-auto max-w-xl text-balance text-sm leading-relaxed text-muted sm:text-base">
+          A private API in front of your own routing layer. Point any OpenAI or Anthropic
+          client at one base URL, pay for tokens, and keep every prompt on infrastructure
+          you control.
+        </p>
+        <div class="flex flex-wrap items-center justify-center gap-3 pt-1">
+          <a class="rounded-lg bg-brand px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-brand/90" href="/login">
+            Sign in to get a key
+          </a>
+          <a class="rounded-lg border border-border bg-surface px-4 py-2.5 text-sm font-medium transition-colors hover:border-brand/60" href="#quickstart">
+            60-second quickstart
+          </a>
+        </div>
+      </section>
+
+      <section id="quickstart" class="space-y-4">
+        <div>
+          <h2 class="text-xl font-semibold tracking-tight">Quickstart</h2>
+          <p class="text-sm text-muted">
+            Create a key on the member dashboard, then call it like any OpenAI endpoint.
+          </p>
+        </div>
+        <div class="grid gap-4 lg:grid-cols-2">
+          <div class="codeblock">
+            <div class="flex items-center justify-between gap-2 border-b border-border/70 px-3 py-1.5">
+              <span class="font-mono text-[11px] uppercase tracking-wide text-muted">curl</span>
+              <button
+                type="button"
+                data-copy="sample-curl"
+                aria-label="Copy curl"
+                class="focus-ring inline-flex items-center gap-1.5 rounded-md border border-border bg-raised px-2 py-1 text-xs font-medium text-muted transition-colors hover:border-brand/60 hover:text-ink"
+              >
+                <span>Copy</span>
+              </button>
+            </div>
+            <pre id="sample-curl">curl https://api.leuwongrr.cloud/v1/chat/completions \
+  -H "authorization: Bearer $LWRR_KEY" \
+  -H "content-type: application/json" \
+  -d '{"model":"lwrr-text","messages":[{"role":"user","content":"ping"}]}'</pre>
+          </div>
+          <div class="codeblock">
+            <div class="flex items-center justify-between gap-2 border-b border-border/70 px-3 py-1.5">
+              <span class="font-mono text-[11px] uppercase tracking-wide text-muted">python · openai sdk</span>
+              <button
+                type="button"
+                data-copy="sample-python"
+                aria-label="Copy python · openai sdk"
+                class="focus-ring inline-flex items-center gap-1.5 rounded-md border border-border bg-raised px-2 py-1 text-xs font-medium text-muted transition-colors hover:border-brand/60 hover:text-ink"
+              >
+                <span>Copy</span>
+              </button>
+            </div>
+            <pre id="sample-python">from openai import OpenAI
+
+client = OpenAI(
+    base_url="https://api.leuwongrr.cloud/v1",
+    api_key="lwrr_live_…",
+)
+
+reply = client.chat.completions.create(
+    model="lwrr-text",
+    messages=[{"role": "user", "content": "ping"}],
+)
+print(reply.choices[0].message.content)</pre>
+          </div>
+        </div>
+        <p class="text-xs text-muted">
+          Anthropic-style clients use <code class="rounded bg-raised px-1 py-0.5 font-mono">POST /v1/messages</code>
+          with the same bearer token. Streaming is server-sent events on every surface.
+        </p>
+      </section>
+
+      <section id="plans" class="space-y-4">
+        <div>
+          <h2 class="text-xl font-semibold tracking-tight">Plans</h2>
+          <p class="text-sm text-muted">
+            Two shapes, mixed freely: <strong class="font-medium text-ink">rolling plans</strong> for
+            time-based access and <strong class="font-medium text-ink">token packs</strong> for prepaid
+            credit. Live pricing for your account is shown after sign-in.
+          </p>
+        </div>
+        <div class="overflow-x-auto rounded-card border border-border bg-surface p-4 sm:p-5">
+          <table class="doc-table">
+            <thead>
+              <tr>
+                <th>Included in every plan</th>
+                <th>Detail</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="whitespace-nowrap font-medium">OpenAI · Anthropic · Responses</td>
+                <td class="text-muted">chat/completions, messages and responses surfaces with one API key</td>
+              </tr>
+              <tr>
+                <td class="whitespace-nowrap font-medium">Per-member keys</td>
+                <td class="text-muted">issue, rotate and revoke keys from the member dashboard; only peppered hashes are stored</td>
+              </tr>
+              <tr>
+                <td class="whitespace-nowrap font-medium">Token budgets</td>
+                <td class="text-muted">daily unit limits, concurrent-request caps and rate limits per member</td>
+              </tr>
+              <tr>
+                <td class="whitespace-nowrap font-medium">Plan-based model access</td>
+                <td class="text-muted">admins choose exactly which models a plan unlocks</td>
+              </tr>
+              <tr>
+                <td class="whitespace-nowrap font-medium">Crypto top-ups</td>
+                <td class="text-muted">Cryptomus settlement with wallet credit and a full ledger</td>
+              </tr>
+              <tr>
+                <td class="whitespace-nowrap font-medium">Privacy</td>
+                <td class="text-muted">prompts and completions are never logged; the gateway binds to loopback behind Cloudflare</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="grid gap-4 sm:grid-cols-3">
+        <div class="rounded-card border border-border bg-surface p-4">
+          <h3 class="text-sm font-semibold">Same path as production</h3>
+          <p class="mt-1.5 text-xs leading-relaxed text-muted">
+            The built-in chat runs on the public API with your key, so what you test is what
+            your integrations get.
+          </p>
+        </div>
+        <div class="rounded-card border border-border bg-surface p-4">
+          <h3 class="text-sm font-semibold">Bounded by design</h3>
+          <p class="mt-1.5 text-xs leading-relaxed text-muted">
+            An explicit route allowlist, per-tenant queries and loopback-only listeners —
+            there is no catch-all proxy to misconfigure.
+          </p>
+        </div>
+        <div class="rounded-card border border-border bg-surface p-4">
+          <h3 class="text-sm font-semibold">A ledger you can read</h3>
+          <p class="mt-1.5 text-xs leading-relaxed text-muted">
+            Every top-up, subscription and request settles into an auditable wallet ledger
+            per member.
+          </p>
+        </div>
+      </section>
+    </main>
+
+    <footer class="border-t border-border bg-surface">
+      <div class="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-3 px-4 py-6 text-xs text-muted">
+        <span class="flex items-center gap-2">
+          <svg width="16" height="16" viewBox="0 0 24 24" role="img" aria-hidden="true">
+            <rect width="24" height="24" rx="6" fill="#3584e4" />
+            <path d="M7 17v-6a5 5 0 0 1 10 0v6" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" />
+            <path d="M5 17h14" stroke="#ffffff" stroke-width="2" stroke-linecap="round" />
+            <circle cx="12" cy="11" r="1.4" fill="#ffffff" />
+          </svg>
+          LeuwongRR Gateway · api.leuwongrr.cloud
+        </span>
+        <nav class="flex items-center gap-4">
+          <a class="transition-colors hover:text-ink" href="/login">Sign in</a>
+          <a class="transition-colors hover:text-ink" href="/chat">Chat</a>
+          <a class="transition-colors hover:text-ink" href="/health/live">Status</a>
+        </nav>
+      </div>
+    </footer>
+
+    <script type="module">
+      for (const button of document.querySelectorAll('button[data-copy]')) {
+        button.addEventListener('click', () => {
+          const value = document.getElementById(button.dataset.copy ?? '')?.textContent ?? '';
+          if (!value) return;
+          navigator.clipboard?.writeText(value).then(() => {
+            const label = button.querySelector('span');
+            if (!label) return;
+            label.textContent = 'Copied';
+            setTimeout(() => {
+              label.textContent = 'Copy';
+            }, 1600);
+          });
+        });
+      }
+    </script>
+  </body>
+</html>

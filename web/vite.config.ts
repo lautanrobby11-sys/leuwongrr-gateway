@@ -3,9 +3,10 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
 /**
- * Four entry points instead of a client-side router: each surface is a
+ * Five entry points instead of a client-side router: each surface is a
  * separate document, so /chat never downloads the admin bundle and the gateway
- * can keep serving plain files with no rewrite rules.
+ * can keep serving plain files with no rewrite rules. `index` is the public
+ * landing page served at the apex.
  *
  * `base` must match the allowlisted asset route in src/policy/allowlist.ts.
  */
@@ -20,6 +21,7 @@ export default defineConfig({
     sourcemap: false,
     rollupOptions: {
       input: {
+        index: resolve(import.meta.dirname, 'index.html'),
         admin: resolve(import.meta.dirname, 'admin.html'),
         member: resolve(import.meta.dirname, 'member.html'),
         chat: resolve(import.meta.dirname, 'chat.html'),

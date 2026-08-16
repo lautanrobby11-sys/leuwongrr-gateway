@@ -8,20 +8,19 @@
       content="LeuwongRR Gateway is a private OpenAI- and Anthropic-compatible AI API for teams: one base URL, per-member API keys, token budgets, per-plan model access, and crypto top-ups."
     />
     <meta name="keywords" content="AI API gateway, OpenAI-compatible API, Anthropic-compatible API, token budget, API keys, LLM gateway, private AI endpoint" />
-    <meta name="theme-color" content="#111318" />
+    <meta name="theme-color" content="#1b1b21" />
     <meta property="og:type" content="website" />
     <meta property="og:title" content="LeuwongRR Gateway · Private AI API for Teams" />
     <meta property="og:description" content="One base URL for OpenAI- and Anthropic-compatible models. Per-member keys, token budgets, plan-based model access, and crypto top-ups." />
     <meta name="twitter:card" content="summary" />
     <!--
-      Indexable on purpose, unlike admin.html/member.html/chat.html which keep
-      `noindex, nofollow`. This document is served at both /login and the apex and
-      is now the public front door, so suppressing it would hide the only page a
-      visitor is meant to find. Stated explicitly because the previous version of
-      this file carried `noindex` while it was a bare sign-in form.
+      The sign-in document at /login. The indexable front door is the landing
+      page (index.html) served at the apex; this page stays crawlable because a
+      visitor looking for "LeuwongRR login" should still land somewhere useful.
     -->
     <meta name="robots" content="index, follow" />
-    <title>LeuwongRR Gateway · Private AI API for Teams</title>
+    <link rel="icon" type="image/svg+xml" href="/console/assets/favicon.svg" />
+    <title>Sign in · LeuwongRR Gateway</title>
   </head>
   <body>
     <div id="root"></div>

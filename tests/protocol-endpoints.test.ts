@@ -135,4 +135,43 @@ describe('protocol surfaces', () => {
     expect(active.upstreamCalls()).toBe(1);
     expect(settledUnits(active)).toBe(25);
   });
+
+  it('accepts agentic payloads with large toolsets and long histories', async () => {
+    const active = start({ id: 'resp_mock', usage: { total_tokens: 25 } });
+    // Coding agents attach their full toolset (MCP servers included) and the
+    // whole conversation on every request; the old bounds (32 tools, 128
+    // messages, 4096 max_tokens) rejected these as invalid requests.
+    active.db.db
+      .prepare("UPDATE models SET capabilities_json = ? WHERE public_id = 'lwrr-text'")
+      .run(JSON.stringify(['text', 'stream', 'tools']));
+    const tools = Array.from({ length: 96 }, (_, i) => ({
+      type: 'function',
+      function: { name: `tool_${i}`, parameters: {} }
+    }));
+    const messages = Array.from({ length: 200 }, (_, i) => ({
+      role: i % 2 === 0 ? 'user' : 'assistant',
+      content: `turn ${i}`
+    }));
+    const chat = await active.app.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      headers: { authorization: `Bearer ${active.token}` },
+      payload: { model: 'lwrr-text', messages, tools, max_tokens: 65536 }
+    });
+    expect(chat.statusCode).toBe(200);
+
+    const anthropic = await active.app.inject({
+      method: 'POST',
+      url: '/v1/messages',
+      headers: { authorization: `Bearer ${protocolToken(active)}` },
+      payload: {
+        model: 'lwrr-text',
+        max_tokens: 128000,
+        messages: messages.map((m) => ({ role: m.role, content: m.content })),
+        tools
+      }
+    });
+    expect(anthropic.statusCode).toBe(200);
+    expect(active.upstreamCalls()).toBe(2);
+  });
 });

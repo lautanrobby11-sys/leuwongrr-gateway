@@ -8,13 +8,13 @@ import { z } from 'zod';
 export const responsesRequestSchema = z
   .object({
     model: z.string().min(1).max(128),
-    input: z.union([z.string().max(100000), z.array(z.unknown()).max(128)]),
-    instructions: z.string().max(100000).optional(),
+    input: z.union([z.string().max(1000000), z.array(z.unknown()).max(1024)]),
+    instructions: z.string().max(1000000).optional(),
     stream: z.boolean().default(false),
-    max_output_tokens: z.number().int().positive().max(4096).optional(),
+    max_output_tokens: z.number().int().positive().max(1048576).optional(),
     temperature: z.number().min(0).max(2).optional(),
     top_p: z.number().min(0).max(1).optional(),
-    tools: z.array(z.unknown()).max(32).optional(),
+    tools: z.array(z.unknown()).max(512).optional(),
     tool_choice: z.unknown().optional(),
     parallel_tool_calls: z.boolean().optional(),
     text: z.unknown().optional(),

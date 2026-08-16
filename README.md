@@ -17,7 +17,7 @@ evidence that the VPS is running that commit.
 | Item | Verified state |
 | --- | --- |
 | Production active SHA (VPS#2) | `3eb825b2a98bd21732e8be34bd147ad338cb4502` (deployed and SSH-verified 16 Aug 2026 01:57 UTC; rollback target `7dd1f50`) |
-| Local/GitHub `main` | `3eb825b2a98bd21732e8be34bd147ad338cb4502` plus post-release docs commits; docs-only commits do not change the deployed release |
+| Local/GitHub `main` | `e90d156` — production `3eb825b` plus console-overhaul Phase A (`baa3058`, PR #75) and Phase B (PR #76: member usage ledger, key rotation, per-request usage detail via migration `0015`). Ahead of production and not yet deployed; a newer `main` is not evidence the VPS runs it |
 | API | LIVE — loopback live/ready 200, public `https://api.leuwongrr.cloud/health/live` 200, journal 0 errors post-deploy |
 | Console | LIVE; `/admin*` requires a Cloudflare Access JWT **and** an application role |
 | Gate 3 — OTP / Cloudflare Access / acceptance | RESOLVED (archived go-live notes 31 Jul–2 Aug 2026); acceptance, backup/restore, and rollback evidence recorded |
@@ -46,6 +46,7 @@ refuses to activate a release whose `GATEWAY_HOST` is not `127.0.0.1`.
 | Token count | `POST /v1/messages/count_tokens` | API key, scope `messages:write` |
 | Admin console | `GET /admin` | Cloudflare Access JWT **and** app role |
 | Member console | `GET /member` | session cookie |
+| Member key rotation | `POST /console/api/member/keys/rotate` | session cookie, allowed Origin |
 | Chat console | `GET /chat` | session cookie |
 | Login | `GET /login` | none |
 | Cryptomus webhook | `POST /webhooks/cryptomus` | MD5 request signature |

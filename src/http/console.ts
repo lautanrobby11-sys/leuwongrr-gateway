@@ -448,7 +448,8 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
             email: account.email,
             display_name: account.displayName,
             role: account.role,
-            tenant_id: account.tenantId
+            tenant_id: account.tenantId,
+            has_password: accounts.hasPassword(account.id)
           }
         : null,
       providers: {
@@ -679,6 +680,75 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
     }
   });
 
+  app.post('/console/api/auth/password/request-reset', async (req, reply) => {
+    const parsed = resetRequestSchema.safeParse(req.body);
+    if (!parsed.success) return fail(reply, 400, 'invalid_request', 'Email is required', req.id);
+    try {
+      const account = accounts.findByEmail(parsed.data.email);
+      if (!account || account.status !== 'active') {
+        // Generic success; never reveal whether the email exists.
+        return reply.send({ delivered: true, ttl_minutes: config.OTP_TTL_MINUTES });
+      }
+      return await issueAndDeliver(parsed.data.email, 'reset', reply);
+    } catch (error) {
+      return handle(error, reply, req.id);
+    }
+  });
+
+  app.post('/console/api/auth/password/reset', async (req, reply) => {
+    const parsed = resetSchema.safeParse(req.body);
+    if (!parsed.success) return fail(reply, 400, 'invalid_request', 'All fields are required', req.id);
+    if (parsed.data.password !== parsed.data.confirmPassword) {
+      return fail(reply, 400, 'invalid_request', 'Passwords do not match', req.id);
+    }
+    const weakness = validatePasswordStrength(parsed.data.password);
+    if (weakness) return fail(reply, 400, 'invalid_request', weakness, req.id);
+    try {
+      const ok = accounts.consumeCode(parsed.data.email, parsed.data.code, 'reset', config.OTP_MAX_ATTEMPTS);
+      if (!ok) return fail(reply, 401, 'code_invalid', 'Code is invalid or expired', req.id);
+      const account = accounts.findByEmail(parsed.data.email);
+      if (!account || account.status !== 'active') {
+        return fail(reply, 401, 'code_invalid', 'Code is invalid or expired', req.id);
+      }
+      accounts.setPassword(account.id, hashPassword(parsed.data.password));
+      accounts.markEmailVerified(account.id);
+      db.audit({
+        tenantId: account.tenantId,
+        actorType: 'account',
+        event: 'console.password.reset',
+        traceId: req.id,
+        metadata: { method: 'otp' }
+      });
+      return reply.send({ reset: true });
+    } catch (error) {
+      return handle(error, reply, req.id);
+    }
+  });
+
+  app.post('/console/api/auth/password/set', async (req, reply) => {
+    try {
+      const account = requireMember(await currentAccount(req));
+      const parsed = setPasswordSchema.safeParse(req.body);
+      if (!parsed.success) return fail(reply, 400, 'invalid_request', 'All fields are required', req.id);
+      if (parsed.data.password !== parsed.data.confirmPassword) {
+        return fail(reply, 400, 'invalid_request', 'Passwords do not match', req.id);
+      }
+      const weakness = validatePasswordStrength(parsed.data.password);
+      if (weakness) return fail(reply, 400, 'invalid_request', weakness, req.id);
+      accounts.setPassword(account.id, hashPassword(parsed.data.password));
+      db.audit({
+        tenantId: account.tenantId,
+        actorType: 'account',
+        event: 'console.password.set',
+        traceId: req.id,
+        metadata: { method: 'session' }
+      });
+      return reply.send({ set: true });
+    } catch (error) {
+      return handle(error, reply, req.id);
+    }
+  });
+
   app.post('/console/api/auth/logout', async (req, reply) => {
     const token = readCookie(req, config.SESSION_COOKIE_NAME);
     if (token) accounts.revokeSession(token);
@@ -768,7 +838,12 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
       const account = requireMember(await currentAccount(req));
       const summary = billing.summary(account.id, account.tenantId);
       return reply.send({
-        account: { email: account.email, display_name: account.displayName, role: account.role },
+        account: {
+          email: account.email,
+          display_name: account.displayName,
+          role: account.role,
+          has_password: accounts.hasPassword(account.id)
+        },
         billing: summary,
         ledger: billing.ledger(account.id, 20)
       });

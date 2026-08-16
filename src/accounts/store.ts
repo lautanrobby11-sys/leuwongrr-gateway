@@ -13,6 +13,9 @@ export interface AccountRecord {
   status: 'active' | 'suspended';
   createdAt: string;
   lastLoginAt: string | null;
+  emailVerifiedAt: string | null;
+  /** Always null on records; the hash is only ever read inside the store. */
+  passwordHash: null;
 }
 
 interface AccountRow {
@@ -24,6 +27,8 @@ interface AccountRow {
   status: 'active' | 'suspended';
   created_at: string;
   last_login_at: string | null;
+  password_hash: string | null;
+  email_verified_at: string | null;
 }
 
 export class AccountError extends Error {
@@ -45,7 +50,9 @@ function toRecord(row: AccountRow): AccountRecord {
     role: row.role,
     status: row.status,
     createdAt: row.created_at,
-    lastLoginAt: row.last_login_at
+    lastLoginAt: row.last_login_at,
+    emailVerifiedAt: row.email_verified_at,
+    passwordHash: null
   };
 }
 
@@ -176,11 +183,18 @@ export class AccountStore {
   // ---- One-time codes ----
 
   /**
+   * Purpose-aware one-time code issue. The purpose is stored alongside the hash
+   * so a register code can never be consumed by the login flow (or vice versa).
    * Returns the plaintext code exactly once so the caller can deliver it. The
    * resend window is enforced here rather than in the route, because that is
    * where the previous issue time actually lives.
    */
-  issueLoginCode(email: string, ttlMinutes: number, resendSeconds: number): string {
+  issueCode(
+    email: string,
+    purpose: 'login' | 'register' | 'reset',
+    ttlMinutes: number,
+    resendSeconds: number
+  ): string {
     const address = normaliseEmail(email);
     const recent = this.db
       .prepare(
@@ -196,23 +210,29 @@ export class AccountStore {
     const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
     this.db
       .prepare(
-        'INSERT INTO login_codes (id, email, code_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?)'
+        'INSERT INTO login_codes (id, email, code_hash, purpose, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)'
       )
-      .run(randomUUID(), address, this.digest(code), this.iso(ttlMinutes * 60_000), this.iso());
+      .run(randomUUID(), address, this.digest(code), purpose, this.iso(ttlMinutes * 60_000), this.iso());
     return code;
   }
 
   /**
    * Attempts are counted on the row itself, so a guesser cannot reset the
-   * counter by opening a new connection.
+   * counter by opening a new connection. The purpose must match the one the
+   * code was issued with.
    */
-  consumeLoginCode(email: string, code: string, maxAttempts: number): boolean {
+  consumeCode(
+    email: string,
+    code: string,
+    purpose: 'login' | 'register' | 'reset',
+    maxAttempts: number
+  ): boolean {
     const address = normaliseEmail(email);
     const row = this.db
       .prepare(
-        'SELECT id, code_hash, attempts, expires_at FROM login_codes WHERE email = ? AND consumed_at IS NULL ORDER BY created_at DESC LIMIT 1'
+        'SELECT id, code_hash, attempts, expires_at FROM login_codes WHERE email = ? AND purpose = ? AND consumed_at IS NULL ORDER BY created_at DESC LIMIT 1'
       )
-      .get(address) as
+      .get(address, purpose) as
       | { id: string; code_hash: string; attempts: number; expires_at: string }
       | undefined;
     if (!row) return false;
@@ -226,6 +246,41 @@ export class AccountStore {
 
     this.db.prepare('UPDATE login_codes SET consumed_at = ? WHERE id = ?').run(this.iso(), row.id);
     return true;
+  }
+
+  issueLoginCode(email: string, ttlMinutes: number, resendSeconds: number): string {
+    return this.issueCode(email, 'login', ttlMinutes, resendSeconds);
+  }
+
+  consumeLoginCode(email: string, code: string, maxAttempts: number): boolean {
+    return this.consumeCode(email, code, 'login', maxAttempts);
+  }
+
+  // ---- Passwords ----
+
+  setPassword(accountId: string, passwordHash: string): void {
+    this.db.prepare('UPDATE accounts SET password_hash = ? WHERE id = ?').run(passwordHash, accountId);
+  }
+
+  hasPassword(accountId: string): boolean {
+    const row = this.db
+      .prepare('SELECT password_hash FROM accounts WHERE id = ?')
+      .get(accountId) as { password_hash: string | null } | undefined;
+    return Boolean(row?.password_hash);
+  }
+
+  /** Returns the stored hash for verification only; never call from a route. */
+  getPasswordHash(accountId: string): string | null {
+    const row = this.db
+      .prepare('SELECT password_hash FROM accounts WHERE id = ?')
+      .get(accountId) as { password_hash: string | null } | undefined;
+    return row?.password_hash ?? null;
+  }
+
+  markEmailVerified(accountId: string): void {
+    this.db
+      .prepare('UPDATE accounts SET email_verified_at = ? WHERE id = ? AND email_verified_at IS NULL')
+      .run(this.iso(), accountId);
   }
 
   // ---- Sessions ----

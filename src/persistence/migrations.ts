@@ -385,6 +385,22 @@ ALTER TABLE usage_events ADD COLUMN user_agent TEXT;
 ALTER TABLE usage_events ADD COLUMN app_label TEXT;
 CREATE INDEX usage_events_tenant_created_idx ON usage_events(tenant_id, created_at);
 `
+}, {
+  // Console accounts gain a permanent password credential and an explicit
+  // email-verification marker (console overhaul auth foundation). password_hash
+  // is nullable because legacy and OAuth accounts start without one. Every
+  // pre-existing account is backfilled as verified: each already proved its
+  // address through OTP or a federated provider, so a NULL email_verified_at
+  // afterwards unambiguously means "registration started, OTP not yet passed".
+  // login_codes gains a purpose so register/login/reset challenges cannot be
+  // consumed by the wrong flow.
+  id: '0016_account_passwords',
+  sql: `
+ALTER TABLE accounts ADD COLUMN password_hash TEXT;
+ALTER TABLE accounts ADD COLUMN email_verified_at TEXT;
+UPDATE accounts SET email_verified_at = created_at WHERE email_verified_at IS NULL;
+ALTER TABLE login_codes ADD COLUMN purpose TEXT NOT NULL DEFAULT 'login' CHECK(purpose IN ('login','register','reset'));
+`
 }];
 
 export function runModelGroupBackfill(db: Database.Database): void {

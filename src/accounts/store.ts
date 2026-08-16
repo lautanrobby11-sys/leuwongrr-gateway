@@ -128,7 +128,9 @@ export class AccountStore {
       role: input.role ?? 'member',
       status: 'active',
       created_at: this.iso(),
-      last_login_at: null
+      last_login_at: null,
+      password_hash: null,
+      email_verified_at: null
     };
     const run = this.db.transaction(() => {
       this.db

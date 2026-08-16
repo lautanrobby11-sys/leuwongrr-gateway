@@ -154,7 +154,7 @@ while being absent from the commit the release names. One canonical check,
 after packaging and checksumming, and the `clean` step in CI invokes the same
 file; a failure prints the offending paths. The script builds the
 backend **and** the console, verifies that
-`dist/public/{admin,member,chat,login}.html` and `dist/public/assets` exist, and
+`dist/public/{index,admin,member,chat,login}.html` and `dist/public/assets` exist, and
 records a `manifest.sha256` over every staged file. A release that cannot serve
 the dashboards is never produced.
 
@@ -176,7 +176,7 @@ That is mandatory, not optional — the procedure is
 `docs/runbooks/artifact-deploy-bootstrap.md`.
 
 `deploy.sh` verifies the checksum and manifest, requires `package-lock.json`,
-requires the four console entries, runs `npm ci --omit=dev`, runs preflight as
+requires every console entry (index, admin, member, chat, login), runs `npm ci --omit=dev`, runs preflight as
 the service user with the release directory as the working directory, swaps the
 symlink, restarts the unit and gates on both health probes. Readiness must come
 back within 90 seconds (`HEALTH_STARTUP_DEADLINE_SECONDS` in `scripts/deploy.sh:12`,

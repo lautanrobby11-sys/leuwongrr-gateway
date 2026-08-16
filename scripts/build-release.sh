@@ -20,7 +20,7 @@ bash "$CLEAN_TREE" preflight
 # artifact would pass health checks while every dashboard returned 503.
 npm run build:all
 
-for page in admin member chat login; do
+for page in index admin member chat login; do
   [[ -f dist/public/$page.html ]] || { echo "console entry missing: dist/public/$page.html" >&2; exit 1; }
 done
 [[ -d dist/public/assets ]] || { echo 'console assets directory missing: dist/public/assets' >&2; exit 1; }
@@ -91,7 +91,7 @@ SOURCE_DATE_EPOCH=$(git log -1 --format=%ct "$SHA")
 [[ $SOURCE_DATE_EPOCH =~ ^[0-9]+$ ]] || { echo "cannot resolve committer date for $SHA" >&2; exit 1; }
 NODE_ENGINE_MAJOR=$(sed -n 's/.*"node"[[:space:]]*:[[:space:]]*">=[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$STAGE/package.json" | head -n1)
 [[ -n $NODE_ENGINE_MAJOR ]] || { echo 'cannot read engines.node from package.json' >&2; exit 1; }
-printf 'git_sha=%s\ncommitted_at=%s\nnode=v%s\nconsole=admin,member,chat,login\n' \
+printf 'git_sha=%s\ncommitted_at=%s\nnode=v%s\nconsole=index,admin,member,chat,login\n' \
   "$SHA" "$(date -u -d "@$SOURCE_DATE_EPOCH" +%Y-%m-%dT%H:%M:%SZ)" "$NODE_ENGINE_MAJOR" > "$STAGE/RELEASE"
 # Normalize the staged modes before anything hashes or archives them. A checkout
 # under a different umask would otherwise ship the same bytes under different

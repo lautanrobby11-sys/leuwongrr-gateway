@@ -71,10 +71,10 @@ chat, Git, or Notion.
      `infra/systemd/leuwongrr-gateway-snapshot.timer`, `RELEASE`,
      `manifest.sha256`
    - The script refuses to package unless
-     `dist/public/{admin,member,chat,login}.html` and `dist/public/assets` exist,
+     `dist/public/{index,admin,member,chat,login}.html` and `dist/public/assets` exist,
      and unless every unit above is present in the repository.
 3. Transfer only the artifact and checksum, then run `sudo scripts/deploy.sh <40-char-sha> <artifact.tar.gz>`.
-4. Deploy verifies checksum + manifest, requires `package-lock.json` and the four
+4. Deploy verifies checksum + manifest, requires `package-lock.json` and every
    console entries, installs production dependencies on the server, runs preflight
    as the service user with the release directory as the working directory,
    atomically swaps `current`, syncs the systemd unit from the release,

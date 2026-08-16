@@ -212,7 +212,7 @@ tar --extract --file "$ARTIFACT" --directory "$RELEASE" --no-same-owner --no-sam
 
 [[ -f $RELEASE/package-lock.json ]] || fail 'package-lock.json is required for deterministic production deploy'
 [[ -f $RELEASE/infra/systemd/$SERVICE.service ]] || fail 'systemd unit missing from release'
-for page in admin member chat login; do
+for page in index admin member chat login; do
   [[ -f $RELEASE/dist/public/$page.html ]] || fail "console entry missing from release: $page.html"
 done
 

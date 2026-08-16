@@ -289,15 +289,25 @@ export function PriceInput({
  * Tables scroll horizontally rather than reflowing into cards: on a phone a
  * shrunken table is still readable, whereas a stacked one loses the column
  * relationships that make usage data meaningful.
+ *
+ * `onSort` opts a table into sortable headers: the header cell becomes a
+ * button and the caller keeps the row data — the table only renders the
+ * current sort indicator, so sorting logic stays in one place.
  */
 export function Table({
   headers,
   children,
-  empty
+  empty,
+  sort,
+  onSort,
+  sticky
 }: {
   headers: string[];
   children: ReactNode;
   empty?: boolean;
+  sort?: { index: number; dir: 'asc' | 'desc' } | null;
+  onSort?: (index: number) => void;
+  sticky?: boolean;
 }) {
   if (empty) return <EmptyState message="Nothing here yet." />;
   return (
@@ -305,9 +315,34 @@ export function Table({
       <table className="w-full min-w-[520px] border-collapse text-sm">
         <thead>
           <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted">
-            {headers.map((header) => (
-              <th key={header} className="px-4 py-2 font-medium sm:px-3">
-                {header}
+            {headers.map((header, index) => (
+              <th
+                key={header}
+                className={cx(
+                  'px-4 py-2 font-medium sm:px-3',
+                  sticky && 'sticky top-0 z-[1] bg-surface',
+                  onSort && 'p-0'
+                )}
+              >
+                {onSort ? (
+                  <button
+                    type="button"
+                    onClick={() => onSort(index)}
+                    aria-label={`Sort by ${header}`}
+                    className="focus-ring flex w-full items-center gap-1 px-4 py-2 uppercase tracking-wide transition-colors hover:text-ink sm:px-3"
+                  >
+                    {header}
+                    {sort?.index === index && (
+                      <Icon
+                        name="chevron"
+                        size={12}
+                        className={sort.dir === 'asc' ? 'rotate-180' : undefined}
+                      />
+                    )}
+                  </button>
+                ) : (
+                  header
+                )}
               </th>
             ))}
           </tr>
@@ -442,6 +477,105 @@ export function Modal({
               </button>
             </header>
             <div className="max-h-[70vh] overflow-y-auto p-5">{children}</div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+}
+
+// ---- Phase A additions ----
+
+/** Segmented tabs for switching views without leaving the page. */
+export function Tabs({
+  tabs,
+  active,
+  onChange,
+  className
+}: {
+  tabs: Array<{ id: string; label: string; icon?: IconName }>;
+  active: string;
+  onChange: (id: string) => void;
+  className?: string;
+}) {
+  return (
+    <div
+      role="tablist"
+      className={cx('inline-flex max-w-full gap-1 overflow-x-auto rounded-lg border border-border bg-raised p-1', className)}
+    >
+      {tabs.map((tab) => (
+        <button
+          key={tab.id}
+          role="tab"
+          aria-selected={tab.id === active}
+          onClick={() => onChange(tab.id)}
+          className={cx(
+            'focus-ring flex shrink-0 items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
+            tab.id === active ? 'bg-surface text-ink shadow-card' : 'text-muted hover:text-ink'
+          )}
+        >
+          {tab.icon && <Icon name={tab.icon} size={14} />}
+          {tab.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Layout placeholder while data loads; pulses only, no motion dependency. */
+export function Skeleton({ className }: { className?: string }) {
+  return <div aria-hidden className={cx('animate-pulse rounded-lg bg-raised', className)} />;
+}
+
+/** Slide-over panel for detail views; the mobile twin of the desktop drawer. */
+export function Drawer({
+  open,
+  title,
+  onClose,
+  children
+}: {
+  open: boolean;
+  title: string;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
+
+  return (
+    <AnimatePresence>
+      {open && (
+        <motion.div
+          className="fixed inset-0 z-40 flex justify-end bg-black/60"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          onClick={onClose}
+        >
+          <motion.div
+            className="flex h-full w-full max-w-md flex-col border-l border-border bg-surface shadow-card"
+            initial={{ x: '100%' }}
+            animate={{ x: 0 }}
+            exit={{ x: '100%' }}
+            transition={{ type: 'spring', stiffness: 380, damping: 36 }}
+            role="dialog"
+            aria-modal="true"
+            aria-label={title}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header className="flex items-center justify-between border-b border-border px-5 py-3">
+              <h2 className="text-sm font-semibold">{title}</h2>
+              <button className="focus-ring rounded-md p-1 text-muted hover:text-ink" onClick={onClose} aria-label="Close">
+                <Icon name="close" size={16} />
+              </button>
+            </header>
+            <div className="flex-1 overflow-y-auto p-5">{children}</div>
           </motion.div>
         </motion.div>
       )}

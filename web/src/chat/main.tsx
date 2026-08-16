@@ -2,6 +2,7 @@ import { StrictMode, useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Icon } from '../components/icons';
 import { Button, Field, inputClass, Modal, ToastHost, cx, useToast } from '../components/ui';
+import { Markdown } from './markdown';
 import '../styles.css';
 
 interface Message {
@@ -112,10 +113,22 @@ export function Chat() {
   const [settingsOpen, setSettingsOpen] = useState(!key);
   const [draftKey, setDraftKey] = useState(key);
   const controller = useRef<AbortController | null>(null);
+  const scroller = useRef<HTMLDivElement>(null);
   const bottom = useRef<HTMLDivElement>(null);
+  // Follow the stream only while the reader is already at the bottom: once they
+  // scroll up to reread something, incoming tokens must not yank them back down.
+  const followStream = useRef(true);
+
+  function handleScroll() {
+    const node = scroller.current;
+    if (!node) return;
+    followStream.current = node.scrollHeight - node.scrollTop - node.clientHeight < 120;
+  }
 
   useEffect(() => {
-    bottom.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    if (followStream.current) {
+      bottom.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    }
   }, [messages]);
 
   // The model picker is populated from the gateway itself: GET /v1/models with
@@ -260,7 +273,7 @@ export function Chat() {
         </div>
       </header>
 
-      <div className="flex-1 overflow-y-auto">
+      <div ref={scroller} onScroll={handleScroll} className="flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-3xl space-y-4 p-4">
           {messages.length === 0 && (
             <div className="flex flex-col items-center gap-2 py-20 text-center text-sm text-muted">
@@ -280,13 +293,17 @@ export function Chat() {
               )}
               <div
                 className={cx(
-                  'animate-rise max-w-[85%] whitespace-pre-wrap break-words rounded-card px-3.5 py-2.5 text-sm leading-relaxed sm:max-w-[75%]',
+                  'animate-rise max-w-[85%] break-words rounded-card px-3.5 py-2.5 text-sm leading-relaxed sm:max-w-[75%]',
                   message.role === 'user'
-                    ? 'bg-brand text-white'
-                    : 'border border-border bg-surface text-ink'
+                    ? 'whitespace-pre-wrap bg-brand text-white'
+                    : 'min-w-0 border border-border bg-surface text-ink'
                 )}
               >
-                {message.content || (
+                {message.role === 'assistant' && message.content ? (
+                  <Markdown text={message.content} />
+                ) : message.content ? (
+                  message.content
+                ) : (
                   <span className="inline-flex items-center gap-1.5 text-muted">
                     <Icon name="spinner" size={13} spin /> Thinking
                   </span>

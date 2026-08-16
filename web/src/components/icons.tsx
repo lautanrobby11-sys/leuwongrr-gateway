@@ -3,9 +3,13 @@ import {
   Activity,
   ArrowUp,
   BadgeCheck,
+  BookOpen,
   Bot,
+  ChevronDown,
   CircleAlert,
+  Copy,
   CreditCard,
+  ExternalLink,
   Eye,
   EyeOff,
   Gauge,
@@ -20,11 +24,13 @@ import {
   Settings2,
   ShieldCheck,
   Sparkles,
+  Terminal,
   Trash2,
   TrendingUp,
   Users,
   Wallet,
   X,
+  Zap,
   type LucideIcon
 } from 'lucide-react';
 
@@ -38,11 +44,15 @@ export const ICONS = {
   activity: Activity,
   alert: CircleAlert,
   arrowUp: ArrowUp,
+  book: BookOpen,
   bot: Bot,
   card: CreditCard,
   check: BadgeCheck,
+  chevron: ChevronDown,
   close: X,
+  copy: Copy,
   dashboard: LayoutDashboard,
+  external: ExternalLink,
   eye: Eye,
   eyeOff: EyeOff,
   gauge: Gauge,
@@ -56,10 +66,12 @@ export const ICONS = {
   shield: ShieldCheck,
   spinner: Loader2,
   sparkles: Sparkles,
+  terminal: Terminal,
   trash: Trash2,
   trend: TrendingUp,
   users: Users,
-  wallet: Wallet
+  wallet: Wallet,
+  zap: Zap
 } as const satisfies Record<string, LucideIcon>;
 
 export type IconName = keyof typeof ICONS;

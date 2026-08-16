@@ -6,7 +6,8 @@ import react from '@vitejs/plugin-react';
  *
  * The backend test files run in Node and several load better-sqlite3, so a DOM
  * environment must not be forced on them globally (issue #51). This project is
- * scoped to the `.dom.test.tsx` files under web/src, runs in happy-dom, and
+ * scoped to the test files under web/src (DOM behavioural `.dom.test.tsx` plus
+ * source-reading checks like the static landing page), runs in happy-dom, and
  * shares web/'s single React install so the rendered component and
  * `@testing-library/react` resolve the same react with no dual-package hazard.
  *
@@ -20,7 +21,7 @@ export default defineConfig({
   plugins: [react()],
   test: {
     name: 'console-dom',
-    include: ['src/**/*.dom.test.tsx'],
+    include: ['src/**/*.dom.test.tsx', 'src/**/*.test.ts'],
     environment: 'happy-dom',
     restoreMocks: true,
     clearMocks: true

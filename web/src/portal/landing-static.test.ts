@@ -30,4 +30,10 @@ describe('static landing page', () => {
     expect(landing).toContain('index, follow');
     expect(landing).toContain('LeuwongRR Gateway · Private AI API for Teams');
   });
+
+  it('declares a canonical URL and structured data', () => {
+    expect(landing).toContain('<link rel="canonical" href="https://api.leuwongrr.cloud/" />');
+    expect(landing).toContain('application/ld+json');
+    expect(landing).toContain('"@type":"WebSite"');
+  });
 });

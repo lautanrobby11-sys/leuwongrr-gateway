@@ -66,6 +66,9 @@ const MIME: Record<string, string> = {
 };
 
 const ADMIN_ROLES = new Set(['admin', 'owner']);
+
+/** Pre-computed once; used only to equalise timing when the account is absent. */
+const DUMMY_PASSWORD_HASH = hashPassword('leuwongrr-timing-equaliser');
 const ISSUABLE_SCOPES: readonly Scope[] = [
   'models:read',
   'chat:write',
@@ -613,6 +616,60 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
         tenantId: account.tenantId,
         actorType: 'account',
         event: 'console.register',
+        traceId: req.id,
+        metadata: { method: 'password' }
+      });
+      return reply.send({ authenticated: true, role: account.role });
+    } catch (error) {
+      return handle(error, reply, req.id);
+    }
+  });
+
+  app.post('/console/api/auth/login/password', async (req, reply) => {
+    const parsed = passwordLoginSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return fail(reply, 401, 'credential_invalid', 'Email or password is incorrect', req.id);
+    }
+    try {
+      const account = accounts.findByEmail(parsed.data.email);
+      const storedHash = account ? accounts.getPasswordHash(account.id) : null;
+      // Verify against a dummy hash when the account or password is absent so
+      // the response timing does not reveal whether the email exists.
+      const ok = storedHash
+        ? verifyPassword(parsed.data.password, storedHash)
+        : verifyPassword(parsed.data.password, DUMMY_PASSWORD_HASH);
+      if (
+        !account ||
+        !ok ||
+        storedHash === null ||
+        account.status !== 'active' ||
+        account.emailVerifiedAt === null
+      ) {
+        return fail(reply, 401, 'credential_invalid', 'Email or password is incorrect', req.id);
+      }
+      return await issueAndDeliver(parsed.data.email, 'login', reply);
+    } catch (error) {
+      return handle(error, reply, req.id);
+    }
+  });
+
+  app.post('/console/api/auth/login/verify', async (req, reply) => {
+    const parsed = verifySchema.safeParse(req.body);
+    if (!parsed.success) return fail(reply, 400, 'invalid_request', 'Code is invalid', req.id);
+    try {
+      const ok = accounts.consumeCode(parsed.data.email, parsed.data.code, 'login', config.OTP_MAX_ATTEMPTS);
+      if (!ok) return fail(reply, 401, 'code_invalid', 'Code is invalid or expired', req.id);
+      const account = accounts.findByEmail(parsed.data.email);
+      if (!account || account.status !== 'active' || account.emailVerifiedAt === null) {
+        return fail(reply, 401, 'code_invalid', 'Code is invalid or expired', req.id);
+      }
+      accounts.linkIdentity(account.id, 'email', normaliseEmail(parsed.data.email));
+      const token = accounts.createSession(account.id, config.SESSION_TTL_HOURS);
+      setSessionCookie(reply, config, token);
+      db.audit({
+        tenantId: account.tenantId,
+        actorType: 'account',
+        event: 'console.login',
         traceId: req.id,
         metadata: { method: 'password' }
       });

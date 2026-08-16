@@ -8,7 +8,7 @@ web console for administration, member self-service and chat.
 client  ->  router.leuwongrr.cloud  ->  api.leuwongrr.cloud  ->  /v1/*  ->  gateway (127.0.0.1:2080)  ->  OmniRoute (127.0.0.1:20128)
 ```
 
-## Canonical status — 16 August 2026
+## Canonical status — 16 August 2026 (updated post-deploy)
 
 This status separates repository state from independently verified production
 state. It is intentionally conservative: a newer repository commit is not
@@ -16,8 +16,12 @@ evidence that the VPS is running that commit.
 
 | Item | Verified state |
 | --- | --- |
-| Production active SHA (VPS#2) | `3eb825b2a98bd21732e8be34bd147ad338cb4502` (deployed and SSH-verified 16 Aug 2026 01:57 UTC; rollback target `7dd1f50`) |
-| Local/GitHub `main` | `e90d156` — production `3eb825b` plus console-overhaul Phase A (`baa3058`, PR #75) and Phase B (PR #76: member usage ledger, key rotation, per-request usage detail via migration `0015`). Ahead of production and not yet deployed; a newer `main` is not evidence the VPS runs it |
+| Production active SHA (VPS#2) | `6483bfd706d1950c59da5529e7ce22e421ef3d51` (deployed and SSH-verified 16 Aug 2026 14:24 UTC via release gate; rollback target `3eb825b`) |
+| Local/GitHub `main` | `6483bfd` — same as production |
+| API | LIVE — loopback live/ready 200, journal 0 errors, NRestarts=0, negative auth 401 |
+| Console | LIVE; `/admin*` requires a Cloudflare Access JWT **and** an application role |
+| Migration `0015_usage_event_details` | Applied 16 Aug 2026 14:24 UTC — per-request usage detail columns added to `usage_events` (nullable, no backfill); `PRAGMA foreign_key_check` clean |
+| Soak 24 jam | Diganti oleh rilis baru `6483bfd` — pemantauan manual 24 jam dimulai 16 Agu 21:24 WIB |
 | API | LIVE — loopback live/ready 200, public `https://api.leuwongrr.cloud/health/live` 200, journal 0 errors post-deploy |
 | Console | LIVE; `/admin*` requires a Cloudflare Access JWT **and** an application role |
 | Gate 3 — OTP / Cloudflare Access / acceptance | RESOLVED (archived go-live notes 31 Jul–2 Aug 2026); acceptance, backup/restore, and rollback evidence recorded |

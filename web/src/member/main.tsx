@@ -11,6 +11,7 @@ import {
   type UsageRecent
 } from '../lib/api';
 import { Icon, type IconName } from '../components/icons';
+import { SetPasswordBanner } from './set-password-banner';
 import {
   Badge,
   Button,
@@ -268,7 +269,8 @@ function Member() {
   const [loading, setLoading] = useState(true);
   const [billing, setBilling] = useState<BillingSummary | null>(null);
   const [ledger, setLedger] = useState<LedgerEntry[]>([]);
-  const [account, setAccount] = useState<{ email: string; display_name: string } | null>(null);
+  const [account, setAccount] = useState<{ email: string; display_name: string; has_password?: boolean } | null>(null);
+  const [needsPassword, setNeedsPassword] = useState(false);
   const [days, setDays] = useState<Array<{ day: string; units: number }>>([]);
   const [recent, setRecent] = useState<UsageRecent[]>([]);
   const [usageTab, setUsageTab] = useState('requests');
@@ -311,6 +313,7 @@ function Member() {
     try {
       const [overview, usage, planList, keyList, paymentList] = await Promise.all([api.member.overview(), api.member.usage(), api.member.plans(), api.member.keys(), api.member.payments()]);
       setBilling(overview.billing); setLedger(overview.ledger); setAccount(overview.account); setDays(usage.days); setRecent(usage.recent); setPlans(planList.plans); setKeys(keyList.keys); setPayments(paymentList.payments);
+      setNeedsPassword(overview.account.has_password === false);
       await loadSubscriptions();
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) { window.location.href = '/login'; return; }
@@ -409,6 +412,7 @@ function Member() {
   return (
     <Shell title="LeuwongRR" subtitle={account?.email} items={NAV} active={tab} onSelect={setTab} onSignOut={() => void api.logout().then(() => (window.location.href = '/login'))}>
       {loading || !billing ? <Spinner label="Loading your account" /> : <>
+        {needsPassword && <div className="mb-4"><SetPasswordBanner onDone={() => setNeedsPassword(false)} /></div>}
         {tab === 'overview' && <div className="space-y-4">
           {!billing.funded && <div className="animate-rise flex flex-wrap items-center justify-between gap-3 rounded-card border border-bad/40 bg-bad/5 px-4 py-3"><p className="flex items-center gap-2 text-sm"><Icon name="alert" size={16} className="text-bad" />Your balance is empty. API requests are being refused.</p><Button icon="wallet" onClick={() => setTab('plans')}>Add tokens</Button></div>}
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"><Stat label="Available" value={tokens(billing.totalAvailable)} hint="Plan allowance plus wallet" icon="wallet" tone={billing.funded ? 'good' : 'bad'} /><Stat label="Used today" value={tokens(billing.usageToday)} icon="activity" /><Stat label="This period" value={tokens(billing.usageThisPeriod)} icon="trend" /><Stat label="Runway" value={billing.projectedDaysLeft === null ? '—' : `${billing.projectedDaysLeft}d`} hint="At today's burn rate" icon="gauge" tone={billing.projectedDaysLeft !== null && billing.projectedDaysLeft <= 3 ? 'warn' : 'default'} /></div>

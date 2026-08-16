@@ -132,7 +132,13 @@ export interface UsageRecent {
 
 export interface SessionState {
   authenticated: boolean;
-  account: { email: string; display_name: string; role: string; tenant_id: string } | null;
+  account: {
+    email: string;
+    display_name: string;
+    role: string;
+    tenant_id: string;
+    has_password: boolean;
+  } | null;
   providers: {
     google: boolean;
     discord: boolean;
@@ -221,12 +227,41 @@ export const api = {
       email,
       code
     }),
+  register: (input: { name: string; email: string; password: string; confirmPassword: string }) =>
+    post<{ delivered: boolean; ttl_minutes: number; dev_code?: string }>(
+      '/console/api/auth/register',
+      input
+    ),
+  registerVerify: (email: string, code: string) =>
+    post<{ authenticated: boolean; role: string }>('/console/api/auth/register/verify', {
+      email,
+      code
+    }),
+  loginPassword: (email: string, password: string) =>
+    post<{ delivered: boolean; ttl_minutes: number; dev_code?: string }>(
+      '/console/api/auth/login/password',
+      { email, password }
+    ),
+  loginVerify: (email: string, code: string) =>
+    post<{ authenticated: boolean; role: string }>('/console/api/auth/login/verify', {
+      email,
+      code
+    }),
+  requestReset: (email: string) =>
+    post<{ delivered: boolean; ttl_minutes: number }>(
+      '/console/api/auth/password/request-reset',
+      { email }
+    ),
+  resetPassword: (input: { email: string; code: string; password: string; confirmPassword: string }) =>
+    post<{ reset: boolean }>('/console/api/auth/password/reset', input),
+  setPassword: (input: { password: string; confirmPassword: string }) =>
+    post<{ set: boolean }>('/console/api/auth/password/set', input),
   logout: () => post<{ authenticated: boolean }>('/console/api/auth/logout'),
 
   member: {
     overview: () =>
       get<{
-        account: { email: string; display_name: string; role: string };
+        account: { email: string; display_name: string; role: string; has_password: boolean };
         billing: BillingSummary;
         ledger: LedgerEntry[];
       }>('/console/api/member/overview'),

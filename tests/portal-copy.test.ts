@@ -2,20 +2,24 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 /**
- * Two portal findings, both asserted on the source because the login page is a
- * static marketing bundle with no runtime seam to query. The copy is English
- * (the portal went international in the Release 2 overhaul), so the assertions
- * track the same two hazards in the new language:
+ * Marketing-copy honesty, asserted on the source because the public front door
+ * is a static document with no runtime seam to query. The Release 3 overhaul
+ * split the old login marketing page in two: the static landing page
+ * (web/index.html) carries the marketing copy, and /login became a focused
+ * authentication shell. These assertions therefore track the landing page:
  *
- * 1. The gateway configures a daily budget and meters usage against it. It does
- *    not cap spend in currency, so copy promising cost control ("cut costs",
- *    "cost control", "spend cap") claims enforcement the product does not have.
- *    The honest claim is configured budgets, usage tracking, and tenant policy.
- * 2. The rendered Python quickstart reads `os.environ`, so it must show
- *    `import os`. A visitor who copies the block verbatim otherwise gets
- *    `NameError: name 'os' is not defined` on their first request.
+ * 1. The gateway configures a daily token budget and meters usage against it.
+ *    It does not cap spend in currency, so copy promising cost control ("cut
+ *    costs", "cost control", "spend cap") claims enforcement the product does
+ *    not have. The honest claim is token budgets, rate limits, and a ledger.
+ * 2. The Python quickstart must stay copy-pasteable: the OpenAI import has to
+ *    appear before the client call, and the sample must not read an
+ *    environment variable it never imports a module for (the old hazard was
+ *    `os.environ` without `import os`, a NameError on the first request).
+ * 3. The portal went international, so the copy stays English and every
+ *    sign-in affordance points at the /login auth shell.
  */
-const portal = readFileSync('web/src/login/main.tsx', 'utf8');
+const portal = readFileSync('web/index.html', 'utf8');
 
 describe('portal copy', () => {
   it('claims no hard budget or cost control', () => {
@@ -24,29 +28,29 @@ describe('portal copy', () => {
     }
   });
 
-  it('describes budgets as configuration under operator policy', () => {
-    expect(portal).toContain('Configured budgets');
-    expect(portal).toContain('per-tenant daily budgets follow operator policy');
-    expect(portal).toContain('set per-tenant daily budgets under operator policy');
+  it('describes budgets as token and rate limits, not currency caps', () => {
+    expect(portal).toContain('Token budgets');
+    expect(portal).toContain('daily unit limits, concurrent-request caps and rate limits per member');
   });
 
   it('keeps the usage-tracking claim, which the ledger does support', () => {
-    expect(portal).toContain('track token usage');
-    expect(portal).toContain('Measurable usage');
+    expect(portal).toContain('a full ledger');
+    expect(portal).toContain('prompts and completions are never logged');
   });
 
-  it('imports os before the quickstart reads os.environ', () => {
-    const importOs = portal.indexOf('>import</span> os');
-    const environ = portal.indexOf('os.environ[');
-    expect(importOs).toBeGreaterThan(-1);
-    expect(environ).toBeGreaterThan(importOs);
+  it('keeps the Python quickstart copy-pasteable', () => {
+    const importOpenai = portal.indexOf('from openai import OpenAI');
+    const call = portal.indexOf('client.chat.completions.create');
+    expect(importOpenai).toBeGreaterThan(-1);
+    expect(call).toBeGreaterThan(importOpenai);
+    // No environment read that the sample never imports: a visitor who copies
+    // the block verbatim must not hit a NameError on their first request.
+    expect(portal).not.toContain('os.environ');
   });
 
-  it('is written for English readers', () => {
-    // The old Indonesian portal had an anchor that no longer exists; the new
-    // nav and sign-in card target #signin.
-    expect(portal).toContain('href="#signin"');
-    expect(portal).toContain('Sign in to the console');
+  it('is written for English readers and points at the auth shell', () => {
+    expect(portal).toContain('href="/login"');
+    expect(portal).toContain('Sign in');
     expect(portal).not.toContain('Masuk ke console');
   });
 });

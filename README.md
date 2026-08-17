@@ -17,7 +17,8 @@ evidence that the VPS is running that commit.
 | Item | Verified state |
 | --- | --- |
 | Production active SHA (VPS#2) | `6483bfd706d1950c59da5529e7ce22e421ef3d51` (deployed and SSH-verified 16 Aug 2026 14:24 UTC via release gate; rollback target `3eb825b`) |
-| Local/GitHub `main` | `d0b334c3595545d16e27c2243854442ddfbdf9ce` — production `6483bfd` plus console password + OTP authentication (scrypt hashes, purpose-bound codes, registration/reset/set-password routes via migration `0016`), the focused `/login` auth shell, and portal SEO metadata. **Ahead of production and not yet deployed**; a newer `main` is not evidence the VPS runs it |
+| Local/GitHub `main` | Production `6483bfd` plus console password + OTP authentication (scrypt hashes, purpose-bound codes, registration/reset/set-password routes via migration `0016`), the focused `/login` auth shell, and portal SEO metadata. **Ahead of production and not yet deployed**; a newer `main` is not evidence the VPS runs it |
+| Release candidate | `d0b334c3595545d16e27c2243854442ddfbdf9ce` — the last commit that changes a shipped file. Commits after it on `main` are documentation only |
 | Workstation gate for `d0b334c` | PASS — `npm run ci:local` green (581 tests across 79 files), artifact `.release/d0b334c3595545d16e27c2243854442ddfbdf9ce.tar.gz` packaged, SHA-256 checksum verified, tree clean |
 | GitHub quality mirror for `d0b334c` | `success` — all gates green (release readiness, conventions, secret scan, lint, typecheck, tests, build, bundle verify, shell syntax, package, checksum, clean tree) |
 | Migration `0016_account_passwords` | **NOT YET APPLIED to production** — adds `accounts.password_hash`, `accounts.email_verified_at` (backfilled from `created_at`), and `login_codes.purpose`. Applies on first start of the new release |

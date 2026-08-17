@@ -8,7 +8,7 @@ web console for administration, member self-service and chat.
 client  ->  router.leuwongrr.cloud  ->  api.leuwongrr.cloud  ->  /v1/*  ->  gateway (127.0.0.1:2080)  ->  OmniRoute (127.0.0.1:20128)
 ```
 
-## Canonical status — 16 August 2026 (updated post-deploy)
+## Canonical status — 17 August 2026
 
 This status separates repository state from independently verified production
 state. It is intentionally conservative: a newer repository commit is not
@@ -17,15 +17,14 @@ evidence that the VPS is running that commit.
 | Item | Verified state |
 | --- | --- |
 | Production active SHA (VPS#2) | `6483bfd706d1950c59da5529e7ce22e421ef3d51` (deployed and SSH-verified 16 Aug 2026 14:24 UTC via release gate; rollback target `3eb825b`) |
-| Local/GitHub `main` | `6483bfd` — same as production |
-| API | LIVE — loopback live/ready 200, journal 0 errors, NRestarts=0, negative auth 401 |
-| Console | LIVE; `/admin*` requires a Cloudflare Access JWT **and** an application role |
-| Migration `0015_usage_event_details` | Applied 16 Aug 2026 14:24 UTC — per-request usage detail columns added to `usage_events` (nullable, no backfill); `PRAGMA foreign_key_check` clean |
-| Soak 24 jam | Diganti oleh rilis baru `6483bfd` — pemantauan manual 24 jam dimulai 16 Agu 21:24 WIB |
-| API | LIVE — loopback live/ready 200, public `https://api.leuwongrr.cloud/health/live` 200, journal 0 errors post-deploy |
-| Console | LIVE; `/admin*` requires a Cloudflare Access JWT **and** an application role |
+| Local/GitHub `main` | `d0b334c3595545d16e27c2243854442ddfbdf9ce` — production `6483bfd` plus console password + OTP authentication (scrypt hashes, purpose-bound codes, registration/reset/set-password routes via migration `0016`), the focused `/login` auth shell, and portal SEO metadata. **Ahead of production and not yet deployed**; a newer `main` is not evidence the VPS runs it |
+| Workstation gate for `d0b334c` | PASS — `npm run ci:local` green (581 tests across 79 files), artifact `.release/d0b334c3595545d16e27c2243854442ddfbdf9ce.tar.gz` packaged, SHA-256 checksum verified, tree clean |
+| GitHub quality mirror for `d0b334c` | `success` — all gates green (release readiness, conventions, secret scan, lint, typecheck, tests, build, bundle verify, shell syntax, package, checksum, clean tree) |
+| Migration `0016_account_passwords` | **NOT YET APPLIED to production** — adds `accounts.password_hash`, `accounts.email_verified_at` (backfilled from `created_at`), and `login_codes.purpose`. Applies on first start of the new release |
+| API | LIVE on `6483bfd` — loopback live/ready 200, journal 0 errors, NRestarts=0, negative auth 401 |
+| Console | LIVE on `6483bfd`; `/admin*` requires a Cloudflare Access JWT **and** an application role |
 | Gate 3 — OTP / Cloudflare Access / acceptance | RESOLVED (archived go-live notes 31 Jul–2 Aug 2026); acceptance, backup/restore, and rollback evidence recorded |
-| Final go-live | **DECLARED** (August 2026) and maintained through `3eb825b` |
+| Final go-live | **DECLARED** (August 2026) and maintained through `6483bfd` |
 
 The canonical status record is the [Notion API status page](https://app.notion.com/p/7929024abd2483f8bfb181327c508e4d).
 Production activation requires the release-authority procedure in

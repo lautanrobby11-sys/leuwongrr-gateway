@@ -31,7 +31,7 @@
 **Interfaces:**
 - Produces: `hashPassword(plain: string): string`, `verifyPassword(plain: string, stored: string): boolean`, `PASSWORD_MIN_LENGTH`, `PASSWORD_MAX_LENGTH`, `validatePasswordStrength(password: string): string | null`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/password-hashing.test.ts`:
 
@@ -77,12 +77,12 @@ describe('password strength', () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `npx vitest run tests/password-hashing.test.ts`
 Expected: FAIL — cannot resolve `../src/accounts/passwords.js`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Create `src/accounts/passwords.ts`:
 
@@ -148,12 +148,12 @@ export function validatePasswordStrength(password: string): string | null {
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `npx vitest run tests/password-hashing.test.ts`
 Expected: PASS (5 tests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/accounts/passwords.ts tests/password-hashing.test.ts
@@ -174,7 +174,7 @@ git commit -m "feat(auth): add scrypt password hashing module"
 - Consumes: `hashPassword` from Task 1 (used by callers, not the store itself).
 - Produces: `AccountStore.issueCode(email, purpose, ttlMinutes, resendSeconds)`, `AccountStore.consumeCode(email, code, purpose, maxAttempts)`, `AccountStore.setPassword(accountId, hash)`, `AccountStore.hasPassword(accountId)`, `AccountStore.markEmailVerified(accountId)`, `AccountRecord.passwordHash: string | null`, `AccountRecord.emailVerifiedAt: string | null`. Existing `issueLoginCode`/`consumeLoginCode` remain as thin wrappers so current call sites keep working.
 
-- [ ] **Step 1: Write the failing migration test**
+- [x] **Step 1: Write the failing migration test**
 
 Create `tests/migration-0016.test.ts`:
 
@@ -205,12 +205,12 @@ describe('migration 0016_account_passwords', () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `npx vitest run tests/migration-0016.test.ts`
 Expected: FAIL — `password_hash` column does not exist.
 
-- [ ] **Step 3: Add the migration**
+- [x] **Step 3: Add the migration**
 
 In `src/persistence/migrations.ts`, append after the `0015_usage_event_details` entry (before the closing `}]`):
 
@@ -234,12 +234,12 @@ ALTER TABLE login_codes ADD COLUMN purpose TEXT NOT NULL DEFAULT 'login' CHECK(p
 }]
 ```
 
-- [ ] **Step 4: Run migration test to verify it passes**
+- [x] **Step 4: Run migration test to verify it passes**
 
 Run: `npx vitest run tests/migration-0016.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Write the failing store test**
+- [x] **Step 5: Write the failing store test**
 
 Create `tests/account-password-store.test.ts`:
 
@@ -294,12 +294,12 @@ describe('AccountStore password and purpose-aware OTP', () => {
 });
 ```
 
-- [ ] **Step 6: Run store test to verify it fails**
+- [x] **Step 6: Run store test to verify it fails**
 
 Run: `npx vitest run tests/account-password-store.test.ts`
 Expected: FAIL — `issueCode`/`setPassword` not defined.
 
-- [ ] **Step 7: Extend `AccountStore`**
+- [x] **Step 7: Extend `AccountStore`**
 
 In `src/accounts/store.ts`:
 
@@ -427,17 +427,17 @@ Add purpose-aware OTP methods and password helpers to the class (place near the 
   }
 ```
 
-- [ ] **Step 8: Run store test to verify it passes**
+- [x] **Step 8: Run store test to verify it passes**
 
 Run: `npx vitest run tests/account-password-store.test.ts tests/migration-0016.test.ts`
 Expected: PASS.
 
-- [ ] **Step 9: Run the full backend suite to catch regressions**
+- [x] **Step 9: Run the full backend suite to catch regressions**
 
 Run: `npx vitest run tests/auth-and-database.test.ts tests/console-surface.test.ts`
 Expected: PASS (existing OTP behaviour unchanged via the wrappers).
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add src/persistence/migrations.ts src/accounts/store.ts tests/migration-0016.test.ts tests/account-password-store.test.ts
@@ -458,7 +458,7 @@ git commit -m "feat(auth): migration 0016 and purpose-aware OTP + password store
 - Consumes: `hashPassword`, `validatePasswordStrength` (Task 1); `AccountStore.issueCode/consumeCode/setPassword/markEmailVerified/findByEmail` (Task 2); `setSessionCookie`, `fail`, `handle` (existing in console.ts).
 - Produces: `POST /console/api/auth/register` → `{ delivered: boolean; ttl_minutes: number; dev_code?: string }`; `POST /console/api/auth/register/verify` → `{ authenticated: true; role: string }` + session cookie.
 
-- [ ] **Step 1: Write the failing route test**
+- [x] **Step 1: Write the failing route test**
 
 Create `tests/console-auth-register.test.ts`:
 
@@ -559,12 +559,12 @@ describe('console registration', () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `npx vitest run tests/console-auth-register.test.ts`
 Expected: FAIL — 404 (route not registered).
 
-- [ ] **Step 3: Add the allowlist entry**
+- [x] **Step 3: Add the allowlist entry**
 
 In `src/policy/allowlist.ts`, replace the existing auth POST pattern:
 
@@ -574,7 +574,7 @@ In `src/policy/allowlist.ts`, replace the existing auth POST pattern:
 
 (This single alternation covers all new auth routes added across Tasks 3–5, so later tasks do not touch this line again.)
 
-- [ ] **Step 4: Add DOCUMENTED_OPERATIONS entries**
+- [x] **Step 4: Add DOCUMENTED_OPERATIONS entries**
 
 In `src/policy/allowlist.ts`, after the existing `logout` entry in `DOCUMENTED_OPERATIONS`, add:
 
@@ -588,7 +588,7 @@ In `src/policy/allowlist.ts`, after the existing `logout` entry in `DOCUMENTED_O
   { method: 'POST', path: '/console/api/auth/password/set', sample: '/console/api/auth/password/set', id: 'console.auth' },
 ```
 
-- [ ] **Step 5: Add OpenAPI paths**
+- [x] **Step 5: Add OpenAPI paths**
 
 In `docs/api/openapi.yaml`, after the `/console/api/auth/logout` block, add (keep the two-space path / four-space method layout the contract test parses):
 
@@ -684,7 +684,7 @@ In `docs/api/openapi.yaml`, after the `/console/api/auth/logout` block, add (kee
           description: Origin is not allowed.
 ```
 
-- [ ] **Step 6: Add the register schemas and routes**
+- [x] **Step 6: Add the register schemas and routes**
 
 In `src/http/console.ts`, add imports at the top:
 
@@ -822,12 +822,12 @@ Refactor the existing `request-code` handler to call `issueAndDeliver(parsed.dat
   });
 ```
 
-- [ ] **Step 7: Run the register test to verify it passes**
+- [x] **Step 7: Run the register test to verify it passes**
 
 Run: `npx vitest run tests/console-auth-register.test.ts tests/openapi-contract.test.ts`
 Expected: PASS.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/http/console.ts src/policy/allowlist.ts docs/api/openapi.yaml tests/console-auth-register.test.ts
@@ -846,7 +846,7 @@ git commit -m "feat(auth): registration with password and OTP verification"
 - Consumes: `verifyPassword` (Task 1), `AccountStore.getPasswordHash/hasPassword/consumeCode` (Task 2), `issueAndDeliver` (Task 3).
 - Produces: `POST /console/api/auth/login/password` → `{ otp_required: true; ttl_minutes: number; dev_code?: string }`; `POST /console/api/auth/login/verify` → `{ authenticated: true; role: string }` + session cookie.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/console-auth-login.test.ts` (reuse the same `start()`/`buildDist()` helpers as Task 3's test file):
 
@@ -946,12 +946,12 @@ describe('console password login', () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `npx vitest run tests/console-auth-login.test.ts`
 Expected: FAIL — 404.
 
-- [ ] **Step 3: Add the login schemas and routes**
+- [x] **Step 3: Add the login schemas and routes**
 
 In `src/http/console.ts`, add the schema:
 
@@ -1024,12 +1024,12 @@ Add `verifyPassword` to the passwords import from Task 3:
 import { hashPassword, validatePasswordStrength, verifyPassword } from '../accounts/passwords.js';
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `npx vitest run tests/console-auth-login.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/http/console.ts tests/console-auth-login.test.ts
@@ -1048,7 +1048,7 @@ git commit -m "feat(auth): password login with OTP second factor"
 - Consumes: `hashPassword`, `validatePasswordStrength` (Task 1), `AccountStore.consumeCode/setPassword/hasPassword` (Task 2), `issueAndDeliver`, `currentAccount` (existing).
 - Produces: `POST /console/api/auth/password/request-reset` → generic `{ delivered: true; ttl_minutes: number }`; `POST /console/api/auth/password/reset` → `{ reset: true }`; `POST /console/api/auth/password/set` → `{ set: true }`. Also extends `/console/api/session` and `/console/api/member/overview` account payloads with `has_password: boolean`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/console-auth-reset.test.ts` (same harness helpers as Tasks 3–4):
 
@@ -1168,12 +1168,12 @@ describe('session exposes has_password', () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `npx vitest run tests/console-auth-reset.test.ts`
 Expected: FAIL — 404 / missing `has_password`.
 
-- [ ] **Step 3: Add reset/set schemas and routes**
+- [x] **Step 3: Add reset/set schemas and routes**
 
 In `src/http/console.ts`, add schemas:
 
@@ -1265,7 +1265,7 @@ Add the routes after `login/verify`:
   });
 ```
 
-- [ ] **Step 4: Add `has_password` to session and member overview**
+- [x] **Step 4: Add `has_password` to session and member overview**
 
 In the `/console/api/session` handler, extend the `account` object:
 
@@ -1292,17 +1292,17 @@ In the `/console/api/member/overview` handler, extend the returned `account`:
         },
 ```
 
-- [ ] **Step 5: Run test to verify it passes**
+- [x] **Step 5: Run test to verify it passes**
 
 Run: `npx vitest run tests/console-auth-reset.test.ts`
 Expected: PASS.
 
-- [ ] **Step 6: Run the full backend suite**
+- [x] **Step 6: Run the full backend suite**
 
 Run: `npm test`
 Expected: PASS (all backend + DOM projects).
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/http/console.ts tests/console-auth-reset.test.ts
@@ -1320,7 +1320,7 @@ git commit -m "feat(auth): password reset and authenticated set-password"
 - Consumes: the routes from Tasks 3–5.
 - Produces: `api.register`, `api.registerVerify`, `api.loginPassword`, `api.loginVerify`, `api.requestReset`, `api.resetPassword`, `api.setPassword`; `SessionState.account.has_password`.
 
-- [ ] **Step 1: Extend `SessionState`**
+- [x] **Step 1: Extend `SessionState`**
 
 In `web/src/lib/api.ts`, update the `SessionState` interface's `account` type:
 
@@ -1343,7 +1343,7 @@ export interface SessionState {
 }
 ```
 
-- [ ] **Step 2: Add the auth methods**
+- [x] **Step 2: Add the auth methods**
 
 In the `api` object, after `verifyCode`, add:
 
@@ -1370,12 +1370,12 @@ In the `api` object, after `verifyCode`, add:
     post<{ set: boolean }>('/console/api/auth/password/set', input),
 ```
 
-- [ ] **Step 3: Typecheck the web project**
+- [x] **Step 3: Typecheck the web project**
 
 Run: `npm --prefix web run build`
 Expected: build succeeds (tsc --noEmit + vite build).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add web/src/lib/api.ts
@@ -1393,7 +1393,7 @@ git commit -m "feat(console): client methods for password and OTP auth"
 **Interfaces:**
 - Produces: `<PasswordInput value onChange placeholder autoComplete label hint />` — a controlled password field whose visibility toggle changes only `type`, preserves the value, and exposes `aria-pressed` + `aria-label`.
 
-- [ ] **Step 1: Write the failing DOM test**
+- [x] **Step 1: Write the failing DOM test**
 
 Create `web/src/components/password-input.dom.test.tsx`:
 
@@ -1439,12 +1439,12 @@ describe('PasswordInput', () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `npx vitest run web/src/components/password-input.dom.test.tsx`
 Expected: FAIL — cannot resolve `./password-input`.
 
-- [ ] **Step 3: Write the component**
+- [x] **Step 3: Write the component**
 
 Create `web/src/components/password-input.tsx`:
 
@@ -1502,12 +1502,12 @@ export function PasswordInput({
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `npx vitest run web/src/components/password-input.dom.test.tsx`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add web/src/components/password-input.tsx web/src/components/password-input.dom.test.tsx
@@ -1526,7 +1526,7 @@ git commit -m "feat(console): accessible password input with visibility toggle"
 - Consumes: `api.register/registerVerify/loginPassword/loginVerify/requestCode/verifyCode/requestReset/resetPassword/setPassword` (Task 6), `PasswordInput` (Task 7), `Button`, `Field`, `inputClass`, `ToastHost`, `useToast`, `Icon` (existing).
 - Produces: a `/login` page with modes `signin`, `register`, `verify`, `forgot`, `reset`, and a legacy `set-password` prompt.
 
-- [ ] **Step 1: Write the failing DOM test**
+- [x] **Step 1: Write the failing DOM test**
 
 Create `web/src/login/login.dom.test.tsx`:
 
@@ -1585,12 +1585,12 @@ describe('login shell', () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `npx vitest run web/src/login/login.dom.test.tsx`
 Expected: FAIL — current `main.tsx` exports no `App` and renders a marketing page.
 
-- [ ] **Step 3: Rewrite `web/src/login/main.tsx`**
+- [x] **Step 3: Rewrite `web/src/login/main.tsx`**
 
 Replace the file with a focused auth shell. Export `App` (the test imports it) and keep the `createRoot` mount. The structure: a centred card with a mode state machine. Keep it dependency-light (no Motion). Full content:
 
@@ -1840,17 +1840,17 @@ createRoot(document.getElementById('root') as HTMLElement).render(
 
 Note: the test's `getByLabelText(/^password$/i)` matches the `PasswordInput` label "Password". The `Icon` import is retained only if used; remove it if the linter flags it as unused.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `npx vitest run web/src/login/login.dom.test.tsx`
 Expected: PASS.
 
-- [ ] **Step 5: Build the console**
+- [x] **Step 5: Build the console**
 
 Run: `npm --prefix web run build`
 Expected: build succeeds.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add web/src/login/main.tsx web/src/login/login.dom.test.tsx
@@ -1868,7 +1868,7 @@ git commit -m "feat(console): focused login shell with register, OTP, and reset"
 **Interfaces:**
 - Produces: a canonical link, JSON-LD `Organization`/`WebSite` block, updated CTAs pointing at `/login`, and truthful copy. The static test asserts the new metadata.
 
-- [ ] **Step 1: Update the static test first**
+- [x] **Step 1: Update the static test first**
 
 In `web/src/portal/landing-static.test.ts`, extend the SEO test:
 
@@ -1880,12 +1880,12 @@ In `web/src/portal/landing-static.test.ts`, extend the SEO test:
   });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `npx vitest run web/src/portal/landing-static.test.ts`
 Expected: FAIL — canonical/JSON-LD absent.
 
-- [ ] **Step 3: Update `web/index.html`**
+- [x] **Step 3: Update `web/index.html`**
 
 In the `<head>`, after the existing `robots` meta, add:
 
@@ -1918,12 +1918,12 @@ Update the hero CTA block so the primary action offers both sign-in and account 
         </div>
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `npx vitest run web/src/portal/landing-static.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add web/index.html web/src/portal/landing-static.test.ts
@@ -1942,7 +1942,7 @@ git commit -m "feat(portal): canonical URL, JSON-LD, and dual auth CTAs"
 - Consumes: `api.setPassword`, `api.member.overview` (now returns `has_password`), `PasswordInput` (Task 7).
 - Produces: a dismissible banner shown when the signed-in account has no password, with an inline set-password form.
 
-- [ ] **Step 1: Write the failing DOM test**
+- [x] **Step 1: Write the failing DOM test**
 
 Create `web/src/member/set-password.dom.test.tsx`. Because the member page is large, test the extracted banner component. First extract the banner into `web/src/member/set-password-banner.tsx` (Step 3); the test targets that component:
 
@@ -1983,12 +1983,12 @@ describe('SetPasswordBanner', () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `npx vitest run web/src/member/set-password.dom.test.tsx`
 Expected: FAIL — cannot resolve `./set-password-banner`.
 
-- [ ] **Step 3: Create the banner component**
+- [x] **Step 3: Create the banner component**
 
 Create `web/src/member/set-password-banner.tsx`:
 
@@ -2045,7 +2045,7 @@ export function SetPasswordBanner({ onDone }: { onDone: () => void }) {
 }
 ```
 
-- [ ] **Step 4: Wire the banner into the member page**
+- [x] **Step 4: Wire the banner into the member page**
 
 In `web/src/member/main.tsx`, import the banner and track the flag. Add to the state near `account`:
 
@@ -2073,17 +2073,17 @@ Add the import:
 import { SetPasswordBanner } from './set-password-banner';
 ```
 
-- [ ] **Step 5: Run test to verify it passes**
+- [x] **Step 5: Run test to verify it passes**
 
 Run: `npx vitest run web/src/member/set-password.dom.test.tsx`
 Expected: PASS.
 
-- [ ] **Step 6: Build the console**
+- [x] **Step 6: Build the console**
 
 Run: `npm --prefix web run build`
 Expected: build succeeds.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add web/src/member/set-password-banner.tsx web/src/member/set-password.dom.test.tsx web/src/member/main.tsx
@@ -2102,17 +2102,17 @@ git commit -m "feat(member): set-password banner for legacy accounts"
 - Consumes: all prior tasks.
 - Produces: a green `npm run validate` and `npm run ci:local`, updated README, and a commit ready for the operator release-authority procedure.
 
-- [ ] **Step 1: Run the full validation suite**
+- [x] **Step 1: Run the full validation suite**
 
 Run: `npm run validate`
 Expected: PASS — conventions, secret scan, lint, typecheck, and both test projects green.
 
-- [ ] **Step 2: Run the local CI pipeline**
+- [x] **Step 2: Run the local CI pipeline**
 
 Run: `npm run ci:local`
 Expected: PASS — validate + `build:all` + shell gates. This packages a release tarball from the current HEAD.
 
-- [ ] **Step 3: Update the README auth surface**
+- [x] **Step 3: Update the README auth surface**
 
 In `README.md`, in the "What ships in a release" table, update the `Login` row and add the new auth operations. Replace:
 
@@ -2138,19 +2138,19 @@ registration still requires a one-time email code. Legacy passwordless
 accounts keep working through email OTP until they set a password.
 ```
 
-- [ ] **Step 4: Re-run validation after the README edit**
+- [x] **Step 4: Re-run validation after the README edit**
 
 Run: `npm run validate`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add README.md
 git commit -m "docs: document password + OTP console authentication"
 ```
 
-- [ ] **Step 6: Hand off to release authority**
+- [x] **Step 6: Hand off to release authority**
 
 Do NOT deploy from this session. Follow `docs/runbooks/operator-release-authority.md`: clean checkout at the merge SHA, both lockfiles, `npm run ci:local`, artifact with full Git SHA + checksum, then activation via `scripts/deploy.sh`. Update the Notion canonical status and checkpoint only after the gate evidence is recorded.
 
@@ -2162,3 +2162,35 @@ Do NOT deploy from this session. Follow `docs/runbooks/operator-release-authorit
 - **Type consistency:** `issueCode`/`consumeCode` signatures are identical across Tasks 2–5. `has_password` is added to both `/console/api/session` and `/console/api/member/overview` in Task 5 and consumed by the `SessionState` type (Task 6) and member banner (Task 10). `PasswordInput` props are identical in Tasks 7, 8, and 10.
 - **Contract atomicity:** Task 3 adds the single allowlist alternation and ALL seven `DOCUMENTED_OPERATIONS` entries plus ALL seven OpenAPI paths up front, so Tasks 4 and 5 only add handlers and the contract test stays green at every commit.
 - **No placeholders:** every code step contains real code. The member-page wiring in Task 10 references the actual `load()`/`Shell` structure observed in `web/src/member/main.tsx`.
+
+---
+
+## Execution record — 17 August 2026
+
+All eleven tasks executed. Merge SHA `d0b334c3595545d16e27c2243854442ddfbdf9ce`
+on `main`, pushed to `origin`.
+
+| Gate | Result |
+| --- | --- |
+| `npm run validate` | PASS — 581 tests across 79 files (node + console-dom) |
+| `npm run ci:local` | PASS — validate + `build:all` + shell gates |
+| Release artifact | `.release/d0b334c3595545d16e27c2243854442ddfbdf9ce.tar.gz`, SHA-256 checksum verified |
+| GitHub `quality` mirror | `success` on `d0b334c` (run 31981908475) |
+| Production deploy | NOT PERFORMED from this session — see below |
+
+Two defects surfaced during validation and were fixed rather than worked around:
+
+1. `src/accounts/store.ts` — the `create()` row literal omitted the two columns
+   migration `0016` adds, so `tsc --noEmit` rejected it (`de2c538`).
+2. `tests/portal-copy.test.ts` — the copy-honesty guard read
+   `web/src/login/main.tsx`, which Task 8 replaced with an auth shell. It was
+   repointed at the static landing page `web/index.html`, which now owns the
+   marketing copy (`9bd4444`). The same test was also outside every Vitest
+   `include` pattern, so it had not been running; `web/vitest.config.ts` now
+   collects `src/**/*.test.ts` alongside the DOM files.
+
+Deployment remains with the release authority per
+`docs/runbooks/operator-release-authority.md`: clean checkout at `d0b334c`, both
+lockfiles, a second independent `npm run ci:local`, checksum comparison, then
+activation via `scripts/deploy.sh`. Migration `0016_account_passwords` applies on
+first start of the new release and has not yet touched production data.

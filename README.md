@@ -53,10 +53,18 @@ refuses to activate a release whose `GATEWAY_HOST` is not `127.0.0.1`.
 | Member key rotation | `POST /console/api/member/keys/rotate` | session cookie, allowed Origin |
 | Chat console | `GET /chat` | session cookie |
 | Login | `GET /login` | none |
+| Register | `POST /console/api/auth/register` (+`/verify`) | allowed Origin |
+| Password sign-in | `POST /console/api/auth/login/password` (+`/verify`) | allowed Origin |
+| Password reset | `POST /console/api/auth/password/request-reset` (+`/reset`) | allowed Origin |
+| Set password | `POST /console/api/auth/password/set` | session cookie |
 | Cryptomus webhook | `POST /webhooks/cryptomus` | MD5 request signature |
 
 Every route is declared in `src/policy/allowlist.ts`. There is no catch-all
 passthrough: an undeclared path is a 404 by construction.
+
+Console passwords are stored as scrypt hashes; every password sign-in and
+registration still requires a one-time email code. Legacy passwordless
+accounts keep working through email OTP until they set a password.
 
 ## Local development
 

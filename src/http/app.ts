@@ -290,7 +290,7 @@ export function buildApp(deps: AppDeps) {
     }
     try {
       const probe = await deps.upstream.request(
-        '/api/monitoring/health',
+        deps.config.UPSTREAM_HEALTH_PATH,
         { method: 'GET', headers: { 'x-request-id': req.id } },
         AbortSignal.timeout(deps.config.READY_UPSTREAM_TIMEOUT_MS)
       );

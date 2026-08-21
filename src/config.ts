@@ -56,6 +56,13 @@ const schema = z.object({
     .transform((value) => value === 'true'),
   TRUSTED_CLIENT_IP_HEADER: z.string().min(1).max(64).default('cf-connecting-ip'),
   READY_UPSTREAM_TIMEOUT_MS: z.coerce.number().int().min(200).max(30000).default(2000),
+  UPSTREAM_HEALTH_PATH: z
+    .string()
+    .min(1)
+    .max(256)
+    .startsWith('/', 'must be an absolute upstream path')
+    .refine((value) => !value.startsWith('//'), 'must not be protocol-relative')
+    .default('/api/health'),
   TENANT_MAX_CONCURRENT: z.coerce.number().int().min(1).max(64).default(2),
   TENANT_LIMIT_MAX_ENTRIES: z.coerce.number().int().min(16).max(100000).default(512),
 

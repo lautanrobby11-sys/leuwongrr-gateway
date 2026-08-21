@@ -38,6 +38,7 @@ export const testConfig: Config = {
   TRUST_PROXY: false,
   TRUSTED_CLIENT_IP_HEADER: 'cf-connecting-ip',
   READY_UPSTREAM_TIMEOUT_MS: 2000,
+  UPSTREAM_HEALTH_PATH: '/api/health',
   TENANT_MAX_CONCURRENT: 2,
   TENANT_LIMIT_MAX_ENTRIES: 256,
   /** ADR-011: observability is opt-in, so the default fixture keeps it shut. */
@@ -60,6 +61,8 @@ export interface Harness {
   db: GatewayDatabase;
   token: string;
   upstreamCalls: () => number;
+  /** Absolute upstream paths the gateway actually requested, in call order. */
+  upstreamPaths: () => string[];
   cleanup: () => Promise<void>;
 }
 
@@ -121,7 +124,11 @@ export function createHarness(
   db.db.prepare("INSERT INTO accounts (id, tenant_id, email, display_name, role, status, created_at) VALUES ('harness-account', 'tenant-a', 'harness@example.test', 'Harness', 'member', 'active', datetime('now'))").run();
   db.db.prepare("INSERT INTO plans (id, name, monthly_price_cents, included_tokens, overage_cents_per_million, max_concurrent, rate_limit_rpm, daily_budget_units, models_json, active, updated_at, model_group_id) VALUES ('harness-plan', 'Harness Plan', 0, 1000000, 1, 2, 60, 100000, '[]', 1, datetime('now'), 'legacy-default')").run();
   db.db.prepare("INSERT INTO subscriptions (id, account_id, plan_id, status, period_start, period_end, included_tokens, used_tokens, auto_renew, created_at, updated_at, model_group_id) VALUES ('harness-subscription', 'harness-account', 'harness-plan', 'active', datetime('now'), datetime('now', '+1 day'), 1000000, 0, 1, datetime('now'), datetime('now'), 'legacy-default')").run();
-  const fetcher = vi.fn(async () => respond());
+  const fetcher = vi.fn(async (target: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    void init;
+    void target;
+    return respond();
+  });
   const upstream = new OmniRouteClient(
     config.OMNIROUTE_URL,
     config.UPSTREAM_CONCURRENCY,
@@ -139,6 +146,8 @@ export function createHarness(
     db,
     token,
     upstreamCalls: () => fetcher.mock.calls.length,
+    upstreamPaths: () =>
+      fetcher.mock.calls.map(([target]) => new URL(String(target)).pathname),
     cleanup: async () => {
       closeActiveStreams(db);
       await app.close();

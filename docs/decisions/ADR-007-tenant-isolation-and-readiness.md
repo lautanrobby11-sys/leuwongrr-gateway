@@ -36,9 +36,13 @@ properties assumed by the blueprint were not actually true in code:
 - Per-tenant values come from `TenantStore.limits()` on each request and fall
   back to `RATE_LIMIT_RPM` / `TENANT_MAX_CONCURRENT`. A limit change takes effect
   without a restart.
-- `/health/ready` probes OmniRoute `/api/monitoring/health` with
-  `READY_UPSTREAM_TIMEOUT_MS` in addition to the database check, and cancels the
-  probe body so the upstream permit is released.
+- `/health/ready` probes the upstream router's unauthenticated health endpoint
+  with `READY_UPSTREAM_TIMEOUT_MS` in addition to the database check, and cancels
+  the probe body so the upstream permit is released. The path is configuration
+  (`UPSTREAM_HEALTH_PATH`, default `/api/health`) because the upstream is no
+  longer OmniRoute: 9Router serves `/api/health` and answers 401 on the
+  OmniRoute-era `/api/monitoring/health`, which made a healthy host report
+  `503 not_ready` after the 21 Aug 2026 migration.
 - `TENANT_MAX_CONCURRENT` must not exceed `UPSTREAM_CONCURRENCY`; the invariant
   is enforced in `loadConfig`.
 

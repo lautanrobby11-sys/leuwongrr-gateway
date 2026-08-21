@@ -84,4 +84,32 @@ describe('readiness', () => {
     expect(response.statusCode).toBe(503);
     expect(response.json().error.code).toBe('not_ready');
   });
+
+  /**
+   * The upstream is 9Router, whose unauthenticated health surface is
+   * `/api/health`; the OmniRoute-era `/api/monitoring/health` answers 401 there
+   * and made a healthy host report `503 not_ready`. The probe path is therefore
+   * configuration, and the default must match the upstream actually deployed.
+   */
+  it('probes the configured upstream health path', async () => {
+    harness = createHarness(jsonResponse);
+    const response = await harness.app.inject({
+      method: 'GET',
+      url: '/health/ready',
+      headers: { 'x-internal-ready-token': testConfig.INTERNAL_READY_TOKEN }
+    });
+    expect(response.statusCode).toBe(200);
+    expect(harness.upstreamPaths()).toEqual(['/api/health']);
+  });
+
+  it('honours an operator override of the probe path', async () => {
+    harness = createHarness(jsonResponse, { UPSTREAM_HEALTH_PATH: '/api/monitoring/health' });
+    const response = await harness.app.inject({
+      method: 'GET',
+      url: '/health/ready',
+      headers: { 'x-internal-ready-token': testConfig.INTERNAL_READY_TOKEN }
+    });
+    expect(response.statusCode).toBe(200);
+    expect(harness.upstreamPaths()).toEqual(['/api/monitoring/health']);
+  });
 });

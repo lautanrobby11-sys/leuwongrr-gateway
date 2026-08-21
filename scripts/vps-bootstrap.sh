@@ -60,6 +60,7 @@ NODE_ENV=production
 GATEWAY_HOST=127.0.0.1
 GATEWAY_PORT=2080
 OMNIROUTE_URL=http://127.0.0.1:20128
+UPSTREAM_HEALTH_PATH=/api/health
 OMNIROUTE_API_KEY=REPLACE_ME
 PUBLIC_BASE_URL=https://api.leuwongrr.cloud
 DATABASE_PATH=/opt/leuwongrr-gateway/data/gateway.db

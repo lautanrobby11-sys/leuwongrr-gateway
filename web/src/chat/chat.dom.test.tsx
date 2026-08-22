@@ -92,7 +92,7 @@ describe('chat model picker — driven by GET /v1/models', () => {
       </ToastHost>
     );
     // Without a saved key the settings dialog is open by default.
-    const picker = (await screen.findByRole('combobox')) as HTMLSelectElement;
+    const picker = (await screen.findByRole('combobox', { name: /model/i })) as HTMLSelectElement;
     expect(picker.disabled).toBe(true);
     expect(picker.options.length).toBe(1);
     expect(picker.value).toBe('');
@@ -110,7 +110,7 @@ describe('chat model picker — driven by GET /v1/models', () => {
     );
     const user = await openSettingsWithKey('lwrr_live_ok');
 
-    const picker = (await screen.findByRole('combobox')) as HTMLSelectElement;
+    const picker = (await screen.findByRole('combobox', { name: /model/i })) as HTMLSelectElement;
     await waitFor(() => expect(picker.options.length).toBe(2));
     expect(picker.options[0]!.value).toBe('lwrr-text');
     expect(picker.options[1]!.value).toBe('best-fast');
@@ -129,7 +129,7 @@ describe('chat model picker — driven by GET /v1/models', () => {
     localStorage.setItem('lwrr.chat.model', 'lwrr-text');
     await openSettingsWithKey('lwrr_live_ok');
 
-    const picker = (await screen.findByRole('combobox')) as HTMLSelectElement;
+    const picker = (await screen.findByRole('combobox', { name: /model/i })) as HTMLSelectElement;
     await waitFor(() => expect(picker.options.length).toBe(1));
     expect(picker.value).toBe('best-fast');
   });
@@ -142,7 +142,7 @@ describe('chat model picker — driven by GET /v1/models', () => {
     );
     await openSettingsWithKey('lwrr_live_bad');
 
-    const picker = (await screen.findByRole('combobox')) as HTMLSelectElement;
+    const picker = (await screen.findByRole('combobox', { name: /model/i })) as HTMLSelectElement;
     await waitFor(() => expect(picker.disabled).toBe(true));
     expect(picker.options.length).toBe(1);
     expect(await screen.findByText('Invalid API key')).toBeTruthy();
@@ -152,7 +152,7 @@ describe('chat model picker — driven by GET /v1/models', () => {
     fetchMock.mockResolvedValue(jsonResponse(true, 200, { object: 'list', data: [] }));
     await openSettingsWithKey('lwrr_live_empty');
 
-    const picker = (await screen.findByRole('combobox')) as HTMLSelectElement;
+    const picker = (await screen.findByRole('combobox', { name: /model/i })) as HTMLSelectElement;
     await waitFor(() => expect(picker.options.length).toBe(1));
     const textbox = (await screen.findByRole('textbox', { name: 'Message' })) as HTMLTextAreaElement;
     await userEvent.setup().type(textbox, 'hello');

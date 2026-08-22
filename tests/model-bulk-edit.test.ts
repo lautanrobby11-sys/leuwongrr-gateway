@@ -198,10 +198,12 @@ describe('admin bulk model edit', () => {
       payload: { rows: [{ id: 'gpt-5', enabled: true, renameTo: 'nope' }] }
     });
     expect(response.statusCode).toBe(400);
-    // A validation failure names the offending path instead of a generic 400.
+    // A validation failure names the offending row and field instead of a
+    // generic 400. Zod words the reason itself ("Unrecognized key(s)…").
     const body = response.json() as { error: { code: string; message: string } };
     expect(body.error.code).toBe('invalid_request');
-    expect(body.error.message).toContain('rows.0.renameTo');
+    expect(body.error.message).toContain('rows.0');
+    expect(body.error.message).toContain('renameTo');
   });
 
   it('requires a valid admin assertion', async () => {

@@ -58,8 +58,12 @@ describe('theme', () => {
 
   it('the default theme clears the attribute rather than setting an alias', () => {
     setTheme('daylight');
-    expect(applyStoredTheme()).toBe('adwait');
+    expect(document.documentElement.dataset.theme).toBe('daylight');
+    // Choosing the default again removes the override entirely.
+    setTheme('adwait');
+    expect(localStorage.getItem(THEME_STORAGE)).toBe('adwait');
     expect(document.documentElement.dataset.theme).toBeUndefined();
+    expect(applyStoredTheme()).toBe('adwait');
   });
 
   it('falls back to the default for an unknown stored value', () => {

@@ -1,37 +1,48 @@
 # LeuwongRR Gateway
 
 A single-tenant-per-key API gateway that puts an OpenAI, Anthropic and Responses
-compatible surface in front of a private OmniRoute instance, plus a lightweight
+compatible surface in front of a private upstream router, plus a lightweight
 web console for administration, member self-service and chat.
 
 ```
-client  ->  router.leuwongrr.cloud  ->  api.leuwongrr.cloud  ->  /v1/*  ->  gateway (127.0.0.1:2080)  ->  OmniRoute (127.0.0.1:20128)
+client  ->  api.leuwongrr.cloud  ->  Cloudflare Tunnel  ->  gateway (127.0.0.1:2080)  ->  9Router (127.0.0.1:20128)
 ```
 
-## Canonical status — 17 August 2026
+Gateway and upstream router share one host, so the hop between them is pure
+loopback. `router.leuwongrr.cloud` no longer exists: it was removed from the
+tunnel ingress and its DNS record is gone, and the upstream is not exposed
+publicly.
+
+## Canonical status — 22 August 2026
 
 This status separates repository state from independently verified production
-state. It is intentionally conservative: a newer repository commit is not
-evidence that the VPS is running that commit.
+state. It is intentionally conservative: a repository commit is not evidence
+that the VPS is running that commit, so every production row below cites an SSH
+check rather than a Git or CI result.
 
 | Item | Verified state |
 | --- | --- |
-| Production active SHA (VPS#2) | `6483bfd706d1950c59da5529e7ce22e421ef3d51` (deployed and SSH-verified 16 Aug 2026 14:24 UTC via release gate; rollback target `3eb825b`) |
-| Local/GitHub `main` | Production `6483bfd` plus console password + OTP authentication (scrypt hashes, purpose-bound codes, registration/reset/set-password routes via migration `0016`), the focused `/login` auth shell, and portal SEO metadata. **Ahead of production and not yet deployed**; a newer `main` is not evidence the VPS runs it |
-| Release candidate | `d0b334c3595545d16e27c2243854442ddfbdf9ce` — the last commit that changes a shipped file. Commits after it on `main` are documentation only |
-| Workstation gate for `d0b334c` | PASS — `npm run ci:local` green (581 tests across 79 files), artifact `.release/d0b334c3595545d16e27c2243854442ddfbdf9ce.tar.gz` packaged, SHA-256 checksum verified, tree clean |
-| GitHub quality mirror for `d0b334c` | `success` — all gates green (release readiness, conventions, secret scan, lint, typecheck, tests, build, bundle verify, shell syntax, package, checksum, clean tree) |
-| Migration `0016_account_passwords` | **NOT YET APPLIED to production** — adds `accounts.password_hash`, `accounts.email_verified_at` (backfilled from `created_at`), and `login_codes.purpose`. Applies on first start of the new release |
-| API | LIVE on `6483bfd` — loopback live/ready 200, journal 0 errors, NRestarts=0, negative auth 401 |
-| Console | LIVE on `6483bfd`; `/admin*` requires a Cloudflare Access JWT **and** an application role |
+| Production host | **VPS#1** `18.136.26.152` (Lightsail, Ubuntu 24.04). VPS#2 `47.130.108.143` no longer runs any gateway — it serves only `leuwongrr.online` |
+| Production active SHA | `aaaae0d5eb73b6b2af7f11f37fa40454a30e995e` — deployed and SSH-verified 22 Aug 2026 09:27 UTC through the release gate; `runtime/active-sha` and the `current` symlink agree. Rollback target `0eb44bb3d614c505b6a4d55d99da7199ff5d01c4` still present under `releases/` |
+| Local/GitHub `main` | `aaaae0d5eb73b6b2af7f11f37fa40454a30e995e` — **level with production**, 0 open pull requests |
+| Workstation gate for `aaaae0d` | PASS — `npm run ci:local` green, artifact `.release/aaaae0d5eb73b6b2af7f11f37fa40454a30e995e.tar.gz` packaged, SHA-256 checksum verified, OpenSSH signature verified against `keys/release-signers`, tree clean at packaging time |
+| GitHub quality mirror for `aaaae0d` | `validate` `success` (run 32479746978); `release_readiness` skipped in PR by design |
+| Upstream | **9Router** `decolua/9router:0.5.55` as a container on VPS#1, bound to `127.0.0.1:20128` (plus `:20129` for direct operator access), Docker health `healthy`, 0 restarts. It replaced OmniRoute entirely |
+| Migration `0016_account_passwords` | **APPLIED** — `accounts.password_hash` and `accounts.email_verified_at` present in the production database |
+| API | LIVE on `aaaae0d` — loopback and public `/health/live` 200, `/v1/models` 401 without a key, journal 0 errors, `NRestarts=0` |
+| Readiness | `/health/ready` returns **200** with the internal token and 404 without it. It probes `UPSTREAM_HEALTH_PATH` (default `/api/health`), which is what 9Router actually serves; the OmniRoute-era `/api/monitoring/health` answered 401 and made a healthy host report 503 (ADR-007) |
+| Console | LIVE on `aaaae0d` — `/login` 200, `/admin` 302 to Cloudflare Access, which requires a valid Access JWT **and** an application role |
 | Gate 3 — OTP / Cloudflare Access / acceptance | RESOLVED (archived go-live notes 31 Jul–2 Aug 2026); acceptance, backup/restore, and rollback evidence recorded |
-| Final go-live | **DECLARED** (August 2026) and maintained through `6483bfd` |
+| Final go-live | **DECLARED** (August 2026) and maintained through `aaaae0d` |
 
-The canonical status record is the [Notion API status page](https://app.notion.com/p/7929024abd2483f8bfb181327c508e4d).
-Production activation requires the release-authority procedure in
+The canonical status record is the Notion page **"🌍 LeuwongRR Gateway — STATUS
+KANONIS"**. Production activation requires the release-authority procedure in
 `docs/runbooks/operator-release-authority.md`; GitHub Actions and repository
 alignment alone do not authorize deployment. Never place production secrets in
 this repository, README, Notion, logs, or release evidence.
+
+Because production and `main` currently agree, the honest reading of a future
+mismatch is unchanged: re-verify over SSH before believing either side.
 
 The process never listens on a public interface. Cloudflare terminates TLS and a
 Cloudflare Tunnel carries traffic to loopback, which is why `scripts/deploy.sh`
@@ -149,8 +160,12 @@ sudo nano /opt/leuwongrr-gateway/config/gateway.env
 Every `REPLACE_ME` is shorter than the minimum its own validation rule enforces,
 so an unedited file refuses to boot and names the offending field rather than
 starting half-configured. `OMNIROUTE_API_KEY` must hold a real credential before
-`deploy.sh` runs. Use `.env.example` as the source of truth for keys and
-cross-field rules. Deployment aborts if the file is not `root:root` mode `600`.
+`deploy.sh` runs — the variable keeps its historical name while now carrying the
+9Router key, and `OMNIROUTE_URL` must be `http://127.0.0.1:20128`, which
+`deploy.sh` enforces. Use `.env.example` as the source of truth for keys and
+cross-field rules; `UPSTREAM_HEALTH_PATH` defaults to `/api/health` and only
+needs setting for a non-9Router upstream. Deployment aborts if the file is not
+`root:root` mode `600`.
 
 ### 3. Build the artifact (on a workstation or in CI)
 
@@ -158,6 +173,8 @@ cross-field rules. Deployment aborts if the file is not `root:root` mode `600`.
 git checkout main && git pull
 bash scripts/build-release.sh "$(git rev-parse HEAD)"
 # -> .release/<sha>.tar.gz and .release/<sha>.tar.gz.sha256
+bash scripts/sign-release.sh "$(git rev-parse HEAD)"
+# -> .release/<sha>.tar.gz.sha256.sig (Ed25519, operator key)
 ```
 
 The working tree must be clean, untracked files included: packaging stages from
@@ -171,16 +188,26 @@ backend **and** the console, verifies that
 records a `manifest.sha256` over every staged file. A release that cannot serve
 the dashboards is never produced.
 
-CI attaches the same tarball to every green `quality` run, so you can download
-the artifact instead of building locally.
+CI attaches the same tarball to every green `quality` run, but a CI artifact is
+never deployable: CI holds no signing key, and `deploy.sh` requires a valid
+`.sha256.sig` produced on the operator workstation by
+`scripts/sign-release.sh` (ADR-012, ADR-013). Download it for inspection, not for
+activation.
 
 ### 4. Transfer and deploy
 
 ```bash
 SHA=$(git rev-parse HEAD)
-scp ".release/$SHA.tar.gz" ".release/$SHA.tar.gz.sha256" admin@47.130.108.143:/tmp/
-ssh admin@47.130.108.143 "sudo bash /opt/leuwongrr-gateway/current/scripts/deploy.sh $SHA /tmp/$SHA.tar.gz"
+scp ".release/$SHA.tar.gz" ".release/$SHA.tar.gz.sha256" ".release/$SHA.tar.gz.sha256.sig" \
+  ubuntu@18.136.26.152:/tmp/
+ssh ubuntu@18.136.26.152 "sudo bash /opt/leuwongrr-gateway/current/scripts/deploy.sh $SHA /tmp/$SHA.tar.gz"
 ```
+
+The production host is **VPS#1** `18.136.26.152` (Lightsail); the login user is
+`ubuntu` and the key is the Lightsail default key. Transfer the checksum and its
+`.sig` alongside the tarball — `deploy.sh` verifies the OpenSSH signature against
+`/opt/leuwongrr-gateway/config/release-signers` and refuses an unsigned or
+forged artifact.
 
 For the very first deploy there is no `current/scripts`. Do not copy the
 repository to the host: extract `scripts/vps-bootstrap.sh` and then `deploy.sh`
@@ -188,13 +215,14 @@ from the artifact itself, verifying each against the inner `manifest.sha256`.
 That is mandatory, not optional — the procedure is
 `docs/runbooks/artifact-deploy-bootstrap.md`.
 
-`deploy.sh` verifies the checksum and manifest, requires `package-lock.json`,
+`deploy.sh` verifies the checksum, the OpenSSH signature and the manifest,
+requires `package-lock.json`,
 requires every console entry (index, admin, member, chat, login), runs `npm ci --omit=dev`, runs preflight as
 the service user with the release directory as the working directory, swaps the
 symlink, restarts the unit and gates on both health probes. Readiness must come
-back within 90 seconds (`HEALTH_STARTUP_DEADLINE_SECONDS` in `scripts/deploy.sh:12`,
+back within 90 seconds (`HEALTH_STARTUP_DEADLINE_SECONDS` in `scripts/deploy.sh`,
 a constant, not an environment knob) or it restores the previous release
-automatically. `rollback.sh:45` uses a tighter 30 second deadline, because the
+automatically. `rollback.sh` carries the same 90 second constant, since the
 release it reverts to has already been ready once.
 
 ### 5. Verify
@@ -281,13 +309,16 @@ Run the drill at least once per quarter; an unverified backup is not a backup.
 The canonical record is `infra/cloudflare/README.md`, including the cache-bypass
 list and the negative cases to verify. Shape of it:
 
-- Tunnel: `api.leuwongrr.cloud` to `http://127.0.0.1:2080`.
+- Tunnel: `api.leuwongrr.cloud` to `http://127.0.0.1:2080` on VPS#1, run by
+  `cloudflared` in token mode. `router.leuwongrr.cloud` was removed from the
+  ingress (config version 5) and its DNS record deleted.
 - Access: a **self-hosted** application covering `api.leuwongrr.cloud/admin*`
   only. Never the whole hostname — API clients and members carry no Access
   cookie. `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` come from that application.
 - `TRUST_PROXY=true` so the client IP is read from `cf-connecting-ip` for rate
   limiting and audit records.
-- Ports 2080 and 20128 are never published in the firewall or security group.
+- Ports 2080, 20128 and 20129 are never published in the firewall or security
+  group; all three listen on loopback only.
 
 Access is the outer gate; the application still checks that the authenticated
 identity holds the `owner` or `admin` role. Both must pass.
@@ -321,5 +352,6 @@ Streaming is server-sent events on all three protocols.
   Security updates are still opened immediately, independent of the schedule.
 
 Architecture decisions live in `docs/decisions/` (ADR-001 to ADR-008) and
-`docs/adr/ADR-009-console-accounts-and-billing.md`. Operational procedures live
+`docs/adr/` (ADR-009 to ADR-014). ADR-007 is the one to read before touching
+readiness or the upstream health path. Operational procedures live
 in `docs/runbooks/operations.md`.

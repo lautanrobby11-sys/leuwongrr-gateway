@@ -1439,6 +1439,58 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
     }
   });
 
+  /**
+   * Bulk model edit: one partial update per row, applied inside a single
+   * transaction so a mid-batch failure (unknown group, malformed row) leaves
+   * the catalog exactly as it was. Rows naming a model that does not exist are
+   * reported in `missing` instead of failing the batch — an operator pasting a
+   * catalogue list should learn which ids drifted, not lose the rest of the
+   * edit. Field bounds are the single-editor schema, so nothing slips through
+   * here that the per-model route would reject.
+   */
+  app.post('/console/api/admin/models/bulk', async (req, reply) => {
+    try {
+      const admin = await requireAdmin(req);
+      const bulkRowSchema = modelUpdateSchema
+        .extend({ id: z.string().regex(/^[a-z0-9-]{2,64}$/) })
+        .strict();
+      const parsed = z
+        .object({ rows: z.array(bulkRowSchema).min(1).max(500) })
+        .strict()
+        .safeParse(req.body);
+      if (!parsed.success) {
+        return fail(reply, 400, 'invalid_request', 'Bulk payload invalid', req.id);
+      }
+      if (parsed.data.rows.some((row) => Object.keys(row).length < 2)) {
+        return fail(reply, 400, 'invalid_request', 'Each row needs an id and at least one field to change', req.id);
+      }
+      const updated: string[] = [];
+      const missing: string[] = [];
+      const apply = db.db.transaction(() => {
+        for (const row of parsed.data.rows) {
+          const { id, ...changes } = row;
+          // Null return is the catalog's "no such model": record it and keep
+          // going, still inside the transaction so the surviving rows land
+          // together.
+          const result = models.update(id, changes);
+          if (result === null) missing.push(id);
+          else updated.push(id);
+        }
+      });
+      apply();
+      db.audit({
+        tenantId: admin.tenantId,
+        actorType: 'admin',
+        event: 'console.model.bulk_updated',
+        traceId: req.id,
+        metadata: { updated: updated.length, missing: missing.length }
+      });
+      return reply.send({ updated, missing });
+    } catch (error) {
+      return handle(error, reply, req.id);
+    }
+  });
+
   app.put('/console/api/admin/models/:id', async (req, reply) => {
     try {
       const admin = await requireAdmin(req);

@@ -93,8 +93,10 @@ const MIN_CUSTOM_TOKENS = 1_000_000;
 const NAV: NavItem[] = [
   { id: 'overview', label: 'Overview', icon: 'dashboard' },
   { id: 'usage', label: 'Usage', icon: 'activity' },
+  { id: 'models', label: 'Models', icon: 'bot' },
   { id: 'plans', label: 'Plans', icon: 'card' },
-  { id: 'keys', label: 'API keys', icon: 'key' }
+  { id: 'keys', label: 'API keys', icon: 'key' },
+  { id: 'chat', label: 'Chat', icon: 'message' }
 ];
 
 interface FlowStep {
@@ -263,6 +265,74 @@ function LedgerTable({ entries }: { entries: LedgerEntry[] }) {
   );
 }
 
+/**
+ * The member-side model catalogue. The plans endpoint already projects every
+ * plan's group members with the group multiplier applied, so this view needs
+ * no extra round trip: each (plan, model) pair becomes one row priced at what
+ * that plan would actually charge. A row whose plan is the active
+ * subscription reads "Included now" — that plan's group is the same one the
+ * gateway's entitlement check resolves for the account's API keys.
+ */
+export function ModelsTab({
+  plans,
+  activePlanId,
+  onOpenChat,
+  onBrowsePlans
+}: {
+  plans: Plan[];
+  activePlanId: string | null;
+  onOpenChat: () => void;
+  onBrowsePlans: () => void;
+}) {
+  const rows = useMemo(
+    () => plans.flatMap((plan) => (plan.eligibleModels ?? []).map((model) => ({ plan, model }))),
+    [plans]
+  );
+  const includesAny = activePlanId !== null && rows.some((row) => row.plan.id === activePlanId);
+  return (
+    <Card
+      title="Models"
+      subtitle="Every model your plans can serve, priced per million tokens at each plan's rate"
+      action={
+        includesAny ? (
+          <Button icon="message" onClick={onOpenChat}>Open chat</Button>
+        ) : (
+          <Button variant="outline" icon="card" onClick={onBrowsePlans}>Browse plans</Button>
+        )
+      }
+    >
+      {rows.length === 0 ? (
+        <EmptyState message="No models are offered right now. Plans attach models through their group." icon="bot" />
+      ) : (
+        <Table headers={['Model', 'Plan', 'In / 1M', 'Out / 1M', 'Cache read / 1M', 'Access']}>
+          {rows.map(({ plan, model }) => (
+            <tr key={`${plan.id}:${model.id}`}>
+              <Cell>
+                <p className="font-medium">{model.name}</p>
+                <p className="font-mono text-xs text-muted">{model.id}</p>
+              </Cell>
+              <Cell className="text-xs text-muted">{plan.name}</Cell>
+              <Cell className="tabular-nums">{moneyPrecise(model.effectiveInputPriceCents)}</Cell>
+              <Cell className="tabular-nums">{moneyPrecise(model.effectiveOutputPriceCents)}</Cell>
+              <Cell className="tabular-nums text-muted">{moneyPrecise(model.effectiveCacheReadPriceCents)}</Cell>
+              <Cell>
+                {activePlanId === plan.id ? (
+                  <Badge tone="good">Included now</Badge>
+                ) : (
+                  <Badge>Not active</Badge>
+                )}
+              </Cell>
+            </tr>
+          ))}
+        </Table>
+      )}
+      <p className="mt-3 text-xs text-muted">
+        Prices already carry each group's multiplier. Chat and your API keys see the models your active subscription entitles.
+      </p>
+    </Card>
+  );
+}
+
 function Member() {
   const toast = useToast();
   const [tab, setTab] = useState('overview');
@@ -389,6 +459,17 @@ function Member() {
   }
 
   const paygPlan = plans.find((plan) => plan.overageCentsPerMillion > 0) ?? plans[0] ?? null;
+
+  // Chat is a separate page with its own full-height layout, so its rail item
+  // navigates instead of switching an in-page tab.
+  function selectTab(id: string) {
+    if (id === 'chat') {
+      window.location.assign('/chat');
+      return;
+    }
+    setTab(id);
+  }
+
   // Plans are shown in two groups: rolling-time subscriptions (no token
   // allowance, billed for a window) and token packs (an allowance to spend).
   const rollingPlans = plans.filter((plan) => (plan.method ?? 'token_pack') === 'rolling_time');
@@ -410,7 +491,7 @@ function Member() {
     Number.isFinite(packPrice) &&
     packPrice > 0;
   return (
-    <Shell title="LeuwongRR" subtitle={account?.email} items={NAV} active={tab} onSelect={setTab} onSignOut={() => void api.logout().then(() => (window.location.href = '/login'))}>
+    <Shell title="LeuwongRR" subtitle={account?.email} items={NAV} active={tab} onSelect={selectTab} onSignOut={() => void api.logout().then(() => (window.location.href = '/login'))}>
       {loading || !billing ? <Spinner label="Loading your account" /> : <>
         {needsPassword && <div className="mb-4"><SetPasswordBanner onDone={() => setNeedsPassword(false)} /></div>}
         {tab === 'overview' && <div className="space-y-4">
@@ -488,6 +569,14 @@ function Member() {
             <p className="mt-3 text-xs text-muted">Tokens are spent before the wallet, oldest-expiry first. A 1M minimum keeps custom pricing honest; every pack gets its own countdown from the moment it settles.</p>
           </Card>}
         </div>}
+        {tab === 'models' && (
+          <ModelsTab
+            plans={plans}
+            activePlanId={billing.subscription?.planId ?? null}
+            onOpenChat={() => window.location.assign('/chat')}
+            onBrowsePlans={() => setTab('plans')}
+          />
+        )}
         {tab === 'keys' && <Card title="API keys" subtitle="Use these with the OpenAI or Anthropic SDKs" action={<Button icon="plus" onClick={() => setKeyModal(true)}>New key</Button>}><Table headers={['Name', 'Key', 'Scopes', 'Created', 'Status', '']} empty={keys.length === 0}>{keys.map((key) => <tr key={key.id}><Cell className="font-medium">{key.name}</Cell><Cell className="font-mono text-xs text-muted"><div className="flex items-center gap-1.5">{revealedKeyId === key.id ? <span className="text-ink">{key.prefix}{'…'}{key.last4}</span> : <span>{key.prefix}{'••••'}{key.last4}</span>}<button type="button" className="cursor-pointer rounded-md p-0.5 text-muted transition-colors hover:text-ink" aria-label={revealedKeyId === key.id ? 'Hide key' : 'Reveal key'} onClick={() => setRevealedKeyId((current) => (current === key.id ? null : key.id))}><Icon name={revealedKeyId === key.id ? 'eyeOff' : 'eye'} size={15} /></button></div></Cell><Cell className="text-xs text-muted">{key.scopes.join(', ')}</Cell><Cell className="whitespace-nowrap text-muted">{shortDate(key.createdAt)}</Cell><Cell><Badge tone={key.revokedAt ? 'bad' : 'good'}>{key.revokedAt ? 'Revoked' : 'Active'}</Badge></Cell><Cell className="text-right">{!key.revokedAt && <div className="flex justify-end gap-1.5"><Button variant="outline" icon="key" onClick={() => setRotateTarget({ id: key.id, name: key.name })}>Rotate</Button><Button variant="danger" onClick={() => void api.member.revokeKey(key.id).then(load).then(() => toast('Key revoked'))}>Revoke</Button></div>}</Cell></tr>)}</Table></Card>}
         <Modal open={keyModal} title={issuedKey ? 'Copy your key' : 'Create an API key'} onClose={() => { setKeyModal(false); setIssuedKey(null); }}>{issuedKey ? <div className="space-y-3"><p className="text-sm text-muted">This is the only time the key is shown. The gateway stores a hash, so it cannot be recovered later.</p><code className="block break-all rounded-lg border border-border bg-raised p-3 font-mono text-xs">{issuedKey}</code><Button icon="check" className="w-full" onClick={() => { void navigator.clipboard.writeText(issuedKey); toast('Key copied'); }}>Copy to clipboard</Button></div> : <div className="space-y-4"><Field label="Name" hint="Something you will recognise later, like 'codex-laptop'"><input className={inputClass} value={keyName} onChange={(event) => setKeyName(event.target.value)} /></Field><Field label="Scopes"><div className="grid gap-2 sm:grid-cols-2">{['models:read', 'chat:write', 'responses:write', 'messages:write'].map((scope) => <label key={scope} className="flex cursor-pointer items-center gap-2 rounded-lg border border-border bg-raised px-3 py-2 text-sm"><input type="checkbox" className="accent-brand" checked={keyScopes.includes(scope)} onChange={(event) => setKeyScopes((current) => event.target.checked ? [...current, scope] : current.filter((item) => item !== scope))} /><span className="font-mono text-xs">{scope}</span></label>)}</div></Field><Button className="w-full" icon="key" busy={busy} disabled={keyName.trim().length === 0 || keyScopes.length === 0} onClick={() => void createKey()}>Create key</Button></div>}</Modal>
         <Modal open={rotateTarget !== null} title="Rotate API key" onClose={() => setRotateTarget(null)}>

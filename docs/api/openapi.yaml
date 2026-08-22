@@ -564,6 +564,28 @@ paths:
           description: Upstream client is not configured.
         '403':
           description: Origin is not allowed, or the Access assertion failed.
+  /console/api/admin/models/bulk:
+    post:
+      summary: Update many models in one action
+      description: >-
+        Requires an allowed Origin. Applies one partial update per listed row
+        (prices, enabled, group, upstream) inside a single transaction: either
+        every valid row lands or nothing does. Each row needs an id plus at
+        least one field to change, and field bounds match the single-model
+        editor. Rows naming a model that does not exist are skipped and
+        reported in `missing`. 1-500 rows per call; 400 when a row is
+        malformed, changes nothing, or names a group that does not exist.
+      security:
+        - accessAssertion: []
+      responses:
+        '200':
+          description: >-
+            Bulk update applied. Body: `{ "updated": string[],
+            "missing": string[] }`.
+        '400':
+          description: Bulk payload invalid, or a row names an unknown group.
+        '403':
+          description: Origin is not allowed, or the Access assertion failed.
   /console/api/admin/models/{id}:
     put:
       summary: Amend a model

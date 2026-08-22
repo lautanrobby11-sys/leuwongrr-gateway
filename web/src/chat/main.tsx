@@ -264,6 +264,9 @@ export function Chat() {
           </div>
         </div>
         <div className="flex items-center gap-1.5">
+          <Button variant="ghost" onClick={() => window.location.assign('/member')} aria-label="Member dashboard">
+            <Icon name="dashboard" size={16} />
+          </Button>
           <Button variant="ghost" onClick={() => setMessages([])} aria-label="Clear conversation">
             <Icon name="trash" size={16} />
           </Button>

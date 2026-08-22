@@ -23,11 +23,13 @@ import {
   Stat,
   Table,
   ToastHost,
+  cx,
   inputClass,
   useToast,
   type NavItem
 } from '../components/ui';
 import { dateTime, money, tokens } from '../lib/format';
+import { parseBulkModels } from './bulk-models';
 import {
   formatLimitInput,
   limitsSaveDisabled,
@@ -308,6 +310,104 @@ const BLANK_MODEL: ModelInput = {
 
 const MODEL_PAGE_SIZE = 10;
 
+const BULK_PLACEHOLDER = [
+  '# id, input ¢/M, output ¢/M, cache ¢/M, enabled, group, upstream',
+  '# use - to leave a field unchanged',
+  'gpt-5, 125, 1000, 12.5, true, value, gpt-5',
+  'claude-opus, 1500, 7500, -, true, premium, -',
+  'legacy-model, -, -, -, false'
+].join('\n');
+
+/**
+ * Bulk model editor: a paste target plus the parsed preview.
+ *
+ * Repricing 600+ synced models one modal at a time is the actual operator
+ * problem, so the input is text an operator can produce from a spreadsheet or
+ * the vendor's price page. The preview is the contract: it shows exactly which
+ * models change and which lines were rejected, and Apply stays disabled while
+ * there is nothing valid to send — the payload is never a guess at what the
+ * text meant.
+ */
+export function BulkModelsEditor({
+  text,
+  onChange,
+  onApply,
+  busy
+}: {
+  text: string;
+  onChange: (value: string) => void;
+  onApply: (rows: ReturnType<typeof parseBulkModels>['rows']) => void;
+  busy: boolean;
+}) {
+  const { rows, issues } = parseBulkModels(text);
+  return (
+    <div className="space-y-4">
+      <Field
+        label="Model lines"
+        hint="One model per line: id, input, output, cache read, enabled, group, upstream. Comma or pipe separated; - keeps a field unchanged; # comments a line."
+      >
+        <textarea
+          className={cx(inputClass, 'min-h-[180px] font-mono text-xs leading-relaxed')}
+          value={text}
+          onChange={(event) => onChange(event.target.value)}
+          placeholder={BULK_PLACEHOLDER}
+          aria-label="Model lines"
+          spellCheck={false}
+        />
+      </Field>
+
+      {issues.length > 0 && (
+        <div className="rounded-lg border border-warn/40 bg-warn/5 p-3">
+          <p className="text-xs font-medium text-warn">
+            {issues.length} line{issues.length === 1 ? '' : 's'} skipped
+          </p>
+          <ul className="mt-1.5 space-y-0.5 text-xs text-muted">
+            {issues.slice(0, 8).map((issue) => (
+              <li key={`${issue.line}:${issue.reason}`}>
+                Line {issue.line}: {issue.reason}
+              </li>
+            ))}
+            {issues.length > 8 && <li>…and {issues.length - 8} more</li>}
+          </ul>
+        </div>
+      )}
+
+      {rows.length > 0 && (
+        <Table headers={['Model', 'In ₵/M', 'Out ₵/M', 'Cache ₵/M', 'State', 'Group', 'Upstream']}>
+          {rows.map((row) => (
+            <tr key={row.id}>
+              <Cell className="font-mono text-xs">{row.id}</Cell>
+              <Cell className="tabular-nums">{row.inputPriceCents ?? '—'}</Cell>
+              <Cell className="tabular-nums">{row.outputPriceCents ?? '—'}</Cell>
+              <Cell className="tabular-nums">{row.cacheReadPriceCents ?? '—'}</Cell>
+              <Cell className="text-xs text-muted">
+                {row.enabled === undefined ? '—' : row.enabled ? 'enabled' : 'hidden'}
+              </Cell>
+              <Cell className="font-mono text-xs text-muted">{row.groupId ?? '—'}</Cell>
+              <Cell className="font-mono text-xs text-muted">{row.upstreamModel ?? '—'}</Cell>
+            </tr>
+          ))}
+        </Table>
+      )}
+
+      <Button
+        className="w-full"
+        icon="check"
+        busy={busy}
+        disabled={rows.length === 0}
+        onClick={() => onApply(rows)}
+      >
+        Apply {rows.length} model{rows.length === 1 ? '' : 's'}
+      </Button>
+      <p className="text-xs text-muted">
+        Every listed model is written in one transaction; a rejected row stops the whole batch. Ids
+        the catalog does not hold are reported back instead of created — add a model first, or sync
+        from OmniRoute.
+      </p>
+    </div>
+  );
+}
+
 function ModelEditor({
   model,
   groups,
@@ -472,6 +572,9 @@ export function Admin() {
   // catalog stays in step with upstream across repeated syncs. Protected by a
   // toggle because the extra removals are irreversible from the console alone.
   const [syncReset, setSyncReset] = useState(false);
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkText, setBulkText] = useState('');
+  const [bulkBusy, setBulkBusy] = useState(false);
   const [creditFor, setCreditFor] = useState<AdminAccount | null>(null);
   const [creditTokens, setCreditTokens] = useState(100_000);
   const [creditReason, setCreditReason] = useState('goodwill');
@@ -594,6 +697,25 @@ export function Admin() {
       toast(error instanceof ApiError ? error.message : 'Could not sync models from OmniRoute', 'bad');
     } finally {
       setSyncingModels(false);
+    }
+  }
+
+  async function applyBulkModels(rows: ReturnType<typeof parseBulkModels>['rows']) {
+    setBulkBusy(true);
+    try {
+      const result = await api.admin.bulkUpdateModels(rows);
+      toast(
+        result.missing.length > 0
+          ? `${result.updated.length} updated · ${result.missing.length} id${result.missing.length === 1 ? '' : 's'} not found`
+          : `${result.updated.length} model${result.updated.length === 1 ? '' : 's'} updated`
+      );
+      setBulkOpen(false);
+      setBulkText('');
+      await load();
+    } catch (error) {
+      toast(error instanceof ApiError ? error.message : 'Could not apply bulk changes', 'bad');
+    } finally {
+      setBulkBusy(false);
     }
   }
 
@@ -745,6 +867,9 @@ export function Admin() {
                         onClick={() => void syncModels(syncReset)}
                       >
                         {syncReset ? 'Sync & reset catalog' : 'Sync from OmniRoute'}
+                      </Button>
+                      <Button variant="outline" icon="terminal" onClick={() => setBulkOpen(true)}>
+                        Bulk edit
                       </Button>
                       <Button icon="plus" onClick={() => openModelEditor()}>
                         Add model
@@ -1003,6 +1128,15 @@ export function Admin() {
                 </Button>
               </div>
             )}
+          </Modal>
+
+          <Modal open={bulkOpen} title="Bulk edit models" onClose={() => setBulkOpen(false)}>
+            <BulkModelsEditor
+              text={bulkText}
+              onChange={setBulkText}
+              onApply={(rows) => void applyBulkModels(rows)}
+              busy={bulkBusy}
+            />
           </Modal>
 
           <Modal open={creditFor !== null} title="Credit tokens" onClose={() => setCreditFor(null)}>

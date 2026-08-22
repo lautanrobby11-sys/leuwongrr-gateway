@@ -18,9 +18,46 @@ export interface Plan {
   resetsAllowed?: number;
   method?: PlanMethod;
   tierLabel?: string;
+  /** Models this plan's group entitles, with the group multiplier applied. */
+  eligibleModels?: EligibleModel[];
 }
 
 export type PlanMethod = 'rolling_time' | 'token_pack' | 'monetary_pack' | 'payg';
+
+/**
+ * One model a plan's group entitles, exactly as the member plans endpoint
+ * projects it: the group multiplier is already applied to the effective
+ * prices, and the upstream name is deliberately absent. Optional because
+ * older deployments may not have run the projection yet.
+ */
+export interface EligibleModel {
+  id: string;
+  name: string;
+  provider: string;
+  multimodalSupport: boolean;
+  inputPriceCents: number;
+  outputPriceCents: number;
+  cacheReadPriceCents: number;
+  effectiveInputPriceCents: number;
+  effectiveOutputPriceCents: number;
+  effectiveCacheReadPriceCents: number;
+}
+
+/**
+ * One row of the admin bulk model edit: the id names the catalog entry, every
+ * other field is a partial update applied in the same transaction as the rest
+ * of the batch. The server validates the same bounds as the single-model
+ * editor, so a row the editor would reject is rejected here too.
+ */
+export interface BulkModelRow {
+  id: string;
+  inputPriceCents?: number;
+  outputPriceCents?: number;
+  cacheReadPriceCents?: number;
+  enabled?: boolean;
+  groupId?: string;
+  upstreamModel?: string;
+}
 
 export interface Subscription {
   id: string;
@@ -364,6 +401,13 @@ export const api = {
       }),
     syncModels: (options: { reset?: boolean } = {}) =>
       post<{ synced: boolean; added: string[]; skipped: number; removed: string[]; keptProtected: string[]; reset: boolean }>('/console/api/admin/models/sync', options),
+    /**
+     * Applies one partial update per listed model inside a single transaction.
+     * Unknown ids come back in `missing` rather than failing the batch; a row
+     * that fails validation rejects the whole payload before anything lands.
+     */
+    bulkUpdateModels: (rows: BulkModelRow[]) =>
+      post<{ updated: string[]; missing: string[] }>('/console/api/admin/models/bulk', { rows }),
     setModelPolicy: (tenantId: string, modelId: string, enabled: boolean) =>
       post<{ updated: boolean }>('/console/api/admin/models/policy', { tenantId, modelId, enabled }),
     modelGroups: () =>

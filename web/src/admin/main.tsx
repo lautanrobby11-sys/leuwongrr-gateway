@@ -10,6 +10,7 @@ import {
   type TenantLimits
 } from '../lib/api';
 import { Icon } from '../components/icons';
+import { applyStoredTheme } from '../components/theme';
 import {
   Badge,
   Button,
@@ -311,7 +312,7 @@ const BLANK_MODEL: ModelInput = {
 const MODEL_PAGE_SIZE = 10;
 
 const BULK_PLACEHOLDER = [
-  '# id, input ¢/M, output ¢/M, cache ¢/M, enabled, group, upstream',
+  '# id, input ₵/M, output ₵/M, cache read ₵/M, enabled, group, upstream',
   '# use - to leave a field unchanged',
   'gpt-5, 125, 1000, 12.5, true, value, gpt-5',
   'claude-opus, 1500, 7500, -, true, premium, -',
@@ -1254,6 +1255,7 @@ export function Admin() {
 // while admin.html always provides one in the browser.
 const rootElement = document.getElementById('root');
 if (rootElement) {
+  applyStoredTheme();
   createRoot(rootElement).render(
     <StrictMode>
       <ToastHost>

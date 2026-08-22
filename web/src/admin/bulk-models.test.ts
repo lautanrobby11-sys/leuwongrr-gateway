@@ -42,4 +42,18 @@ describe('parseBulkModels', () => {
     expect(rows).toEqual([]);
     expect(issues[0]?.reason).toContain('No fields to change');
   });
+
+  it('flags a trailing separator whose fields all mean "unchanged"', () => {
+    // `gpt-5,` parses to a bare id: the server would answer 400 for it, so the
+    // preview must reject it before Apply can be offered.
+    const { rows, issues } = parseBulkModels('gpt-5,');
+    expect(rows).toEqual([]);
+    expect(issues[0]?.reason).toContain('every field after the id is "-" or empty');
+  });
+
+  it('flags a line with more fields than the format defines', () => {
+    const { rows, issues } = parseBulkModels('good-model, 1, 2, 3, true, value, up, EXTRA');
+    expect(rows).toEqual([]);
+    expect(issues[0]?.reason).toContain('Too many fields (8)');
+  });
 });

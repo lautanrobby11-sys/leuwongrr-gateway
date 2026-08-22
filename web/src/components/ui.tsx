@@ -9,6 +9,7 @@ import {
 } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Icon, type IconName } from './icons';
+import { ThemeSelect } from './theme';
 
 /** Tailwind class merge without a dependency: last class of a group wins. */
 export function cx(...parts: Array<string | false | null | undefined>): string {
@@ -661,28 +662,33 @@ export function Shell({
             <h1 className="truncate text-base font-semibold tracking-tight">{activeLabel}</h1>
             {subtitle && <p className="truncate text-xs text-muted md:hidden">{subtitle}</p>}
           </div>
-          {onSignOut && (
-            <Button variant="ghost" icon="logout" className="md:hidden" onClick={onSignOut} aria-label="Sign out" />
-          )}
+          <div className="flex shrink-0 items-center gap-2">
+            <ThemeSelect />
+            {onSignOut && (
+              <Button variant="ghost" icon="logout" className="md:hidden" onClick={onSignOut} aria-label="Sign out" />
+            )}
+          </div>
         </header>
 
         <main className="mx-auto w-full max-w-6xl flex-1 space-y-4 p-4 pb-24 md:p-6 md:pb-6">
           {children}
         </main>
 
-        <nav className="fixed inset-x-0 bottom-0 z-30 grid grid-flow-col border-t border-border bg-surface/95 backdrop-blur md:hidden">
+        {/* The member rail carries six items; scroll-x keeps every label
+            reachable on a narrow phone instead of crushing them into glyphs. */}
+        <nav className="fixed inset-x-0 bottom-0 z-30 flex overflow-x-auto border-t border-border bg-surface/95 backdrop-blur md:hidden">
           {items.map((item) => (
             <button
               key={item.id}
               onClick={() => onSelect(item.id)}
               className={cx(
-                'focus-ring flex flex-col items-center gap-1 px-2 py-2.5 text-[11px]',
+                'focus-ring flex min-w-[4.5rem] flex-1 flex-col items-center gap-1 px-2 py-2.5 text-[11px]',
                 item.id === active ? 'text-brand' : 'text-muted'
               )}
               aria-current={item.id === active ? 'page' : undefined}
             >
               <Icon name={item.icon} size={18} />
-              {item.label}
+              <span className="whitespace-nowrap">{item.label}</span>
             </button>
           ))}
         </nav>

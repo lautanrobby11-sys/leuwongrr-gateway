@@ -21,7 +21,7 @@ const SKIP = new Set(['', '-']);
  * Parses the bulk-edit textarea: one model per line, fields separated by
  * commas or pipes, in the fixed order
  *
- *   id, input ¢/M, output ¢/M, cache ¢/M, enabled, group, upstream
+ *   id, input ₵/M, output ₵/M, cache read ₵/M, enabled, group, upstream
  *
  * A `-` (or an empty trailing field) leaves that attribute untouched, so an
  * operator can reprice a whole catalogue without re-typing the fields that do
@@ -46,6 +46,13 @@ export function parseBulkModels(text: string): BulkParseResult {
     }
     if (fields.length < 2) {
       issues.push({ line, reason: 'No fields to change — add at least one value after the id' });
+      continue;
+    }
+    if (fields.length > 7) {
+      issues.push({
+        line,
+        reason: `Too many fields (${fields.length}) — at most id, input, output, cache read, enabled, group, upstream`
+      });
       continue;
     }
 
@@ -95,6 +102,13 @@ export function parseBulkModels(text: string): BulkParseResult {
       }
     }
 
+    // A row whose every field after the id is `-` or empty would pass field
+    // validation yet change nothing — the server answers 400 for it, so the
+    // preview must flag it here rather than offer an Apply that cannot land.
+    if (!invalid && Object.keys(row).length < 2) {
+      issues.push({ line, reason: 'No fields to change — every field after the id is "-" or empty' });
+      continue;
+    }
     if (!invalid) rows.push(row);
   }
   return { rows, issues };

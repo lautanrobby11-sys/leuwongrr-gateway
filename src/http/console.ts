@@ -99,6 +99,15 @@ function fail(reply: FastifyReply, status: number, code: string, message: string
   return reply.code(status).send({ error: { code, message, trace_id: traceId } });
 }
 
+/**
+ * One row of the bulk model edit: the single-editor update schema plus the id
+ * that names the row. Built once at module scope — every bulk request parses
+ * against the same object.
+ */
+const BULK_ROW_SCHEMA = modelUpdateSchema
+  .extend({ id: z.string().regex(/^[a-z0-9-]{2,64}$/) })
+  .strict();
+
 /** Keys this tenant created in the last 24h, rotated replacements included. */
 function keysIssuedToday(db: GatewayDatabase, tenantId: string): number {
   const since = new Date(Date.now() - 86_400_000).toISOString();
@@ -334,6 +343,38 @@ const subscribeSchema = z
  * The console is a separate concern from the LLM data plane: it never proxies
  * to OmniRoute, and it authenticates humans instead of API keys.
  */
+/**
+ * Wraps a row-scoped failure (unknown group, unreachable model) with the
+ * 1-based row number the operator pasted, so a 400 names the offending line
+ * instead of failing a 500-row batch with one generic message. Carries only
+ * information the requester already supplied.
+ */
+class BulkRowError extends Error {
+  constructor(
+    public readonly rowNumber: number,
+    public readonly code: string,
+    public readonly statusCode: number
+  ) {
+    super(`Row ${rowNumber}: ${code.replace(/_/g, ' ')}`);
+    this.name = 'BulkRowError';
+  }
+}
+
+/**
+ * First zod issue rendered as "rows[2].inputPriceCents — <reason>" (or just
+ * "rows — <reason>" for the array-level bounds). Field names and bounds come
+ * from the published schema, so the message teaches the fix without exposing
+ * anything the requester did not already send.
+ */
+function describeBulkIssue(error: z.ZodError): string {
+  const issue = error.issues[0];
+  if (!issue) return 'Bulk payload invalid';
+  const path = issue.path
+    .map((segment, index) => (index === 0 && segment === 'rows' ? 'rows' : String(segment)))
+    .join('.');
+  return `${path || 'rows'} — ${issue.message}`;
+}
+
 export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
   const { config, accounts, billing, payments, db } = deps;
   const distRoot = normalize(config.WEB_DIST_PATH);
@@ -1451,30 +1492,41 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
   app.post('/console/api/admin/models/bulk', async (req, reply) => {
     try {
       const admin = await requireAdmin(req);
-      const bulkRowSchema = modelUpdateSchema
-        .extend({ id: z.string().regex(/^[a-z0-9-]{2,64}$/) })
-        .strict();
       const parsed = z
-        .object({ rows: z.array(bulkRowSchema).min(1).max(500) })
+        .object({ rows: z.array(BULK_ROW_SCHEMA).min(1).max(500) })
         .strict()
         .safeParse(req.body);
       if (!parsed.success) {
-        return fail(reply, 400, 'invalid_request', 'Bulk payload invalid', req.id);
+        return fail(reply, 400, 'invalid_request', describeBulkIssue(parsed.error), req.id);
       }
       if (parsed.data.rows.some((row) => Object.keys(row).length < 2)) {
-        return fail(reply, 400, 'invalid_request', 'Each row needs an id and at least one field to change', req.id);
+        const rowNumber = parsed.data.rows.findIndex((row) => Object.keys(row).length < 2) + 1;
+        return fail(
+          reply,
+          400,
+          'invalid_request',
+          `Row ${rowNumber}: an id alone changes nothing — add at least one field`,
+          req.id
+        );
       }
       const updated: string[] = [];
       const missing: string[] = [];
       const apply = db.db.transaction(() => {
-        for (const row of parsed.data.rows) {
+        for (const [index, row] of parsed.data.rows.entries()) {
           const { id, ...changes } = row;
           // Null return is the catalog's "no such model": record it and keep
           // going, still inside the transaction so the surviving rows land
-          // together.
-          const result = models.update(id, changes);
-          if (result === null) missing.push(id);
-          else updated.push(id);
+          // together. A ModelError carries row context and unwinds the batch.
+          try {
+            const result = models.update(id, changes);
+            if (result === null) missing.push(id);
+            else updated.push(id);
+          } catch (error) {
+            if (error instanceof ModelError) {
+              throw new BulkRowError(index + 1, error.code, error.statusCode);
+            }
+            throw error;
+          }
         }
       });
       apply();
@@ -1487,6 +1539,11 @@ export function registerConsole(app: FastifyInstance, deps: ConsoleDeps): void {
       });
       return reply.send({ updated, missing });
     } catch (error) {
+      // The row-scoped wrapper answers with the failing line number and the
+      // same code the single-model editor would have produced.
+      if (error instanceof BulkRowError) {
+        return fail(reply, error.statusCode, error.code, error.message, req.id);
+      }
       return handle(error, reply, req.id);
     }
   });

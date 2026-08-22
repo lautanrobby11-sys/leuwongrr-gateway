@@ -140,6 +140,13 @@ describe('admin bulk model edit', () => {
     expect(gpt?.enabled).toBe(true);
     // A field left out of the row is untouched.
     expect(gpt?.outputPriceCents).toBe(20);
+
+    // The batch is auditable like every other admin model write.
+    const audited = active.db.db
+      .prepare("SELECT event, metadata_json FROM audit_logs WHERE event = 'console.model.bulk_updated'")
+      .all() as Array<{ event: string; metadata_json: string }>;
+    expect(audited).toHaveLength(1);
+    expect(JSON.parse(audited[0]!.metadata_json)).toMatchObject({ updated: 2, missing: 1 });
   });
 
   it('rolls the whole batch back when a row names an unknown group', async () => {
@@ -157,11 +164,15 @@ describe('admin bulk model edit', () => {
       }
     });
     expect(response.statusCode).toBe(400);
-    // The first row's price change must not survive the failed transaction.
+    // A row-scoped failure surfaces as the failing line, not a generic 400.
+    const body = response.json() as { error: { code: string; message: string } };
+    expect(body.error.code).toBe('model_group_not_found');
+    expect(body.error.message).toContain('Row 2');
     const listed = await active.app.inject({ method: 'GET', url: '/console/api/admin/models', headers });
     const gpt = (listed.json() as { catalog: Array<Record<string, unknown>> }).catalog.find(
       (model) => model.id === 'gpt-5'
     );
+    // The first row's price change must not survive the failed transaction.
     expect(gpt?.inputPriceCents).toBe(10);
   });
 
@@ -175,6 +186,22 @@ describe('admin bulk model edit', () => {
       payload: { rows: [{ id: 'gpt-5' }] }
     });
     expect(response.statusCode).toBe(400);
+  });
+
+  it('rejects a row carrying an unknown field, like the single-model schema does', async () => {
+    const active = start();
+    insertModel(active.db, 'gpt-5');
+    const response = await active.app.inject({
+      method: 'POST',
+      url: '/console/api/admin/models/bulk',
+      headers,
+      payload: { rows: [{ id: 'gpt-5', enabled: true, renameTo: 'nope' }] }
+    });
+    expect(response.statusCode).toBe(400);
+    // A validation failure names the offending path instead of a generic 400.
+    const body = response.json() as { error: { code: string; message: string } };
+    expect(body.error.code).toBe('invalid_request');
+    expect(body.error.message).toContain('rows.0.renameTo');
   });
 
   it('requires a valid admin assertion', async () => {

@@ -11,6 +11,7 @@ import {
   type UsageRecent
 } from '../lib/api';
 import { Icon, type IconName } from '../components/icons';
+import { applyStoredTheme } from '../components/theme';
 import { SetPasswordBanner } from './set-password-banner';
 import {
   Badge,
@@ -596,5 +597,6 @@ function Member() {
 // then, while member.html always provides one in the browser.
 const rootElement = document.getElementById('root');
 if (rootElement) {
+  applyStoredTheme();
   createRoot(rootElement).render(<StrictMode><ToastHost><Member /></ToastHost></StrictMode>);
 }

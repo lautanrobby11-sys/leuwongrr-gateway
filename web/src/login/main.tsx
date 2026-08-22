@@ -4,6 +4,7 @@ import { api, ApiError, type SessionState } from '../lib/api';
 import { LogoMark } from '../components/logo';
 import { Button, Field, inputClass, ToastHost, useToast } from '../components/ui';
 import { PasswordInput } from '../components/password-input';
+import { applyStoredTheme } from '../components/theme';
 import '../styles.css';
 
 type Mode = 'signin' | 'register' | 'otp' | 'forgot' | 'reset';
@@ -233,9 +234,11 @@ export function App() {
 
 // Guard the mount so importing this module has no side effect off the page:
 // the DOM behavioural tests import `App` directly and there is no #root then,
-// while login.html always provides one in the browser.
+// while login.html always provides one in the browser. The stored theme is
+// applied before the first render so the shell never flashes the default.
 const rootElement = document.getElementById('root');
 if (rootElement) {
+  applyStoredTheme();
   createRoot(rootElement).render(
     <StrictMode>
       <ToastHost>

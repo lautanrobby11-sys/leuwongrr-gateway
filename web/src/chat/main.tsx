@@ -2,6 +2,7 @@ import { StrictMode, useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Icon } from '../components/icons';
 import { Button, Field, inputClass, Modal, ToastHost, cx, useToast } from '../components/ui';
+import { applyStoredTheme, ThemeSelect } from '../components/theme';
 import { Markdown } from './markdown';
 import '../styles.css';
 
@@ -264,6 +265,7 @@ export function Chat() {
           </div>
         </div>
         <div className="flex items-center gap-1.5">
+          <ThemeSelect />
           <Button variant="ghost" onClick={() => window.location.assign('/member')} aria-label="Member dashboard">
             <Icon name="dashboard" size={16} />
           </Button>
@@ -392,9 +394,12 @@ export function Chat() {
 
 // Guard the mount so importing this module has no side effect off the page:
 // the DOM behavioural tests import `Chat` directly and there is no #root then,
-// while chat.html always provides one in the browser.
+// while chat.html always provides one in the browser. The stored theme is
+// applied before the first render so a returning visitor never sees the
+// default palette flash first.
 const rootElement = document.getElementById('root');
 if (rootElement) {
+  applyStoredTheme();
   createRoot(rootElement).render(
     <StrictMode>
       <ToastHost>

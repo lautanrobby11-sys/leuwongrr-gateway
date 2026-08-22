@@ -2,9 +2,75 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * Theme system: the colour tokens in tailwind.config.ts read these "R G B"
+ * triplets, so a preset only overrides variables — no class anywhere changes.
+ * :root is the default GNOME Adwait dark palette; the presets below are the
+ * custom themes the console offers. `data-theme` sits on <html>, set by
+ * components/theme.tsx from the visitor's stored choice.
+ */
+:root {
+  --c-canvas: 27 27 33;
+  --c-surface: 36 36 43;
+  --c-raised: 46 46 55;
+  --c-border: 61 61 73;
+  --c-muted: 168 168 182;
+  --c-ink: 246 246 249;
+  --c-brand: 53 132 228;
+  --c-good: 51 209 122;
+  --c-warn: 229 165 10;
+  --c-bad: 246 97 81;
+}
+
+/* Deep blue night theme with a brighter sky accent. */
+[data-theme='midnight'] {
+  --c-canvas: 16 19 31;
+  --c-surface: 23 28 44;
+  --c-raised: 31 37 57;
+  --c-border: 44 52 80;
+  --c-muted: 154 163 192;
+  --c-ink: 238 241 250;
+  --c-brand: 98 160 255;
+  --c-good: 74 222 128;
+  --c-warn: 245 197 24;
+  --c-bad: 255 123 107;
+}
+
+/* Light theme: Adwait light surfaces with darkened accents for contrast. */
+[data-theme='daylight'] {
+  --c-canvas: 244 244 247;
+  --c-surface: 255 255 255;
+  --c-raised: 236 236 241;
+  --c-border: 216 216 224;
+  --c-muted: 91 91 107;
+  --c-ink: 27 27 33;
+  --c-brand: 28 113 216;
+  --c-good: 38 162 105;
+  --c-warn: 181 139 0;
+  --c-bad: 192 28 40;
+}
+
+/* Warm dark theme with a rose accent. */
+[data-theme='rose'] {
+  --c-canvas: 32 26 30;
+  --c-surface: 41 34 40;
+  --c-raised: 51 42 49;
+  --c-border: 70 58 66;
+  --c-muted: 179 166 174;
+  --c-ink: 250 244 246;
+  --c-brand: 224 92 143;
+  --c-good: 63 207 142;
+  --c-warn: 232 179 14;
+  --c-bad: 246 97 81;
+}
+
 @layer base {
   :root {
     color-scheme: dark;
+  }
+
+  [data-theme='daylight'] {
+    color-scheme: light;
   }
 
   html,

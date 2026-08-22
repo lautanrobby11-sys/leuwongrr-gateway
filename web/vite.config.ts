@@ -18,6 +18,8 @@ export default defineConfig({
     emptyOutDir: true,
     assetsDir: 'assets',
     target: 'es2022',
+    // Deliberately off in production: a map would publish the .tsx sources in
+    // the shipped artifact and re-expose them in browser DevTools.
     sourcemap: false,
     rollupOptions: {
       input: {

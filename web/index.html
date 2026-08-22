@@ -31,6 +31,18 @@
     </script>
     <link rel="icon" type="image/svg+xml" href="/console/assets/favicon.svg" />
     <link rel="stylesheet" href="/src/styles.css" />
+    <!--
+      Same theme handshake as the React entry points (components/theme.tsx),
+      inline because this page deliberately ships no bundle: apply the stored
+      choice before first paint so a returning visitor never flashes the
+      default palette. Kept in sync with the closed set in styles.css.
+    -->
+    <script>
+      try {
+        var t = localStorage.getItem('lwrr.theme');
+        if (t === 'midnight' || t === 'daylight' || t === 'rose') document.documentElement.dataset.theme = t;
+      } catch (e) {}
+    </script>
     <title>LeuwongRR Gateway · Private AI API for Teams</title>
   </head>
   <body class="min-h-full bg-canvas font-sans text-ink antialiased">
